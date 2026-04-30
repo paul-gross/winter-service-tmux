@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+INVOKE_DIR="$(cd "$(dirname "$0")" && pwd)"
+WORKTREE_DIR="$INVOKE_DIR"
+WORKTREE_NAME="$(basename "$WORKTREE_DIR")"
+WORKSPACE_DIR="$(cd "$WORKTREE_DIR/.." && pwd)"
+
+CONFIG="$WORKSPACE_DIR/ai/project/workflow.sh"
+if [[ ! -f "$CONFIG" ]]; then
+  echo "Error: No workflow.sh config found."
+  exit 1
+fi
+
+source "$CONFIG"
+: "${SESSION_PREFIX:?workflow.sh must define SESSION_PREFIX}"
+
+NAME=""
+for arg in "$@"; do
+  case "$arg" in
+    local) NAME="local" ;;
+    *)     NAME="$arg" ;;
+  esac
+done
+
+if [[ -z "$NAME" ]]; then
+  NAME="$WORKTREE_NAME"
+  if [[ "$NAME" == "project" ]]; then
+    echo "Usage: ./down [local|<worktree-name>]"
+    echo "  or run from within a feature worktree"
+    exit 1
+  fi
+fi
+
+SESSION="${SESSION_PREFIX}-${NAME}"
+
+if ! tmux has-session -t "$SESSION" 2>/dev/null; then
+  echo "No running session '$SESSION'"
+  exit 0
+fi
+
+# Collect all descendant PIDs from every pane before killing anything.
+ALL_PIDS=()
+collect_descendants() {
+  local children
+  children=$(pgrep -P "$1" 2>/dev/null) || true
+  for child in $children; do
+    collect_descendants "$child"
+  done
+  [[ "$1" -ne $$ ]] && ALL_PIDS+=("$1")
+}
+
+while IFS= read -r pid; do
+  [[ -n "$pid" ]] && collect_descendants "$pid"
+done < <(tmux list-panes -t "$SESSION" -F '#{pane_pid}' 2>/dev/null)
+
+# SIGTERM everything, wait, then SIGKILL survivors
+kill -TERM "${ALL_PIDS[@]}" 2>/dev/null || true
+sleep 1
+kill -9 "${ALL_PIDS[@]}" 2>/dev/null || true
+
+# Kill the tmux session
+tmux kill-session -t "$SESSION" 2>/dev/null || true
+echo "Stopped services for '$NAME' (session: $SESSION)"

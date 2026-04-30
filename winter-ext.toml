@@ -1,0 +1,5 @@
+name = "winter-service-tmux"
+prefix = "wst"
+
+[hooks]
+on_worktree_init = "./hooks/init-worktree.sh"

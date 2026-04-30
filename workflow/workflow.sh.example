@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# Project workflow configuration for winter workspace scripts.
+# Copy this to workspace:/ai/project/workflow.sh and customize.
+
+# Session prefix — tmux sessions will be named <prefix>-<worktree>
+# e.g., "mp" produces "mp-alpha", "mp-beta"
+SESSION_PREFIX="mp"
+
+# Environment file to source (relative to worktree root, optional)
+ENV_FILE=".winter.env"
+
+# Pane names — used by the status script to label each tmux pane
+PANE_NAMES=("backend" "frontend" "shell")
+
+# setup_panes — called by the up script to create tmux panes and start services.
+# Arguments: $1=SESSION, $2=WORKTREE_DIR, $3=NAME
+setup_panes() {
+  local session="$1" dir="$2" name="$3"
+  # ENV_PATH is set by the up script when ENV_FILE is configured
+  local env_cmd=""
+  if [[ -n "${ENV_PATH:-}" ]]; then
+    env_cmd="source '$ENV_PATH' && "
+  fi
+
+  # Pane 0 (top-left): Backend
+  tmux send-keys -t "$session:0.0" \
+    "${env_cmd}echo '=== backend ===' && npm run start:dev" Enter
+
+  # Split top/bottom
+  tmux split-window -v -t "$session:0.0" -c "$dir"
+
+  # Pane 1 (bottom-left): Frontend
+  tmux send-keys -t "$session" \
+    "${env_cmd}echo '=== frontend ===' && npm run dev" Enter
+
+  # Split bottom pane left/right -> Shell
+  tmux split-window -h -t "$session:0.1" -c "$dir"
+
+  # Pane 2 (bottom-right): Shell
+  tmux send-keys -t "$session" \
+    "${env_cmd}echo '=== $name shell ==='" Enter
+
+  tmux select-pane -t "$session:0.2"
+}
+
+# status_header — optional, called by the status script before pane status.
+# Use it to display ports, URLs, or other project-specific info.
+# Arguments: $1=NAME, $2=WORKTREE_DIR
+status_header() {
+  local name="$1" dir="$2"
+  # Example: read ports from env file
+  # if [[ -f "$dir/.env" ]]; then
+  #   PORT=$(grep -oP 'PORT=\K\d+' "$dir/.env" 2>/dev/null || echo "?")
+  #   echo "  http://localhost:$PORT"
+  # fi
+  :
+}

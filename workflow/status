@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+INVOKE_DIR="$(cd "$(dirname "$0")" && pwd)"
+WORKTREE_DIR="$INVOKE_DIR"
+WORKTREE_NAME="$(basename "$WORKTREE_DIR")"
+WORKSPACE_DIR="$(cd "$WORKTREE_DIR/.." && pwd)"
+
+CONFIG="$WORKSPACE_DIR/ai/project/workflow.sh"
+if [[ ! -f "$CONFIG" ]]; then
+  echo "Error: No workflow.sh config found."
+  exit 1
+fi
+
+source "$CONFIG"
+: "${SESSION_PREFIX:?workflow.sh must define SESSION_PREFIX}"
+
+# PANE_NAMES should be defined in workflow.sh as an array
+if [[ -z "${PANE_NAMES+x}" ]]; then
+  echo "Error: workflow.sh must define PANE_NAMES array"
+  exit 1
+fi
+
+# If a specific name is given, only show that one
+if [[ -n "${1:-}" ]]; then
+  SESSIONS=("${SESSION_PREFIX}-$1")
+else
+  # Scan for all matching tmux sessions
+  SESSIONS=()
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && SESSIONS+=("$line")
+  done < <(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep "^${SESSION_PREFIX}-" || true)
+fi
+
+if [[ ${#SESSIONS[@]} -eq 0 ]]; then
+  echo "No ${SESSION_PREFIX}-* sessions running."
+  exit 0
+fi
+
+for SESSION in "${SESSIONS[@]}"; do
+  NAME="${SESSION#${SESSION_PREFIX}-}"
+
+  if ! tmux has-session -t "$SESSION" 2>/dev/null; then
+    echo "=== $NAME === (no session)"
+    echo ""
+    continue
+  fi
+
+  echo "=== $NAME ==="
+
+  # Run project-specific status header if defined
+  if declare -f status_header >/dev/null 2>&1; then
+    status_header "$NAME" "$WORKTREE_DIR"
+  fi
+
+  # Check each pane
+  for i in "${!PANE_NAMES[@]}"; do
+    PANE_NAME="${PANE_NAMES[$i]}"
+
+    if ! tmux list-panes -t "$SESSION" -F '#{pane_index}' 2>/dev/null | grep -q "^${i}$"; then
+      printf "  %-14s %s\n" "$PANE_NAME:" "missing"
+      continue
+    fi
+
+    LAST_LINE=$(tmux capture-pane -t "$SESSION:0.$i" -p 2>/dev/null | grep -v '^$' | tail -1)
+
+    PANE_PID=$(tmux list-panes -t "$SESSION" -F '#{pane_index} #{pane_pid}' 2>/dev/null | awk -v idx="$i" '$1==idx {print $2}')
+    if [[ -n "$PANE_PID" ]] && kill -0 "$PANE_PID" 2>/dev/null; then
+      STATUS="running"
+    else
+      STATUS="stopped"
+    fi
+
+    printf "  %-14s %-8s  %s\n" "$PANE_NAME:" "$STATUS" "${LAST_LINE:0:80}"
+  done
+  echo ""
+done

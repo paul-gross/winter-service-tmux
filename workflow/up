@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# This script is invoked via a symlink in a worktree (e.g. alpha/up). The
+# symlink's parent directory is the worktree; the worktree's parent is the
+# workspace root.
+INVOKE_DIR="$(cd "$(dirname "$0")" && pwd)"
+WORKTREE_DIR="$INVOKE_DIR"
+WORKTREE_NAME="$(basename "$WORKTREE_DIR")"
+WORKSPACE_DIR="$(cd "$WORKTREE_DIR/.." && pwd)"
+
+# Parse arguments
+ATTACH=false
+NAME=""
+LOCAL=false
+for arg in "$@"; do
+  case "$arg" in
+    -a|--attach) ATTACH=true ;;
+    local)       LOCAL=true; NAME="local" ;;
+    *)           NAME="$arg" ;;
+  esac
+done
+
+# Load project workflow config
+CONFIG="$WORKSPACE_DIR/ai/project/workflow.sh"
+if [[ ! -f "$CONFIG" ]]; then
+  echo "Error: No workflow.sh config found."
+  echo "Expected at: workspace:/ai/project/workflow.sh"
+  echo ""
+  echo "Create one to define SESSION_PREFIX, ENV_FILE, and panes."
+  echo "See workflow.sh.example in the winter-service-tmux extension for a template."
+  exit 1
+fi
+
+source "$CONFIG"
+
+# Validate required config
+: "${SESSION_PREFIX:?workflow.sh must define SESSION_PREFIX}"
+
+# Determine worktree name if not set by arguments
+if [[ -z "$NAME" ]]; then
+  NAME="$WORKTREE_NAME"
+  if [[ "$NAME" == "project" ]]; then
+    echo "Error: cannot run services directly in project/"
+    echo "Usage: ./up [local] [-a|--attach] [<worktree-name>]"
+    echo "  Run from a feature worktree, or pass a worktree name"
+    exit 1
+  fi
+fi
+
+SESSION="${SESSION_PREFIX}-${NAME}"
+
+# Resolve environment file path — exported so setup_panes can source it in each pane
+# 'local' mode skips the env file so services use default ports
+export ENV_PATH=""
+if [[ "$LOCAL" == false && -n "${ENV_FILE:-}" ]]; then
+  ENV_PATH="$WORKTREE_DIR/$ENV_FILE"
+  if [[ -f "$ENV_PATH" ]]; then
+    source "$ENV_PATH"
+  else
+    echo "Warning: ENV_FILE=$ENV_FILE not found at $ENV_PATH"
+    ENV_PATH=""
+  fi
+elif [[ "$LOCAL" == true ]]; then
+  echo "Running with default ports (no env file)"
+fi
+
+# If session already exists, report and exit (or attach)
+if tmux has-session -t "$SESSION" 2>/dev/null; then
+  echo "Session '$SESSION' is already running."
+  if [[ "$ATTACH" == true ]]; then
+    exec tmux attach-session -t "$SESSION"
+  fi
+  echo "Use ./status to check services, or ./down to stop."
+  exit 0
+fi
+
+# setup_panes is defined in workflow.sh — it receives SESSION, WORKTREE_DIR, NAME
+# ENV_PATH is available for setup_panes to source in each tmux pane
+if declare -f setup_panes >/dev/null 2>&1; then
+  tmux new-session -d -s "$SESSION" -c "$WORKTREE_DIR" -x 200 -y 50
+  setup_panes "$SESSION" "$WORKTREE_DIR" "$NAME"
+else
+  echo "Error: workflow.sh must define a setup_panes function"
+  exit 1
+fi
+
+# Report
+echo "Started services in tmux session '$SESSION'"
+echo "  Status: ./status"
+echo "  Stop:   ./down"
+
+# Attach if requested
+if [[ "$ATTACH" == true ]]; then
+  exec tmux attach-session -t "$SESSION"
+fi
