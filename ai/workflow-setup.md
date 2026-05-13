@@ -30,7 +30,7 @@ This extension does **not** own `.winter.env`. The workspace base seeds it durin
 
 Before running this guide:
 - The workspace has been set up via `/ws-setup` (or the underlying `winter ws init` has been run).
-- The `winter-service-tmux` extension is installed (its standalone clone exists at `workspace:/winter-service-tmux/` and its `on_worktree_init` hook is wired into the workspace).
+- The `winter-service-tmux` extension is installed (its standalone clone exists at `workspace:/winter-service-tmux/` and its `on_env_init` hook is wired into the workspace).
 - Read `winter-service-tmux:/workflow/workflow.sh.example` to understand the structural template you'll be writing.
 
 ## Opening preamble (always send first)

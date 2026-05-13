@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Symlink the up/down/status scripts into the worktree root.
+# Symlink the up/down/status scripts into the feature env root.
 #
 # Invoked by `winter ws init` for every standalone repo whose winter-ext.toml
-# declares `[hooks] on_worktree_init`. The CLI runs this script with cwd set
-# to the worktree root and provides:
+# declares `[hooks] on_env_init`. The CLI runs this script with cwd set to
+# the env root and provides:
 #   WINTER_EXT_DIR        — this extension's repo path
 #   WINTER_EXT_PREFIX     — resolved symlink prefix (e.g. "wst")
 #   WINTER_WORKSPACE_DIR
-#   WINTER_WORKTREE
-#   WINTER_WORKTREE_INDEX
+#   WINTER_ENV
+#   WINTER_ENV_INDEX
 #   WINTER_PORT_BASE
 set -euo pipefail
 

@@ -6,7 +6,7 @@ dashboard refresh and writes a one-character badge into
 `env_status.extensions["wst"]`, which the matrix grid and detail header append
 to the env's name.
 
-Hooks (e.g. `on_worktree_init`) stay in `winter-ext.toml` for agent-facing CLI
+Hooks (e.g. `on_env_init`) stay in `winter-ext.toml` for agent-facing CLI
 integration; this plugin file is the visual side of the same extension.
 """
 
