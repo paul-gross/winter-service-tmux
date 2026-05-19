@@ -12,6 +12,6 @@ Once installed, the workspace conventions are:
 
 - **Never start services as background processes** (no `nohup`, no `&`). Always go through `./up` so they end up in the tmux session.
 - **Never kill services directly** (no `kill`, `pkill`, `tmux kill-session`). Always use `./down` so child processes get reaped cleanly.
-- Read pane output with `tmux capture-pane -t <prefix>-<worktree>:0.<pane> -p | tail -20`.
+- Read pane output with `tmux capture-pane`. The per-service `<window>.<pane>` targets and the capture-pane template live in `workspace:/ai/project/workflow.md` — start there to map a service name to its pane target.
 
-Tmux session names are `<SESSION_PREFIX>-<worktree>` — e.g. `mp-alpha`. The prefix and pane layout come from `workspace:/ai/project/workflow.sh`.
+Tmux session names are `<SESSION_PREFIX>-<worktree>` — e.g. `mp-alpha`. The prefix and pane layout are declared in `workspace:/ai/project/workflow.sh`.

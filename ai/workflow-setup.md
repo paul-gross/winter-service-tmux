@@ -57,7 +57,7 @@ test -f ./ai/project/workflow.sh && cat ./ai/project/workflow.sh || echo "(no wo
 
 > "Your `workflow.sh` already exists: `SESSION_PREFIX=<value>`, `ENV_FILE=<value or 'unset'>`, `PANE_NAMES=(<list>)`. Want to keep it as-is, replace it from scratch, or tweak something specific?"
 
-- "keep": skip directly to the final report. Tell the user nothing changed.
+- "keep": skip ahead to the "Write workflow.md" step using the `SESSION_PREFIX` and `PANE_NAMES` you just read — that step is idempotent and will report "unchanged" if `workflow.md` is already in sync. Then offer the smoke test and continue into the final report.
 - "replace": continue from the next step as if no file existed.
 - "tweak": ask **"What would you like to change?"** and skip to the relevant step.
 
@@ -204,7 +204,38 @@ chmod +x ./ai/project/workflow.sh
 
 Confirm: "`workflow.sh` written and executable at `workspace:/ai/project/workflow.sh`."
 
-### 9. Smoke test (optional)
+### 9. Write workflow.md (agent context)
+
+**Explain first:** "Agents read service output via `tmux capture-pane -t <session>:<window>.<pane>`. Without help, they'd have to open `workflow.sh` and count `PANE_NAMES` indices to translate a service name into a pane target. `workflow.md` is a short, agent-readable sibling of `workflow.sh` that lists each declared service alongside its `<window>.<pane>` and the capture-pane template. The extension's own `index.md` (auto-loaded into every session) already points agents at `workflow.md` — generating the file is the only step here."
+
+Build the expected `workflow.md` content from the values just confirmed (`SESSION_PREFIX` plus `PANE_NAMES`). With the current single-window layout, `PANE_NAMES` index `i` maps to pane target `0.i`. Worked example — `SESSION_PREFIX="wws"` with `PANE_NAMES=("backend" "frontend" "shell")` renders to:
+
+```markdown
+# Service panes
+
+Tmux session: `<SESSION_PREFIX>-<worktree>` (e.g. `wws-alpha`).
+
+Capture a service's output:
+
+    tmux capture-pane -t <session>:<window>.<pane> -p | tail -20
+
+Declared services:
+
+- `backend` → `0.0`
+- `frontend` → `0.1`
+- `shell` → `0.2`
+```
+
+The `<SESSION_PREFIX>`, `<worktree>`, `<session>`, `<window>`, and `<pane>` placeholders are kept literal in the rendered file — they're templates a reading agent fills in per-worktree. Only the `e.g.` value (`wws-alpha` above) and the bulleted service list use the actual confirmed values.
+
+Then look at the existing `workspace:/ai/project/workflow.md`:
+
+- **Missing, or doesn't match what you just rendered**: write the new content. Tell the user "Writing `workflow.md` with `<n>` services: `backend` → `0.0`, `frontend` → `0.1`, ..."
+- **Already matches**: tell the user "`workflow.md` unchanged — skipping write." and move on.
+
+Confirm: "`workflow.md` is at `workspace:/ai/project/workflow.md`."
+
+### 10. Smoke test (optional)
 
 **Explain first:** "Before declaring done, you can verify the script parses and `./up` reaches the launch step in a real worktree. The cheapest test: run `./up` in `alpha/` and check `./status` afterward."
 
@@ -223,6 +254,7 @@ Summarise everything that happened in a single message:
 - `ENV_FILE` (value or "unset")
 - `PANE_NAMES` (the list)
 - Number of panes and their start commands
+- `workflow.md`: `workspace:/ai/project/workflow.md` (written / unchanged)
 - Smoke test: ran / skipped / failed (if failed, what to fix)
 - Any manual steps still pending
 
