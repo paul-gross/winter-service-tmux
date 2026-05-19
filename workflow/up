@@ -50,7 +50,7 @@ fi
 
 SESSION="${SESSION_PREFIX}-${NAME}"
 
-# Resolve environment file path — exported so setup_panes can source it in each pane
+# Resolve environment file path — exported so setup_tmux can source it in each pane
 # 'local' mode skips the env file so services use default ports
 export ENV_PATH=""
 if [[ "$LOCAL" == false && -n "${ENV_FILE:-}" ]]; then
@@ -75,13 +75,18 @@ if tmux has-session -t "$SESSION" 2>/dev/null; then
   exit 0
 fi
 
-# setup_panes is defined in workflow.sh — it receives SESSION, WORKTREE_DIR, NAME
-# ENV_PATH is available for setup_panes to source in each tmux pane
-if declare -f setup_panes >/dev/null 2>&1; then
+# setup_tmux is defined in workflow.sh — it receives SESSION, WORKTREE_DIR, NAME
+# ENV_PATH is available for setup_tmux to source in each tmux pane
+if declare -f setup_tmux >/dev/null 2>&1; then
   tmux new-session -d -s "$SESSION" -c "$WORKTREE_DIR" -x 200 -y 50
-  setup_panes "$SESSION" "$WORKTREE_DIR" "$NAME"
+  setup_tmux "$SESSION" "$WORKTREE_DIR" "$NAME"
+elif declare -f setup_panes >/dev/null 2>&1; then
+  echo "Error: workflow.sh defines setup_panes — rename it to setup_tmux."
+  echo "  See winter-service-tmux:/workflow/workflow.sh.example for the current shape."
+  echo "  This rename came with multi-window support; also rename PANE_NAMES to WINTER_TMUX_SERVICE_NAMES."
+  exit 1
 else
-  echo "Error: workflow.sh must define a setup_panes function"
+  echo "Error: workflow.sh must define a setup_tmux function"
   exit 1
 fi
 

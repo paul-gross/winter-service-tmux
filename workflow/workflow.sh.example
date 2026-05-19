@@ -9,12 +9,20 @@ SESSION_PREFIX="mp"
 # Environment file to source (relative to worktree root, optional)
 ENV_FILE=".winter.env"
 
-# Pane names — used by the status script to label each tmux pane
-PANE_NAMES=("backend" "frontend" "shell")
+# Service names — used by the status script to label each declared service.
+# Entries can be either:
+#   "<name>"                  — defaults to window 0; pane index = array position.
+#                               Use this for simple single-window layouts.
+#   "<window>.<pane>:<name>"  — explicit target. Required when services live in
+#                               additional tmux windows.
+WINTER_TMUX_SERVICE_NAMES=("0.0:backend" "0.1:frontend" "1.0:shell")
 
-# setup_panes — called by the up script to create tmux panes and start services.
+# setup_tmux — called by the up script to create tmux windows/panes and start services.
 # Arguments: $1=SESSION, $2=WORKTREE_DIR, $3=NAME
-setup_panes() {
+#
+# Renamed from `setup_panes` when multi-window support landed; the up script errors
+# out clearly if only the legacy name is defined.
+setup_tmux() {
   local session="$1" dir="$2" name="$3"
   # ENV_PATH is set by the up script when ENV_FILE is configured
   local env_cmd=""
@@ -22,25 +30,29 @@ setup_panes() {
     env_cmd="source '$ENV_PATH' && "
   fi
 
-  # Pane 0 (top-left): Backend
+  # --- Window 0: application services (backend + frontend) ---
+
+  # Pane 0.0: Backend
   tmux send-keys -t "$session:0.0" \
     "${env_cmd}echo '=== backend ===' && npm run start:dev" Enter
 
-  # Split top/bottom
+  # Split window 0 vertically (top/bottom)
   tmux split-window -v -t "$session:0.0" -c "$dir"
 
-  # Pane 1 (bottom-left): Frontend
-  tmux send-keys -t "$session" \
+  # Pane 0.1: Frontend
+  tmux send-keys -t "$session:0.1" \
     "${env_cmd}echo '=== frontend ===' && npm run dev" Enter
 
-  # Split bottom pane left/right -> Shell
-  tmux split-window -h -t "$session:0.1" -c "$dir"
+  # --- Window 1: utility shell ---
 
-  # Pane 2 (bottom-right): Shell
-  tmux send-keys -t "$session" \
+  # Create window 1 (single pane, 1.0)
+  tmux new-window -t "$session" -c "$dir"
+  tmux send-keys -t "$session:1.0" \
     "${env_cmd}echo '=== $name shell ==='" Enter
 
-  tmux select-pane -t "$session:0.2"
+  # Land focus on window 0, backend pane
+  tmux select-window -t "$session:0"
+  tmux select-pane -t "$session:0.0"
 }
 
 # status_header — optional, called by the status script before pane status.

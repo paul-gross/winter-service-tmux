@@ -13,9 +13,14 @@ fi
 source "$CONFIG"
 : "${SESSION_PREFIX:?workflow.sh must define SESSION_PREFIX}"
 
-# PANE_NAMES should be defined in workflow.sh as an array
-if [[ -z "${PANE_NAMES+x}" ]]; then
-  echo "Error: workflow.sh must define PANE_NAMES array"
+# WINTER_TMUX_SERVICE_NAMES should be defined in workflow.sh as an array
+if [[ -z "${WINTER_TMUX_SERVICE_NAMES+x}" ]]; then
+  if [[ -n "${PANE_NAMES+x}" ]]; then
+    echo "Error: workflow.sh defines PANE_NAMES — rename it to WINTER_TMUX_SERVICE_NAMES."
+    echo "  See winter-service-tmux:/workflow/workflow.sh.example for the current shape."
+  else
+    echo "Error: workflow.sh must define WINTER_TMUX_SERVICE_NAMES array"
+  fi
   exit 1
 fi
 
@@ -48,25 +53,37 @@ for SESSION in "${SESSIONS[@]}"; do
     status_header "$NAME" "$SESSION_WORKTREE_DIR"
   fi
 
-  # Check each pane
-  for i in "${!PANE_NAMES[@]}"; do
-    PANE_NAME="${PANE_NAMES[$i]}"
+  # Snapshot all panes in the session (across every window) keyed by <window>.<pane>
+  PANE_INDEX_TO_PID=$(tmux list-panes -s -t "$SESSION" -F '#{window_index}.#{pane_index} #{pane_pid}' 2>/dev/null)
 
-    if ! tmux list-panes -t "$SESSION" -F '#{pane_index}' 2>/dev/null | grep -q "^${i}$"; then
-      printf "  %-14s %s\n" "$PANE_NAME:" "missing"
+  # Check each declared service. WINTER_TMUX_SERVICE_NAMES entries are either:
+  #   "<name>"                     → defaults to window 0, pane = array index
+  #   "<window>.<pane>:<name>"     → explicit target (use for multi-window layouts)
+  for i in "${!WINTER_TMUX_SERVICE_NAMES[@]}"; do
+    ENTRY="${WINTER_TMUX_SERVICE_NAMES[$i]}"
+    if [[ "$ENTRY" == *:* ]]; then
+      PANE_TARGET="${ENTRY%%:*}"
+      SERVICE_NAME="${ENTRY#*:}"
+    else
+      PANE_TARGET="0.$i"
+      SERVICE_NAME="$ENTRY"
+    fi
+
+    PANE_PID=$(echo "$PANE_INDEX_TO_PID" | awk -v t="$PANE_TARGET" '$1==t {print $2}')
+    if [[ -z "$PANE_PID" ]]; then
+      printf "  %-14s %s\n" "$SERVICE_NAME:" "missing"
       continue
     fi
 
-    LAST_LINE=$(tmux capture-pane -t "$SESSION:0.$i" -p 2>/dev/null | grep -v '^$' | tail -1)
+    LAST_LINE=$(tmux capture-pane -t "$SESSION:$PANE_TARGET" -p 2>/dev/null | grep -v '^$' | tail -1)
 
-    PANE_PID=$(tmux list-panes -t "$SESSION" -F '#{pane_index} #{pane_pid}' 2>/dev/null | awk -v idx="$i" '$1==idx {print $2}')
-    if [[ -n "$PANE_PID" ]] && kill -0 "$PANE_PID" 2>/dev/null; then
+    if kill -0 "$PANE_PID" 2>/dev/null; then
       STATUS="running"
     else
       STATUS="stopped"
     fi
 
-    printf "  %-14s %-8s  %s\n" "$PANE_NAME:" "$STATUS" "${LAST_LINE:0:80}"
+    printf "  %-14s %-8s  %s\n" "$SERVICE_NAME:" "$STATUS" "${LAST_LINE:0:80}"
   done
   echo ""
 done

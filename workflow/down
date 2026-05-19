@@ -52,7 +52,7 @@ collect_descendants() {
 
 while IFS= read -r pid; do
   [[ -n "$pid" ]] && collect_descendants "$pid"
-done < <(tmux list-panes -t "$SESSION" -F '#{pane_pid}' 2>/dev/null)
+done < <(tmux list-panes -s -t "$SESSION" -F '#{pane_pid}' 2>/dev/null)
 
 # SIGTERM everything, wait, then SIGKILL survivors
 kill -TERM "${ALL_PIDS[@]}" 2>/dev/null || true

@@ -16,7 +16,7 @@ These scripts are contributed by the `winter-service-tmux` extension. See `winte
 
 ## Setup
 
-At the start of each session, read `workspace:/ai/project/workflow.sh` to learn the session prefix and pane names for the current project.
+At the start of each session, read `workspace:/ai/project/workflow.md` to learn the session prefix and the service → `<window>.<pane>` mapping for the current project. Most projects use window `0` for everything; multi-window layouts (`1.0`, `2.0`, …) only show up when the project needed to group services across windows. Fall back to `workspace:/ai/project/workflow.sh` only if `workflow.md` is missing.
 
 ## Additional Commands
 
@@ -27,7 +27,7 @@ At the start of each session, read `workspace:/ai/project/workflow.sh` to learn 
 
 **Deep scrollback for debugging:**
 ```bash
-tmux capture-pane -t <session>:0.<pane_index> -p -S -500
+tmux capture-pane -t <session>:<window>.<pane> -p -S -500
 ```
 
 ## How You Work
