@@ -2,9 +2,7 @@
 set -euo pipefail
 
 INVOKE_DIR="$(cd "$(dirname "$0")" && pwd)"
-WORKTREE_DIR="$INVOKE_DIR"
-WORKTREE_NAME="$(basename "$WORKTREE_DIR")"
-WORKSPACE_DIR="$(cd "$WORKTREE_DIR/.." && pwd)"
+WORKSPACE_DIR="$(cd "$INVOKE_DIR/.." && pwd)"
 
 CONFIG="$WORKSPACE_DIR/ai/project/workflow.sh"
 if [[ ! -f "$CONFIG" ]]; then
@@ -21,16 +19,11 @@ if [[ -z "${PANE_NAMES+x}" ]]; then
   exit 1
 fi
 
-# If a specific name is given, only show that one
-if [[ -n "${1:-}" ]]; then
-  SESSIONS=("${SESSION_PREFIX}-$1")
-else
-  # Scan for all matching tmux sessions
-  SESSIONS=()
-  while IFS= read -r line; do
-    [[ -n "$line" ]] && SESSIONS+=("$line")
-  done < <(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep "^${SESSION_PREFIX}-" || true)
-fi
+# Scan for all matching tmux sessions
+SESSIONS=()
+while IFS= read -r line; do
+  [[ -n "$line" ]] && SESSIONS+=("$line")
+done < <(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep "^${SESSION_PREFIX}-" || true)
 
 if [[ ${#SESSIONS[@]} -eq 0 ]]; then
   echo "No ${SESSION_PREFIX}-* sessions running."
@@ -39,6 +32,7 @@ fi
 
 for SESSION in "${SESSIONS[@]}"; do
   NAME="${SESSION#${SESSION_PREFIX}-}"
+  SESSION_WORKTREE_DIR="$WORKSPACE_DIR/$NAME"
 
   if ! tmux has-session -t "$SESSION" 2>/dev/null; then
     echo "=== $NAME === (no session)"
@@ -48,9 +42,10 @@ for SESSION in "${SESSIONS[@]}"; do
 
   echo "=== $NAME ==="
 
-  # Run project-specific status header if defined
-  if declare -f status_header >/dev/null 2>&1; then
-    status_header "$NAME" "$WORKTREE_DIR"
+  # Run project-specific status header if defined. Skip when the worktree
+  # dir is gone (orphaned session) so a removed worktree doesn't crash status.
+  if declare -f status_header >/dev/null 2>&1 && [[ -d "$SESSION_WORKTREE_DIR" ]]; then
+    status_header "$NAME" "$SESSION_WORKTREE_DIR"
   fi
 
   # Check each pane
