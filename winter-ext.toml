@@ -2,4 +2,5 @@ name = "winter-service-tmux"
 prefix = "wst"
 
 [hooks]
-on_env_init = "./hooks/init-worktree.sh"
+on_env_init    = "./hooks/init-worktree.sh"
+on_env_destroy = "./hooks/destroy-worktree.sh"
