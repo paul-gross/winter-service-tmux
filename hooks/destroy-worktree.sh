@@ -26,18 +26,37 @@ if [[ ! -f "$CONFIG" ]]; then
   exit 0
 fi
 
+# Tolerate a broken workflow.sh — destroy must remain idempotent even if the
+# user is mid-edit or the file has a syntax error. Disable `set -u` across the
+# source so an unbound variable inside workflow.sh doesn't abort the hook
+# (under -u, `if ! source` is too late: the script exits before the test runs).
+SESSION_PREFIX=""
+set +u
 # shellcheck disable=SC1090
-source "$CONFIG"
-: "${SESSION_PREFIX:?workflow.sh must define SESSION_PREFIX}"
+if ! source "$CONFIG" 2>/dev/null; then
+  echo "warning: source $CONFIG failed; falling back to env-suffix session lookup" >&2
+  SESSION_PREFIX=""
+fi
+set -u
 
-SESSION="${SESSION_PREFIX}-${WINTER_ENV}"
-
-if ! tmux has-session -t "$SESSION" 2>/dev/null; then
-  exit 0
+if [[ -n "$SESSION_PREFIX" ]]; then
+  SESSION="${SESSION_PREFIX}-${WINTER_ENV}"
+  if ! tmux has-session -t "$SESSION" 2>/dev/null; then
+    exit 0
+  fi
+else
+  # No SESSION_PREFIX — match any tmux session whose name ends with -<env>.
+  # If there are none, exit 0 (the idempotency contract).
+  SESSION="$(tmux ls -F '#{session_name}' 2>/dev/null | grep -E -- "-${WINTER_ENV}\$" | head -1 || true)"
+  if [[ -z "$SESSION" ]]; then
+    exit 0
+  fi
+  echo "warning: using session '$SESSION' inferred from env suffix" >&2
 fi
 
 # Prefer the extension's own ./down (handles child-process reaping). Fall back
-# to a direct kill-session if ./down can't be located.
+# to a direct kill-session if ./down can't be located or fails (e.g. ./down
+# also sources the broken workflow.sh).
 DOWN="$WINTER_EXT_DIR/workflow/down"
 if [[ -x "$DOWN" ]]; then
   "$DOWN" "$WINTER_ENV" || tmux kill-session -t "$SESSION" 2>/dev/null || true
