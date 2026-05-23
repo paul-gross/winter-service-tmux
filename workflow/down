@@ -54,10 +54,15 @@ while IFS= read -r pid; do
   [[ -n "$pid" ]] && collect_descendants "$pid"
 done < <(tmux list-panes -s -t "$SESSION" -F '#{pane_pid}' 2>/dev/null)
 
-# SIGTERM everything, wait, then SIGKILL survivors
-kill -TERM "${ALL_PIDS[@]}" 2>/dev/null || true
-sleep 1
-kill -9 "${ALL_PIDS[@]}" 2>/dev/null || true
+# SIGTERM everything, wait, then SIGKILL survivors. Guard the expansion because
+# under `set -u` an empty array would raise "unbound variable" — happens when
+# the session vanished between has-session and list-panes, or when there are
+# no panes left.
+if [[ ${#ALL_PIDS[@]} -gt 0 ]]; then
+  kill -TERM "${ALL_PIDS[@]}" 2>/dev/null || true
+  sleep 1
+  kill -9 "${ALL_PIDS[@]}" 2>/dev/null || true
+fi
 
 # Kill the tmux session
 tmux kill-session -t "$SESSION" 2>/dev/null || true
