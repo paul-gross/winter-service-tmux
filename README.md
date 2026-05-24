@@ -9,6 +9,7 @@ A [winter](https://codeberg.org/pgross/winter) extension that adds tmux-based se
 - **One-command lifecycle** — `./up`, `./down`, and `./status` land in every feature worktree on `winter ws init`. Same three commands across every project, every worktree.
 - **Agent-driven service control** — the `wst-app-runner` agent starts and stops services, reads pane output, and reports health back to the calling agent or session lead.
 - **Pluggable project config** — a single `workspace:/ai/project/workflow.sh` declares the panes, commands, and session prefix; the scripts are generic and the project owns the layout.
+- **Built-in `winter doctor` probe** — checks tmux is installed, `SESSION_PREFIX` is declared, and no foreign tmux sessions collide with the configured prefix. Surfaces three results under `[wst]` in `winter doctor`'s output.
 
 ## Installation & Setup
 
