@@ -117,10 +117,30 @@ if declare -f setup_tmux >/dev/null 2>&1; then
   # server inheriting the fd. From here on, a concurrent ./up will see
   # has-session=true and exit cleanly.
   release_lock
-  # Any failure inside setup_tmux leaves a half-built session that ./status
-  # would misreport. Tear it down on error so the user never sees a partial
-  # environment.
-  trap 'rc=$?; tmux kill-session -t "$SESSION" 2>/dev/null || true; echo "Error: setup_tmux failed (exit $rc); session $SESSION torn down" >&2; exit "$rc"' ERR
+  # If setup_tmux returns non-zero we have to decide whether the session is
+  # salvageable. The naive "kill on any error" was wrong: project-supplied
+  # setup_tmux bodies routinely contain non-tmux commands (grep -oP that
+  # produces no match, env-var probes, status-header builders) whose non-zero
+  # exit is benign and shouldn't tear down an already-running set of services.
+  #
+  # Heuristic: if setup_tmux had progressed far enough to add at least one
+  # window beyond the default tmux session-creation window, the failure
+  # happened mid-startup and the session has services running — keep it and
+  # warn. If we're still at one window (likely a failure before any
+  # tmux new-window / send-keys ran), tear down — there's nothing useful in it.
+  trap '
+    rc=$?
+    win_count=$(tmux list-windows -t "$SESSION" 2>/dev/null | wc -l)
+    if [[ "$win_count" -le 1 ]]; then
+      tmux kill-session -t "$SESSION" 2>/dev/null || true
+      echo "Error: setup_tmux failed (exit $rc) before any windows were created; session $SESSION torn down." >&2
+    else
+      echo "Warning: setup_tmux returned exit $rc but session $SESSION has $win_count windows running." >&2
+      echo "  This often means a benign non-zero exit (e.g. grep -oP with no match) inside setup_tmux." >&2
+      echo "  Inspect with ./status; stop with ./down if the session is unhealthy." >&2
+    fi
+    exit "$rc"
+  ' ERR
   setup_tmux "$SESSION" "$WORKTREE_DIR" "$NAME"
   trap - ERR
 elif declare -f setup_panes >/dev/null 2>&1; then
