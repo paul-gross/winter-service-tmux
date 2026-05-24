@@ -12,8 +12,25 @@ if [[ ! -f "$CONFIG" ]]; then
   exit 1
 fi
 
-source "$CONFIG"
-: "${SESSION_PREFIX:?workflow.sh must define SESSION_PREFIX}"
+# Tolerate a broken workflow.sh — this script is called by the destroy hook
+# during `winter ws destroy`, and we must complete the PID sweep even if the
+# user is mid-edit or the file has a syntax error. Disable `set -u` across the
+# source so an unbound variable inside workflow.sh doesn't abort us before we
+# get to the cleanup logic; restore -u immediately after.
+SESSION_PREFIX=""
+set +u
+# shellcheck disable=SC1090
+if ! source "$CONFIG" 2>/dev/null; then
+  echo "warning: source $CONFIG failed; falling back to env-suffix session lookup" >&2
+  SESSION_PREFIX=""
+fi
+set -u
+
+if [[ -z "${SESSION_PREFIX:-}" ]]; then
+  # workflow.sh is broken or doesn't define SESSION_PREFIX. We'll resolve the
+  # session by env-suffix match below; until then, SESSION_PREFIX stays empty.
+  :
+fi
 
 NAME=""
 for arg in "$@"; do
@@ -32,11 +49,22 @@ if [[ -z "$NAME" ]]; then
   fi
 fi
 
-SESSION="${SESSION_PREFIX}-${NAME}"
-
-if ! tmux has-session -t "$SESSION" 2>/dev/null; then
-  echo "No running session '$SESSION'"
-  exit 0
+if [[ -n "$SESSION_PREFIX" ]]; then
+  SESSION="${SESSION_PREFIX}-${NAME}"
+  if ! tmux has-session -t "$SESSION" 2>/dev/null; then
+    echo "No running session '$SESSION'"
+    exit 0
+  fi
+else
+  # workflow.sh failed to load — match any tmux session whose name ends with
+  # -<name>. If none, exit 0 (the idempotency contract carried over from the
+  # destroy hook's fallback path).
+  SESSION="$(tmux ls -F '#{session_name}' 2>/dev/null | grep -E -- "-${NAME}\$" | head -1 || true)"
+  if [[ -z "$SESSION" ]]; then
+    echo "No running session for '$NAME' (workflow.sh failed to load and no env-suffix match)"
+    exit 0
+  fi
+  echo "warning: using session '$SESSION' inferred from name suffix (workflow.sh failed to load)" >&2
 fi
 
 # Collect all descendant PIDs from every pane before killing anything.
