@@ -1,6 +1,6 @@
 # winter-service-tmux
 
-A [winter](https://codeberg.org/pgross/winter) extension that adds tmux-based service orchestration to a workspace. Each feature worktree gets `./up`, `./down`, and `./status` scripts that run the project's services in a per-worktree tmux session, so multiple worktrees can run their own instances of the app side-by-side without port conflicts.
+A [winter](https://github.com/paul-gross/winter) extension that adds tmux-based service orchestration to a workspace. Each feature worktree gets `./up`, `./down`, and `./status` scripts that run the project's services in a per-worktree tmux session, so multiple worktrees can run their own instances of the app side-by-side without port conflicts.
 
 ## Features
 
@@ -20,7 +20,7 @@ Agentic setup is hooked into `/ws-setup`.
    ```toml
    [[standalone_repository]]
    name = "winter-service-tmux"
-   url = "git@codeberg.org:pgross/winter-service-tmux.git"
+   url = "git@github.com:paul-gross/winter-service-tmux.git"
    ```
 
 2. Run `/ws-setup` — it walks an interactive guide that generates the project-specific `workspace:/ai/project/workflow.sh` (panes, start commands, session prefix).

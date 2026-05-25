@@ -10,7 +10,7 @@ Conventional Commits with a scope:
 
 - Types: `feat`, `fix`, `docs`, `chore`, `refactor`, `test`, `perf`, `style`, `ai`
 - Scope: repo name or subsystem (e.g. `winter-service-tmux`, `workflow`, `agents`)
-- The `/wf-commit` skill from [winter-workflow](https://codeberg.org/pgross/winter-workflow) generates commits in this format
+- The `/wf-commit` skill from [winter-workflow](https://github.com/paul-gross/winter-workflow) generates commits in this format
 
 ## Pre-commit checks
 
