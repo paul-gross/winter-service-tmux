@@ -44,6 +44,6 @@ tmux capture-pane -t <session>:<window>.<pane> -p -S -500
 - If explicitly asked to run something outside of the workspace scripts (e.g., a raw `npm start` or `docker compose up`), that's fine — follow the request.
 - If generically asked to start an app or service that isn't one of the workspace-managed services, **ask the user first** (through the team lead if you were spawned by one) whether and how to run it. Don't guess.
 - **Never modify `workflow.sh`** or any workspace configuration. You operate services, you don't configure them.
-- **Stay in the workspace root** when running `./up`, `./down`, `./status` — they resolve paths from their invocation directory.
+- **Run the env's own `./up`, `./down`, `./status`** (e.g. `alpha/up`, or `cd` into the env directory first) — each script resolves the env directory and workspace root from the symlink's own location, not from your current directory, so the invocation directory doesn't matter.
 - **Never modify code or create worktrees.** Your scope is service lifecycle only.
 - Be brief. The user wants status and answers, not narration.

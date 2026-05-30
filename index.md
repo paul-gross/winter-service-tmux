@@ -6,7 +6,7 @@ Tmux-based service orchestration for winter workspaces. Runs project services (b
 
 This extension needs a project-specific `workflow.sh` to know which services to run in each feature environment. After `winter ws init` clones the extension, walk the user through [ai/workflow-setup.md](./ai/workflow-setup.md) to generate `workspace:/ai/project/workflow.sh` **and** `workspace:/ai/project/workflow.md` (the agent-facing reference that maps service names to `<window>.<pane>` targets). Without `workflow.sh`, `./up` errors out in any feature environment.
 
-If `workflow.md` is missing, re-run the workflow-setup walkthrough — step 9 generates it. Agents should not reverse-engineer pane indices out of `workflow.sh`.
+If `workflow.md` is missing, re-run the [workflow-setup walkthrough](./ai/workflow-setup.md) to regenerate it. Agents should not reverse-engineer pane indices out of `workflow.sh`.
 
 ## Service management rules
 
