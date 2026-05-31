@@ -2,6 +2,8 @@
 
 A [winter](https://github.com/paul-gross/winter) extension that adds tmux-based service orchestration to a workspace. Each feature environment gets `./up`, `./down`, and `./status` scripts that run the project's services in a per-env tmux session, so multiple envs can run their own instances of the app side-by-side without port conflicts.
 
+📚 **Documentation:** <https://paul-gross.github.io/winter-docs/>
+
 ## Features
 
 - **Per-env service sessions** — every feature environment gets its own tmux session running the project's services. Humans attach to watch logs in real time while agents drive the lifecycle.
