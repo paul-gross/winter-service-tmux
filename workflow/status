@@ -3,6 +3,22 @@ set -euo pipefail
 
 INVOKE_DIR="$(cd "$(dirname "$0")" && pwd)"
 WORKSPACE_DIR="$(cd "$INVOKE_DIR/.." && pwd)"
+ENV_NAME="$(basename "$INVOKE_DIR")"
+
+# By default, report only the env this script lives in (<SESSION_PREFIX>-<env>),
+# matching how ./up and ./down default to the invoking worktree. Pass --all (or
+# 'all') to report every running env instead.
+ALL=false
+for arg in "$@"; do
+  case "$arg" in
+    --all|all) ALL=true ;;
+    *)
+      echo "Usage: ./status [--all]"
+      echo "  (no argument) report this env's services; --all reports every env"
+      exit 1
+      ;;
+  esac
+done
 
 # Resolve this script's real directory through the env-dir symlink so we can
 # source the config-path resolver beside it. `readlink -f` is absent on stock
@@ -39,14 +55,23 @@ if [[ -z "${WINTER_TMUX_SERVICE_NAMES+x}" ]]; then
   exit 1
 fi
 
-# Scan for all matching tmux sessions
+# Select which sessions to report. Default: just this env's session; --all
+# widens to every running env (anchored so -alpha doesn't match -alpha2).
+if [[ "$ALL" == true ]]; then
+  SESSION_FILTER="^${SESSION_PREFIX}-"
+  EMPTY_MSG="No ${SESSION_PREFIX}-* sessions running."
+else
+  SESSION_FILTER="^${SESSION_PREFIX}-${ENV_NAME}$"
+  EMPTY_MSG="No ${SESSION_PREFIX}-${ENV_NAME} session running."
+fi
+
 SESSIONS=()
 while IFS= read -r line; do
   [[ -n "$line" ]] && SESSIONS+=("$line")
-done < <(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep "^${SESSION_PREFIX}-" || true)
+done < <(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep "$SESSION_FILTER" || true)
 
 if [[ ${#SESSIONS[@]} -eq 0 ]]; then
-  echo "No ${SESSION_PREFIX}-* sessions running."
+  echo "$EMPTY_MSG"
   exit 0
 fi
 
@@ -90,7 +115,10 @@ for SESSION in "${SESSIONS[@]}"; do
       continue
     fi
 
-    LAST_LINE=$(tmux capture-pane -t "$SESSION:$PANE_TARGET" -p 2>/dev/null | grep -v '^$' | tail -1)
+    # `|| true`: grep exits non-zero when the pane has no non-empty lines (e.g.
+    # a service that hasn't printed yet); without it, pipefail + set -e would
+    # abort the whole status run on an empty pane.
+    LAST_LINE=$(tmux capture-pane -t "$SESSION:$PANE_TARGET" -p 2>/dev/null | grep -v '^$' | tail -1 || true)
 
     if kill -0 "$PANE_PID" 2>/dev/null; then
       STATUS="running"

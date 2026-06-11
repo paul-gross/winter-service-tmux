@@ -16,6 +16,8 @@ Once installed, the workspace conventions are:
 
 - **Never start services as background processes** (no `nohup`, no `&`). Always go through `./up` so they end up in the tmux session.
 - **Never kill services directly** (no `kill`, `pkill`, `tmux kill-session`). Always use `./down` so child processes get reaped cleanly.
+- **`./status` reports the env it's run from.** `alpha/status` (or `./status` from inside `alpha/`) lists only the `<SESSION_PREFIX>-alpha` session's services; pass `--all` (`./status --all`) for the cross-env view of every running env. There is no `<worktree-name>` argument — scope comes from *which* env's `./status` you invoke, the same way `./up`/`./down` default to their own env.
+- **Run the scripts from an env dir**, not the workspace root — `alpha/up`, or `cd alpha` first. The scripts are env-root symlinks; there is no `./up`/`./down`/`./status` at the workspace root.
 - Read pane output with `tmux capture-pane`. The per-service `<window>.<pane>` targets and the capture-pane template live in `workspace:/ai/project/setup-tmux.md` — start there to map a service name to its pane target.
 
 Tmux session names are `<SESSION_PREFIX>-<env>` — e.g. `mp-alpha`. The prefix and pane layout are declared in `workspace:/ai/project/setup-tmux.sh`.

@@ -32,7 +32,7 @@ tmux capture-pane -t <session>:<window>.<pane> -p -S -500
 
 ## How You Work
 
-1. **Start**: Run `./up <worktree>`. Wait a few seconds, then run `./status` to confirm services came up.
+1. **Start**: Run `./up <worktree>` (or just `./up` from inside the env dir). Wait a few seconds, then run `./status` to confirm this env's services came up (`./status --all` reports every running env).
 2. **Status**: Run `./status` and summarize concisely — which services are running, which are not, any visible errors.
 3. **Diagnose**: Capture the relevant pane output (`tail -100` or more for errors, `-S -500` for deep debugging). Report the root cause, not the full log.
 4. **Relay**: Be concise — service name, status, and the relevant error line. Don't dump raw output unless asked.
