@@ -1,10 +1,10 @@
 # Workflow setup walkthrough
 
-This guide is an interactive walkthrough that produces `workspace:/ai/project/workflow.sh` — the shell script that configures the service management scripts (`./up`, `./down`, `./status`) for every feature worktree in the workspace. It defines what services run, how they start, and how they're organised in tmux panes.
+This guide is an interactive walkthrough that produces `workspace:/ai/project/setup-tmux.sh` — the shell script that configures the service management scripts (`./up`, `./down`, `./status`) for every feature worktree in the workspace. It defines what services run, how they start, and how they're organised in tmux panes.
 
 Run it on a fresh workspace, or any time you want to (re)configure how services are launched — add new services, rename panes, change the session prefix, switch which env file gets sourced.
 
-**Idempotent:** safe to re-run at any time. Before each step, check the current state of `workspace:/ai/project/workflow.sh`. If the step is already done, **say so explicitly** ("`SESSION_PREFIX` is already set to `wws` — skipping") and move on. Don't silent skip.
+**Idempotent:** safe to re-run at any time. Before each step, check the current state of `workspace:/ai/project/setup-tmux.sh`. If the step is already done, **say so explicitly** ("`SESSION_PREFIX` is already set to `wws` — skipping") and move on. Don't silent skip.
 
 ## How to run this guide
 
@@ -16,54 +16,62 @@ This is a guided walkthrough, not a script. Your job is to teach the user how th
 - **One step at a time.** Don't preemptively run a later step's commands while the current step is still in progress. Finish the work for the current step before starting the next.
 - **Don't say step numbers.** Don't say "step 1 of 9" or "step 3" or "next step" — just describe what's happening and what's next. The user shouldn't be tracking a counter.
 - **Speak before acting.** At the start of every step, send a short message that describes what's about to happen and *why* it matters. Don't dive straight into a question or a command.
-- **Narrate actions.** Before running a command or editing a file, tell the user what's about to happen ("Writing `workflow.sh` with `SESSION_PREFIX=wws` and a single shell pane..."). After it runs, tell them what changed.
+- **Narrate actions.** Before running a command or editing a file, tell the user what's about to happen ("Writing `setup-tmux.sh` with `SESSION_PREFIX=wws` and a single shell pane..."). After it runs, tell them what changed.
 - **Don't pause between steps.** When a step's work is done, report what changed in one line and move directly into the next step. Don't ask "ready for the next one?" — just continue. The user can interrupt at any time.
-- **Show, don't hide.** When you skip a step because the state is already correct, *show* what you found ("`workflow.sh` already declares 3 panes: `backend`, `frontend`, `shell`. Skipping tmux session layout."). Never silent skip.
+- **Show, don't hide.** When you skip a step because the state is already correct, *show* what you found ("`setup-tmux.sh` already declares 3 panes: `backend`, `frontend`, `shell`. Skipping tmux session layout."). Never silent skip.
 
 ## Why this matters
 
-When an agent spins up a feature environment, it runs `./up` to start all the services needed to use the application. `workflow.sh` tells `./up` exactly what to launch and in which tmux pane. Without it, `./up` errors out in every worktree.
+When an agent spins up a feature environment, it runs `./up` to start all the services needed to use the application. `setup-tmux.sh` tells `./up` exactly what to launch and in which tmux pane. Without it, `./up` errors out in every worktree.
 
-This extension does **not** own `.winter.env`. The workspace base seeds it during `winter ws init <name>` with `WINTER_ENV`, `WINTER_ENV_INDEX`, and `WINTER_PORT_BASE`. The project's own `project-setup.md` appends project-specific variables (e.g. `BACKEND_PORT`, `DATABASE_URL`) below the managed block. This extension just *reads* `.winter.env` — when `ENV_FILE=".winter.env"` is set in `workflow.sh`, the `up` script sources it before launching panes, so every service starts with whatever vars the workspace and the project have populated.
+This extension does **not** own `.winter.env`. The workspace base seeds it during `winter ws init <name>` with `WINTER_ENV`, `WINTER_ENV_INDEX`, and `WINTER_PORT_BASE`. The project's own `project-setup.md` appends project-specific variables (e.g. `BACKEND_PORT`, `DATABASE_URL`) below the managed block. This extension just *reads* `.winter.env` — when `ENV_FILE=".winter.env"` is set in `setup-tmux.sh`, the `up` script sources it before launching panes, so every service starts with whatever vars the workspace and the project have populated.
 
 ## Prerequisites
 
 Before running this guide:
 - The workspace has been set up via `/ws-setup` (or the underlying `winter ws init` has been run).
 - The `winter-service-tmux` extension is installed (its standalone clone exists at `workspace:/winter-service-tmux/` and its `on_env_init` hook is wired into the workspace).
-- Read `winter-service-tmux:/workflow/workflow.sh.example` to understand the structural template you'll be writing.
+- Read `winter-service-tmux:/workflow/setup-tmux.sh.example` to understand the structural template you'll be writing.
 
 ## Opening preamble (always send first)
 
 Before doing anything, send a short orientation message, then continue straight into the first step:
 
-> "I'll walk you through setting up `workflow.sh` so `./up`, `./down`, and `./status` know which services to run in each feature worktree. Stop me or ask questions at any time."
+> "I'll walk you through setting up `setup-tmux.sh` so `./up`, `./down`, and `./status` know which services to run in each feature worktree. Stop me or ask questions at any time."
 
 Don't wait for a "go" signal — just begin.
 
 ## Steps
 
-### 1. Check existing workflow.sh
+### 1. Check existing setup-tmux.sh
 
-**Explain first:** "Before changing anything, I need to know what's already there. `workspace:/ai/project/workflow.sh` is the canonical source of truth — if it exists, it tells me your current `SESSION_PREFIX`, `ENV_FILE`, tmux session layout, and any custom `setup_tmux`/`status_header` logic."
+**Explain first:** "Before changing anything, I need to know what's already there. `workspace:/ai/project/setup-tmux.sh` is the canonical source of truth — if it exists, it tells me your current `SESSION_PREFIX`, `ENV_FILE`, tmux session layout, and any custom `setup_tmux`/`status_header` logic."
 
-**If the existing file defines `setup_panes` (the pre-multi-window name)**, flag it: "Your `workflow.sh` defines `setup_panes` — that's the old name. The current scripts expect `setup_tmux`. I'll rename it (and update any references) as part of this guide." Treat that as a forced "replace" path: rebuild the file from the current values rather than asking the user to "keep" the broken version.
+**If the existing file defines `setup_panes` (the pre-multi-window name)**, flag it: "Your `setup-tmux.sh` defines `setup_panes` — that's the old name. The current scripts expect `setup_tmux`. I'll rename it (and update any references) as part of this guide." Treat that as a forced "replace" path: rebuild the file from the current values rather than asking the user to "keep" the broken version.
 
-Check the current state:
+**Legacy filename:** the config used to be called `workflow.sh`. The scripts still source `workflow.sh` as a fallback, but the canonical name is now `setup-tmux.sh`. If you find a `workflow.sh` and no `setup-tmux.sh`, flag it: "Your config is at the legacy path `workflow.sh` — I'll migrate it to `setup-tmux.sh` as part of this guide (`git mv ai/project/workflow.sh ai/project/setup-tmux.sh`), then apply any edits." Migrate before writing.
+
+Check the current state (prefer the canonical name, fall back to the legacy one):
 
 ```bash
-test -f ./ai/project/workflow.sh && cat ./ai/project/workflow.sh || echo "(no workflow.sh)"
+if [[ -f ./ai/project/setup-tmux.sh ]]; then
+  cat ./ai/project/setup-tmux.sh
+elif [[ -f ./ai/project/workflow.sh ]]; then
+  echo "(legacy workflow.sh — migrate to setup-tmux.sh)"; cat ./ai/project/workflow.sh
+else
+  echo "(no setup-tmux.sh)"
+fi
 ```
 
-**If `workflow.sh` already exists**, parse out and report what you found:
+**If a config already exists** (at either name), parse out and report what you found:
 
-> "Your `workflow.sh` already exists: `SESSION_PREFIX=<value>`, `ENV_FILE=<value or 'unset'>`, `WINTER_TMUX_SERVICE_NAMES=(<list>)`. Want to keep it as-is, replace it from scratch, or tweak something specific?"
+> "Your `setup-tmux.sh` already exists: `SESSION_PREFIX=<value>`, `ENV_FILE=<value or 'unset'>`, `WINTER_TMUX_SERVICE_NAMES=(<list>)`. Want to keep it as-is, replace it from scratch, or tweak something specific?"
 
-- "keep": skip ahead to the "Write workflow.md" step using the `SESSION_PREFIX` and `WINTER_TMUX_SERVICE_NAMES` you just read — that step is idempotent and will report "unchanged" if `workflow.md` is already in sync. Then offer the smoke test and continue into the final report.
+- "keep": skip ahead to the "Write setup-tmux.md" step using the `SESSION_PREFIX` and `WINTER_TMUX_SERVICE_NAMES` you just read — that step is idempotent and will report "unchanged" if `setup-tmux.md` is already in sync. Then offer the smoke test and continue into the final report.
 - "replace": continue from the next step as if no file existed.
 - "tweak": ask **"What would you like to change?"** and skip to the relevant step.
 
-**If `workflow.sh` does not exist**, tell the user: "No `workflow.sh` yet — let's build one from scratch." Then continue.
+**If `setup-tmux.sh` does not exist**, tell the user: "No `setup-tmux.sh` yet — let's build one from scratch." Then continue.
 
 ### 2. Decide research vs. guided approach
 
@@ -78,10 +86,10 @@ Ask **one** question:
   - Ask it to find: start commands per service (`npm run dev`, `python manage.py runserver`, etc.), the directory each runs from, ports each service binds to, env vars each consumes from `.winter.env`, any docker-compose services that need to be `up`'d
   - Cap the response under 600 words
   - Tell it to be honest if a repo has no runtime services
-  - Have it end with a synthesis: which panes the workflow.sh should declare, in what order, with what start commands
+  - Have it end with a synthesis: which panes the setup-tmux.sh should declare, in what order, with what start commands
 - "guided": fall through to the next step.
 
-When the subagent reports back, present the findings to the user and ask **"Use these as the basis for `workflow.sh`?"** before proceeding.
+When the subagent reports back, present the findings to the user and ask **"Use these as the basis for `setup-tmux.sh`?"** before proceeding.
 
 ### 3. Identify services
 
@@ -131,7 +139,7 @@ If **no** service uses env vars, ask **one** question:
 
 ### 6. Tmux session layout
 
-**Explain first:** "tmux organises services along two axes: **windows** (separate full-screen tabs, created with `tmux new-window`) and **splits** within a window (horizontal or vertical, created with `tmux split-window`). The `setup_tmux` function uses both to lay out the session and `tmux send-keys` to launch each service. Common single-window patterns: vertical split for two services (top/bottom), 2x2 grid for four, or horizontal-then-vertical for three (one big pane + two smaller stacked). Reach for multiple windows when one gets crowded, or to group services logically (e.g. application services in window 0, ad-hoc shells in window 1). Panes are addressed as `<window>.<pane>` — see `workflow.sh.example` for a 2-window layout."
+**Explain first:** "tmux organises services along two axes: **windows** (separate full-screen tabs, created with `tmux new-window`) and **splits** within a window (horizontal or vertical, created with `tmux split-window`). The `setup_tmux` function uses both to lay out the session and `tmux send-keys` to launch each service. Common single-window patterns: vertical split for two services (top/bottom), 2x2 grid for four, or horizontal-then-vertical for three (one big pane + two smaller stacked). Reach for multiple windows when one gets crowded, or to group services logically (e.g. application services in window 0, ad-hoc shells in window 1). Panes are addressed as `<window>.<pane>` — see `setup-tmux.sh.example` for a 2-window layout."
 
 Based on the services collected, pick a default layout that keeps related services together (e.g. backend + frontend top, shell bottom). Tell the user: "Proposed layout for `<n>` panes: `<pane-0>` top-left, `<pane-1>` top-right, `<pane-2>` bottom-full." (Adjust to the actual count.)
 
@@ -155,13 +163,13 @@ Ask **one** question:
 - "no" / "skip": leave `status_header()` as `:` (no-op).
 - otherwise: take the user's spec and translate it into shell that reads `$ENV_PATH` (when set) and echoes the requested info.
 
-### 8. Write workflow.sh
+### 8. Write setup-tmux.sh
 
-**Explain first:** "Now I have everything needed to write `workspace:/ai/project/workflow.sh`. The canonical structural template is `winter-service-tmux:/workflow/workflow.sh.example` — follow it exactly and substitute the values we just collected."
+**Explain first:** "Now I have everything needed to write `workspace:/ai/project/setup-tmux.sh`. The canonical structural template is `winter-service-tmux:/workflow/setup-tmux.sh.example` — follow it exactly and substitute the values we just collected."
 
-Tell the user: "Writing `workflow.sh` with `SESSION_PREFIX=<prefix>`, `ENV_FILE=<value-or-unset>`, `WINTER_TMUX_SERVICE_NAMES=(<list>)`, and `setup_tmux` for `<n>` panes..."
+Tell the user: "Writing `setup-tmux.sh` with `SESSION_PREFIX=<prefix>`, `ENV_FILE=<value-or-unset>`, `WINTER_TMUX_SERVICE_NAMES=(<list>)`, and `setup_tmux` for `<n>` panes..."
 
-Then write the file. Read `workflow.sh.example` and reproduce its structure exactly, substituting:
+Then write the file. Read `setup-tmux.sh.example` and reproduce its structure exactly, substituting:
 
 - `SESSION_PREFIX` ← the value confirmed in the session-prefix step.
 - `ENV_FILE` ← `".winter.env"` if the env-file step recorded one; omit the line otherwise.
@@ -172,16 +180,18 @@ Then write the file. Read `workflow.sh.example` and reproduce its structure exac
 After writing, mark it executable:
 
 ```bash
-chmod +x ./ai/project/workflow.sh
+chmod +x ./ai/project/setup-tmux.sh
 ```
 
-Confirm: "`workflow.sh` written and executable at `workspace:/ai/project/workflow.sh`."
+Confirm: "`setup-tmux.sh` written and executable at `workspace:/ai/project/setup-tmux.sh`."
 
-### 9. Write workflow.md (agent context)
+**Machine-specific overrides (mention, don't prompt):** the committed `setup-tmux.sh` can be paired with a gitignored `setup-tmux.local.sh` for per-machine tweaks. `./up`, `./down`, and `./status` source the local file **on top of** the committed one (overlay), so it can override `SESSION_PREFIX`/`ENV_FILE`, redefine `setup_tmux`/`status_header`, or extend `WINTER_TMUX_SERVICE_NAMES` without touching version control. Don't create one as part of this guide — just tell the user it exists: "If you ever need machine-specific overrides, drop a gitignored `setup-tmux.local.sh` next to this file and it'll be layered on top." Only create it if the user explicitly asks; if you do, ensure it's gitignored.
 
-**Explain first:** "Agents read service output via `tmux capture-pane -t <session>:<window>.<pane>`. Without help, they'd have to open `workflow.sh` and count `WINTER_TMUX_SERVICE_NAMES` indices to translate a service name into a pane target. `workflow.md` is a short, agent-readable sibling of `workflow.sh` that lists each declared service alongside its `<window>.<pane>` and the capture-pane template. The extension's own `index.md` (auto-loaded into every session) already points agents at `workflow.md` — generating the file is the only step here."
+### 9. Write setup-tmux.md (agent context)
 
-Build the expected `workflow.md` content from the values just confirmed (`SESSION_PREFIX` plus `WINTER_TMUX_SERVICE_NAMES`). Resolve each `WINTER_TMUX_SERVICE_NAMES` entry to a `<window>.<pane>` target:
+**Explain first:** "Agents read service output via `tmux capture-pane -t <session>:<window>.<pane>`. Without help, they'd have to open `setup-tmux.sh` and count `WINTER_TMUX_SERVICE_NAMES` indices to translate a service name into a pane target. `setup-tmux.md` is a short, agent-readable sibling of `setup-tmux.sh` that lists each declared service alongside its `<window>.<pane>` and the capture-pane template. The extension's own `index.md` (auto-loaded into every session) already points agents at `setup-tmux.md` — generating the file is the only step here."
+
+Build the expected `setup-tmux.md` content from the values just confirmed (`SESSION_PREFIX` plus `WINTER_TMUX_SERVICE_NAMES`). Resolve each `WINTER_TMUX_SERVICE_NAMES` entry to a `<window>.<pane>` target:
 
 - Bare entry `"<name>"` at array index `i` → target `0.i`.
 - Prefixed entry `"<window>.<pane>:<name>"` → target is the prefix, name is the suffix.
@@ -216,12 +226,12 @@ Declared services:
 - `shell` → `1.0`
 ```
 
-Then look at the existing `workspace:/ai/project/workflow.md`:
+Then look at the existing `workspace:/ai/project/setup-tmux.md`:
 
-- **Missing, or doesn't match what you just rendered**: write the new content. Tell the user "Writing `workflow.md` with `<n>` services: `backend` → `0.0`, `frontend` → `0.1`, ..."
-- **Already matches**: tell the user "`workflow.md` unchanged — skipping write." and move on.
+- **Missing, or doesn't match what you just rendered**: write the new content. Tell the user "Writing `setup-tmux.md` with `<n>` services: `backend` → `0.0`, `frontend` → `0.1`, ..."
+- **Already matches**: tell the user "`setup-tmux.md` unchanged — skipping write." and move on.
 
-Confirm: "`workflow.md` is at `workspace:/ai/project/workflow.md`."
+Confirm: "`setup-tmux.md` is at `workspace:/ai/project/setup-tmux.md`."
 
 ### 10. Smoke test (optional)
 
@@ -237,12 +247,12 @@ Ask **one** question:
 ### Final report
 
 Summarise everything that happened in a single message:
-- `workflow.sh` location: `workspace:/ai/project/workflow.sh` (created / replaced / unchanged)
+- `setup-tmux.sh` location: `workspace:/ai/project/setup-tmux.sh` (created / replaced / unchanged)
 - `SESSION_PREFIX`
 - `ENV_FILE` (value or "unset")
 - `WINTER_TMUX_SERVICE_NAMES` (the list)
 - Number of panes and their start commands
-- `workflow.md`: `workspace:/ai/project/workflow.md` (written / unchanged)
+- `setup-tmux.md`: `workspace:/ai/project/setup-tmux.md` (written / unchanged)
 - Smoke test: ran / skipped / failed (if failed, what to fix)
 - Any manual steps still pending
 

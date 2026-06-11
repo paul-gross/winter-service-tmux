@@ -24,21 +24,37 @@ for arg in "$@"; do
   esac
 done
 
-# Load project workflow config
-CONFIG="$WORKSPACE_DIR/ai/project/workflow.sh"
-if [[ ! -f "$CONFIG" ]]; then
-  echo "Error: No workflow.sh config found."
-  echo "Expected at: workspace:/ai/project/workflow.sh"
+# Resolve this script's real directory through the env-dir symlink so we can
+# source the config-path resolver beside it. `readlink -f` is absent on stock
+# macOS, so walk the symlink chain with plain `readlink`.
+SCRIPT_SRC="$0"
+while [[ -L "$SCRIPT_SRC" ]]; do
+  SCRIPT_LINK="$(readlink "$SCRIPT_SRC")"
+  [[ "$SCRIPT_LINK" == /* ]] && SCRIPT_SRC="$SCRIPT_LINK" || SCRIPT_SRC="$(dirname "$SCRIPT_SRC")/$SCRIPT_LINK"
+done
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SRC")" && pwd)"
+# shellcheck source=winter-service-tmux.sh
+source "$SCRIPT_DIR/winter-service-tmux.sh"
+
+# Load project tmux config — the committed setup-tmux.sh (legacy: workflow.sh)
+# with an optional setup-tmux.local.sh (legacy: workflow.local.sh) overlaid on
+# top. See winter-service-tmux.sh for the resolution rules.
+winter_tmux_config_files "$WORKSPACE_DIR"
+if [[ ${#WINTER_TMUX_CONFIG_FILES[@]} -eq 0 ]]; then
+  echo "Error: No setup-tmux.sh config found."
+  echo "Expected at: workspace:/ai/project/setup-tmux.sh (legacy: workflow.sh)"
   echo ""
   echo "Create one to define SESSION_PREFIX, ENV_FILE, and panes."
-  echo "See workflow.sh.example in the winter-service-tmux extension for a template."
+  echo "See setup-tmux.sh.example in the winter-service-tmux extension for a template."
   exit 1
 fi
-
-source "$CONFIG"
+for cfg in "${WINTER_TMUX_CONFIG_FILES[@]}"; do
+  # shellcheck disable=SC1090
+  source "$cfg"
+done
 
 # Validate required config
-: "${SESSION_PREFIX:?workflow.sh must define SESSION_PREFIX}"
+: "${SESSION_PREFIX:?setup-tmux.sh must define SESSION_PREFIX}"
 
 # Determine worktree name if not set by arguments
 if [[ -z "$NAME" ]]; then
@@ -109,7 +125,7 @@ if tmux has-session -t "$SESSION" 2>/dev/null; then
   exit 0
 fi
 
-# setup_tmux is defined in workflow.sh — it receives SESSION, WORKTREE_DIR, NAME
+# setup_tmux is defined in setup-tmux.sh — it receives SESSION, WORKTREE_DIR, NAME
 # ENV_PATH is available for setup_tmux to source in each tmux pane
 if declare -f setup_tmux >/dev/null 2>&1; then
   tmux new-session -d -s "$SESSION" -c "$WORKTREE_DIR" -x 200 -y 50
@@ -145,13 +161,13 @@ if declare -f setup_tmux >/dev/null 2>&1; then
   trap - ERR
 elif declare -f setup_panes >/dev/null 2>&1; then
   release_lock
-  echo "Error: workflow.sh defines setup_panes — rename it to setup_tmux."
-  echo "  See winter-service-tmux:/workflow/workflow.sh.example for the current shape."
+  echo "Error: setup-tmux.sh defines setup_panes — rename it to setup_tmux."
+  echo "  See winter-service-tmux:/workflow/setup-tmux.sh.example for the current shape."
   echo "  This rename came with multi-window support; also rename PANE_NAMES to WINTER_TMUX_SERVICE_NAMES."
   exit 1
 else
   release_lock
-  echo "Error: workflow.sh must define a setup_tmux function"
+  echo "Error: setup-tmux.sh must define a setup_tmux function"
   exit 1
 fi
 

@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
-# Project workflow configuration for winter workspace scripts.
-# Copy this to workspace:/ai/project/workflow.sh and customize.
+# Project tmux configuration for winter workspace scripts.
+# Copy this to workspace:/ai/project/setup-tmux.sh and customize.
+#
+# For machine-specific overrides that shouldn't be committed, add a sibling
+# setup-tmux.local.sh — the up/down/status scripts source it on top of this
+# file (overlay), so it can override SESSION_PREFIX/ENV_FILE, redefine
+# setup_tmux/status_header, or extend WINTER_TMUX_SERVICE_NAMES. Keep it
+# gitignored. The legacy names workflow.sh / workflow.local.sh still work.
 
 # Session prefix — tmux sessions will be named <prefix>-<worktree>
 # e.g., "mp" produces "mp-alpha", "mp-beta"

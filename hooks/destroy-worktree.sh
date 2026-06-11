@@ -20,23 +20,28 @@ set -uo pipefail
 : "${WINTER_WORKSPACE_DIR:?WINTER_WORKSPACE_DIR not set}"
 : "${WINTER_ENV:?WINTER_ENV not set}"
 
-CONFIG="$WINTER_WORKSPACE_DIR/ai/project/workflow.sh"
-if [[ ! -f "$CONFIG" ]]; then
-  # No workflow.sh = no services to stop. Not an error during destroy.
+# shellcheck source=../workflow/winter-service-tmux.sh
+source "$WINTER_EXT_DIR/workflow/winter-service-tmux.sh"
+
+winter_tmux_config_files "$WINTER_WORKSPACE_DIR"
+if [[ ${#WINTER_TMUX_CONFIG_FILES[@]} -eq 0 ]]; then
+  # No config = no services to stop. Not an error during destroy.
   exit 0
 fi
 
-# Tolerate a broken workflow.sh — destroy must remain idempotent even if the
-# user is mid-edit or the file has a syntax error. Disable `set -u` across the
-# source so an unbound variable inside workflow.sh doesn't abort the hook
-# (under -u, `if ! source` is too late: the script exits before the test runs).
+# Tolerate a broken config — destroy must remain idempotent even if the user is
+# mid-edit or a file has a syntax error. Disable `set -u` across the source so
+# an unbound variable inside the config doesn't abort the hook. SESSION_PREFIX
+# keeps the last good value across the overlay, so a broken local file doesn't
+# discard a valid committed prefix.
 SESSION_PREFIX=""
 set +u
-# shellcheck disable=SC1090
-if ! source "$CONFIG" 2>/dev/null; then
-  echo "warning: source $CONFIG failed; falling back to env-suffix session lookup" >&2
-  SESSION_PREFIX=""
-fi
+for cfg in "${WINTER_TMUX_CONFIG_FILES[@]}"; do
+  # shellcheck disable=SC1090
+  if ! source "$cfg" 2>/dev/null; then
+    echo "warning: source $cfg failed; falling back to env-suffix session lookup" >&2
+  fi
+done
 set -u
 
 if [[ -n "$SESSION_PREFIX" ]]; then
@@ -56,7 +61,7 @@ fi
 
 # Prefer the extension's own ./down (handles child-process reaping). Fall back
 # to a direct kill-session if ./down can't be located or fails (e.g. ./down
-# also sources the broken workflow.sh).
+# also sources the broken config).
 DOWN="$WINTER_EXT_DIR/workflow/down"
 if [[ -x "$DOWN" ]]; then
   "$DOWN" "$WINTER_ENV" || tmux kill-session -t "$SESSION" 2>/dev/null || true

@@ -7,7 +7,8 @@
 #
 # Three checks:
 #   1. tmux binary on PATH
-#   2. SESSION_PREFIX declared in workspace:/ai/project/workflow.sh
+#   2. SESSION_PREFIX declared in workspace:/ai/project/setup-tmux.sh
+#      (legacy: workflow.sh), with an optional setup-tmux.local.sh overlay
 #   3. session-name collision with foreign tmux sessions sharing the prefix
 #
 # Each probe is implemented as an explicit branch that emits its own NDJSON;
@@ -17,7 +18,12 @@
 set -uo pipefail
 
 WORKSPACE_DIR="${WINTER_WORKSPACE_DIR:-$(pwd)}"
-WORKFLOW_SH="$WORKSPACE_DIR/ai/project/workflow.sh"
+
+# This probe is invoked by its real path (not a symlink), so its sibling
+# config-path resolver is reachable via $0's directory.
+DOCTOR_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=winter-service-tmux.sh
+source "$DOCTOR_DIR/winter-service-tmux.sh"
 
 json_escape() {
   local s="$1"
@@ -63,19 +69,26 @@ fi
 session_prefix=""
 session_prefix_ok=false
 
-if [[ ! -f "$WORKFLOW_SH" ]]; then
+winter_tmux_config_files "$WORKSPACE_DIR"
+
+if [[ ${#WINTER_TMUX_CONFIG_FILES[@]} -eq 0 ]]; then
   emit "SESSION_PREFIX declared" fail \
-    "workflow.sh not found at ai/project/workflow.sh" \
+    "no setup-tmux.sh found at ai/project/ (legacy: workflow.sh)" \
     "Run the workflow-setup walkthrough at winter-service-tmux:/ai/workflow-setup.md."
 else
-  # Source in a subshell so workflow.sh's functions/vars don't leak into our
-  # environment. Disable -u inside the subshell because workflow.sh isn't
-  # required to be -u-safe (it's user-authored). Status and value are joined
-  # by US (\x1f) so an empty SESSION_PREFIX survives $()'s trailing-newline
-  # stripping.
+  # Source in a subshell so the config's functions/vars don't leak into our
+  # environment. Disable -u inside the subshell because the config isn't
+  # required to be -u-safe (it's user-authored). The committed file and its
+  # optional local overlay are sourced in order; if either fails, the probe
+  # reports a source failure. Status and value are joined by US (\x1f) so an
+  # empty SESSION_PREFIX survives $()'s trailing-newline stripping.
   source_result=$(
     set +u
-    if source "$WORKFLOW_SH" 2>/dev/null; then
+    ok=true
+    for cfg in "${WINTER_TMUX_CONFIG_FILES[@]}"; do
+      source "$cfg" 2>/dev/null || ok=false
+    done
+    if [[ "$ok" == true ]]; then
       printf 'ok\x1f%s' "${SESSION_PREFIX:-}"
     else
       printf 'fail\x1f'
@@ -92,14 +105,14 @@ else
         emit "SESSION_PREFIX declared" pass "SESSION_PREFIX=$session_prefix"
       else
         emit "SESSION_PREFIX declared" fail \
-          "workflow.sh does not define SESSION_PREFIX" \
+          "tmux config does not define SESSION_PREFIX" \
           "Re-run the workflow-setup walkthrough at winter-service-tmux:/ai/workflow-setup.md."
       fi
       ;;
     *)
       emit "SESSION_PREFIX declared" fail \
-        "workflow.sh failed to source (syntax error or runtime failure)" \
-        "Fix workspace:/ai/project/workflow.sh, then re-run \`winter doctor\`."
+        "tmux config failed to source (syntax error or runtime failure)" \
+        "Fix workspace:/ai/project/setup-tmux.sh (legacy: workflow.sh), then re-run \`winter doctor\`."
       ;;
   esac
 fi
@@ -138,7 +151,7 @@ else
     else
       emit "session-name collision" warn \
         "foreign tmux sessions match \`${session_prefix}-*\`: ${conflicting[*]}" \
-        "Rename SESSION_PREFIX in workflow.sh or stop the foreign sessions."
+        "Rename SESSION_PREFIX in setup-tmux.sh or stop the foreign sessions."
     fi
   fi
 fi

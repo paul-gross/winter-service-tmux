@@ -4,22 +4,37 @@ set -euo pipefail
 INVOKE_DIR="$(cd "$(dirname "$0")" && pwd)"
 WORKSPACE_DIR="$(cd "$INVOKE_DIR/.." && pwd)"
 
-CONFIG="$WORKSPACE_DIR/ai/project/workflow.sh"
-if [[ ! -f "$CONFIG" ]]; then
-  echo "Error: No workflow.sh config found."
+# Resolve this script's real directory through the env-dir symlink so we can
+# source the config-path resolver beside it. `readlink -f` is absent on stock
+# macOS, so walk the symlink chain with plain `readlink`.
+SCRIPT_SRC="$0"
+while [[ -L "$SCRIPT_SRC" ]]; do
+  SCRIPT_LINK="$(readlink "$SCRIPT_SRC")"
+  [[ "$SCRIPT_LINK" == /* ]] && SCRIPT_SRC="$SCRIPT_LINK" || SCRIPT_SRC="$(dirname "$SCRIPT_SRC")/$SCRIPT_LINK"
+done
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SRC")" && pwd)"
+# shellcheck source=winter-service-tmux.sh
+source "$SCRIPT_DIR/winter-service-tmux.sh"
+
+winter_tmux_config_files "$WORKSPACE_DIR"
+if [[ ${#WINTER_TMUX_CONFIG_FILES[@]} -eq 0 ]]; then
+  echo "Error: No setup-tmux.sh config found."
   exit 1
 fi
 
-source "$CONFIG"
-: "${SESSION_PREFIX:?workflow.sh must define SESSION_PREFIX}"
+for cfg in "${WINTER_TMUX_CONFIG_FILES[@]}"; do
+  # shellcheck disable=SC1090
+  source "$cfg"
+done
+: "${SESSION_PREFIX:?setup-tmux.sh must define SESSION_PREFIX}"
 
-# WINTER_TMUX_SERVICE_NAMES should be defined in workflow.sh as an array
+# WINTER_TMUX_SERVICE_NAMES should be defined in setup-tmux.sh as an array
 if [[ -z "${WINTER_TMUX_SERVICE_NAMES+x}" ]]; then
   if [[ -n "${PANE_NAMES+x}" ]]; then
-    echo "Error: workflow.sh defines PANE_NAMES — rename it to WINTER_TMUX_SERVICE_NAMES."
-    echo "  See winter-service-tmux:/workflow/workflow.sh.example for the current shape."
+    echo "Error: setup-tmux.sh defines PANE_NAMES — rename it to WINTER_TMUX_SERVICE_NAMES."
+    echo "  See winter-service-tmux:/workflow/setup-tmux.sh.example for the current shape."
   else
-    echo "Error: workflow.sh must define WINTER_TMUX_SERVICE_NAMES array"
+    echo "Error: setup-tmux.sh must define WINTER_TMUX_SERVICE_NAMES array"
   fi
   exit 1
 fi
