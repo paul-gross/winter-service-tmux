@@ -120,7 +120,12 @@ for SESSION in "${SESSIONS[@]}"; do
     # abort the whole status run on an empty pane.
     LAST_LINE=$(tmux capture-pane -t "$SESSION:$PANE_TARGET" -p 2>/dev/null | grep -v '^$' | tail -1 || true)
 
-    if kill -0 "$PANE_PID" 2>/dev/null; then
+    # PANE_PID is the pane's login shell, which outlives any service started in
+    # it via send-keys. So a live shell PID only means "the pane exists", not
+    # "the service is running". Check instead whether the shell has a child
+    # process: a foreground job means something is running; no children means
+    # the pane is idle at a prompt (service exited, or a declared utility shell).
+    if pgrep -P "$PANE_PID" >/dev/null 2>&1; then
       STATUS="running"
     else
       STATUS="stopped"
