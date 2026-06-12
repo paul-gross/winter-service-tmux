@@ -32,10 +32,6 @@ SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SRC")" && pwd)"
 # shellcheck source=winter-service-tmux.sh
 source "$SCRIPT_DIR/winter-service-tmux.sh"
 
-# The config declares its command map with bash-4-only `declare -A`; fail clearly
-# before sourcing it rather than emitting a cryptic `declare: -A` error.
-winter_tmux_require_bash4 || exit 1
-
 winter_tmux_config_files "$WORKSPACE_DIR"
 if [[ ${#WINTER_TMUX_CONFIG_FILES[@]} -eq 0 ]]; then
   echo "Error: No setup-tmux.sh config found."

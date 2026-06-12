@@ -9,12 +9,10 @@ A [winter](https://github.com/paul-gross/winter) extension that adds tmux-based 
 - **Per-env service sessions** — every feature environment gets its own tmux session running the project's services. Humans attach to watch logs in real time while agents drive the lifecycle.
 - **Conflict-free parallel runs** — sessions are namespaced per env (`<prefix>-<env>`), so alpha and beta can both run the full app stack at once without colliding.
 - **One-command lifecycle** — `./up`, `./down`, `./status`, and `./restart` land in every feature environment on `winter ws init`. Same commands across every project, every env.
-- **Single-service restart** — `./restart <service>` reaps one wedged or crashed service's pane and re-runs its declared command, leaving the rest of the session running. No `kill`/`pkill`, no tearing down healthy services. Service commands live in a per-service map (`WINTER_TMUX_SERVICE_CMDS`) that `./up` and `./restart` share, so the two never drift.
+- **Single-service restart** — `./restart <service>` reaps one wedged or crashed service's pane and re-runs its declared command, leaving the rest of the session running. No `kill`/`pkill`, no tearing down healthy services. Service commands are declared once with `winter_service_cmd <name> <command>` and shared by both `./up` and `./restart`, so the two never drift.
 - **Agent-driven service control** — the `wst-app-runner` agent starts and stops services, reads pane output, and reports health back to the calling agent or session lead.
 - **Pluggable project config** — a single `workspace:/ai/project/setup-tmux.sh` declares the panes, commands, and session prefix; the scripts are generic and the project owns the layout. An optional gitignored `setup-tmux.local.sh` overlays machine-specific overrides on top. (The legacy `workflow.sh` / `workflow.local.sh` names still work.)
-- **Built-in `winter doctor` probe** — checks tmux is installed, bash is 4.0+ (the per-service command map uses an associative array), `SESSION_PREFIX` is declared, and no foreign tmux sessions collide with the configured prefix. Surfaces these results under `[wst]` in `winter doctor`'s output.
-
-> **Requires bash 4.0+** for the per-service command map (`declare -A`). macOS ships bash 3.2 as `/bin/bash`; install a newer bash (`brew install bash`) and keep it ahead on `PATH`. `./up`, `./restart`, and `./status` refuse with a clear message on older bash.
+- **Built-in `winter doctor` probe** — checks tmux is installed, `SESSION_PREFIX` is declared, and no foreign tmux sessions collide with the configured prefix. Surfaces these results under `[wst]` in `winter doctor`'s output.
 
 ## Installation & Setup
 

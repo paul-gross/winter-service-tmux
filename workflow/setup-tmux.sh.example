@@ -5,9 +5,9 @@
 # For machine-specific overrides that shouldn't be committed, add a sibling
 # setup-tmux.local.sh — the up/down/status/restart scripts source it on top of
 # this file (overlay), so it can override SESSION_PREFIX/ENV_FILE, redefine
-# setup_tmux/status_header, or extend WINTER_TMUX_SERVICE_NAMES/
-# WINTER_TMUX_SERVICE_CMDS. Keep it gitignored. The legacy names
-# workflow.sh / workflow.local.sh still work.
+# setup_tmux/status_header, extend WINTER_TMUX_SERVICE_NAMES, or add/override a
+# service's command with another `winter_service_cmd` call. Keep it gitignored.
+# The legacy names workflow.sh / workflow.local.sh still work.
 
 # Session prefix — tmux sessions will be named <prefix>-<worktree>
 # e.g., "mp" produces "mp-alpha", "mp-beta"
@@ -24,33 +24,29 @@ ENV_FILE=".winter.env"
 #                               additional tmux windows.
 WINTER_TMUX_SERVICE_NAMES=("0.0:backend" "0.1:frontend" "1.0:shell")
 
-# Per-service start commands, keyed by the service names declared above. This is
-# the single source of truth for *what* each service runs: setup_tmux launches
-# them on `./up`, and `./restart <service>` re-runs the same command in place.
-# Keep one entry per service in WINTER_TMUX_SERVICE_NAMES.
-#
-# NOTE: `declare -A` (associative array) requires bash 4.0+. macOS ships bash 3.2
-# as /bin/bash — install a newer bash (e.g. `brew install bash`) and keep it ahead
-# on PATH. `winter doctor` flags an old bash, and ./up/./restart/./status refuse
-# with a clear message rather than a cryptic `declare: -A` error.
+# Per-service start commands — one `winter_service_cmd <name> <command>` per
+# service, keyed by the names declared above. This is the single source of truth
+# for *what* each service runs: setup_tmux launches them on `./up`, and
+# `./restart <service>` re-runs the same command in place. Declare one for every
+# name in WINTER_TMUX_SERVICE_NAMES. `winter_service_cmd` is provided by
+# winter-service-tmux.sh.
 #
 #   - A relative `cd` is resolved against the worktree root on every launch, so a
-#     service in a subdirectory is just `cd <subdir> && <cmd>` (the helper resets
-#     the pane's cwd first — see winter-service-tmux:/workflow/winter-service-tmux.sh).
+#     service in a subdirectory is just
+#     `winter_service_cmd backend "cd <subdir> && <cmd>"` (the helper resets the
+#     pane's cwd first — see winter-service-tmux:/workflow/winter-service-tmux.sh).
 #   - Leave a command empty for an interactive pane (e.g. the `shell` below): the
 #     pane gets the env sourced and a banner, then sits at a prompt.
-declare -A WINTER_TMUX_SERVICE_CMDS=(
-  [backend]="npm run start:dev"
-  [frontend]="npm run dev"
-  [shell]=""
-)
+winter_service_cmd backend  "npm run start:dev"
+winter_service_cmd frontend "npm run dev"
+winter_service_cmd shell    ""
 
 # setup_tmux — called by the up script to create tmux windows/panes and start services.
 # Arguments: $1=SESSION, $2=WORKTREE_DIR, $3=NAME
 #
 # This function owns the *layout* (which windows/panes exist and how they split);
-# the per-service command comes from WINTER_TMUX_SERVICE_CMDS above. Launch each
-# service with `winter_tmux_send_service <session> <pane> <name>` — the helper
+# the per-service command comes from the `winter_service_cmd` declarations above.
+# Launch each service with `winter_tmux_send_service <session> <pane> <name>` — the helper
 # (provided by winter-service-tmux.sh) looks the command up, resets the pane to
 # the worktree root, sources the env file when set, prints a banner, and sends it.
 # Using the helper here means ./up and ./restart launch services identically.

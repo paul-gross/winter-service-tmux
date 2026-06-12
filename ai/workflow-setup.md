@@ -65,9 +65,9 @@ fi
 
 **If a config already exists** (at either name), parse out and report what you found:
 
-> "Your `setup-tmux.sh` already exists: `SESSION_PREFIX=<value>`, `ENV_FILE=<value or 'unset'>`, `WINTER_TMUX_SERVICE_NAMES=(<list>)`, `WINTER_TMUX_SERVICE_CMDS` for `<n>` services. Want to keep it as-is, replace it from scratch, or tweak something specific?"
+> "Your `setup-tmux.sh` already exists: `SESSION_PREFIX=<value>`, `ENV_FILE=<value or 'unset'>`, `WINTER_TMUX_SERVICE_NAMES=(<list>)`, `winter_service_cmd` declarations for `<n>` services. Want to keep it as-is, replace it from scratch, or tweak something specific?"
 
-**Pre-`./restart` config (legacy):** if the file defines `WINTER_TMUX_SERVICE_NAMES` but **no** `WINTER_TMUX_SERVICE_CMDS` — and `setup_tmux` hand-writes its own `tmux send-keys` start strings — it predates the shared command map. `./up`/`./down`/`./status` still work, but `./restart` errors until the commands are lifted into a `WINTER_TMUX_SERVICE_CMDS` map and `setup_tmux` is switched to `winter_tmux_send_service`. Flag it: "Your `setup-tmux.sh` predates `./restart` — its start commands are inline in `setup_tmux`. I'll lift them into a `WINTER_TMUX_SERVICE_CMDS` map so `./restart` works." Treat that as a forced "replace" path.
+**Pre-`./restart` config (legacy):** if `setup_tmux` hand-writes its own `tmux send-keys` start strings with **no** `winter_service_cmd` declarations, `./up`/`./down`/`./status` still work but `./restart` errors. Lift the start commands into `winter_service_cmd <name> "<command>"` declarations and switch `setup_tmux` to `winter_tmux_send_service`. Flag it: "Your `setup-tmux.sh` predates `./restart` — I'll lift its start commands into `winter_service_cmd` declarations so `./restart` works." Treat that as a forced "replace" path.
 
 - "keep": skip ahead to the "Write setup-tmux.md" step using the `SESSION_PREFIX` and `WINTER_TMUX_SERVICE_NAMES` you just read — that step is idempotent and will report "unchanged" if `setup-tmux.md` is already in sync. Then offer the smoke test and continue into the final report.
 - "replace": continue from the next step as if no file existed.
@@ -107,7 +107,7 @@ Once the user lists them, **for each service** ask in turn (one question per tur
 2. **"Which directory does it run from?"** (relative to the worktree root, e.g. `apps/backend`)
 3. **"Which env vars from `.winter.env` does it need?"** (e.g. `$BACKEND_PORT`, `$DATABASE_URL`) — accept "none" as an answer.
 
-The start command and run directory combine into one **command-map entry** later (the `WINTER_TMUX_SERVICE_CMDS` array written in step 8): a service that runs from the worktree root is just its command (`npm run dev`); a service in a subdirectory prepends a *relative* `cd` (`cd apps/backend && npm run dev`). Keep that `cd` relative — the launch helper resets each pane to the worktree root before running, so the same entry works on both `./up` and `./restart`.
+The start command and run directory combine into one **`winter_service_cmd` declaration** later (written in step 8): a service that runs from the worktree root is just its command (`winter_service_cmd backend "npm run dev"`); a service in a subdirectory prepends a *relative* `cd` (`winter_service_cmd backend "cd apps/backend && npm run dev"`). Keep that `cd` relative — the launch helper resets each pane to the worktree root before running, so the same command works on both `./up` and `./restart`.
 
 Record each answer before moving to the next service. After all services are described, summarise back: "OK — you have `<n>` services: `<service-1>` running `<cmd-1>` from `<dir-1>`, `<service-2>` running `<cmd-2>` from `<dir-2>`, ..." and ask **"Anything to add, change, or remove?"** before continuing.
 
@@ -143,7 +143,7 @@ If **no** service uses env vars, ask **one** question:
 
 ### 6. Tmux session layout
 
-**Explain first:** "tmux organises services along two axes: **windows** (separate full-screen tabs, created with `tmux new-window`) and **splits** within a window (horizontal or vertical, created with `tmux split-window`). The `setup_tmux` function uses both to lay out the session and `tmux send-keys` to launch each service. Common single-window patterns: vertical split for two services (top/bottom), 2x2 grid for four, or horizontal-then-vertical for three (one big pane + two smaller stacked). Reach for multiple windows when one gets crowded, or to group services logically (e.g. application services in window 0, ad-hoc shells in window 1). Panes are addressed as `<window>.<pane>` — see `setup-tmux.sh.example` for a 2-window layout."
+**Explain first:** "tmux organises services along two axes: **windows** (separate full-screen tabs, created with `tmux new-window`) and **splits** within a window (horizontal or vertical, created with `tmux split-window`). The `setup_tmux` function uses both to lay out the session; each service is then launched into its pane with `winter_tmux_send_service` (not hand-written `tmux send-keys` — see step 8). Common single-window patterns: vertical split for two services (top/bottom), 2x2 grid for four, or horizontal-then-vertical for three (one big pane + two smaller stacked). Reach for multiple windows when one gets crowded, or to group services logically (e.g. application services in window 0, ad-hoc shells in window 1). Panes are addressed as `<window>.<pane>` — see `setup-tmux.sh.example` for a 2-window layout."
 
 Based on the services collected, pick a default layout that keeps related services together (e.g. backend + frontend top, shell bottom). Tell the user: "Proposed layout for `<n>` panes: `<pane-0>` top-left, `<pane-1>` top-right, `<pane-2>` bottom-full." (Adjust to the actual count.)
 
@@ -171,15 +171,15 @@ Ask **one** question:
 
 **Explain first:** "Now I have everything needed to write `workspace:/ai/project/setup-tmux.sh`. The canonical structural template is `winter-service-tmux:/workflow/setup-tmux.sh.example` — follow it exactly and substitute the values we just collected."
 
-Tell the user: "Writing `setup-tmux.sh` with `SESSION_PREFIX=<prefix>`, `ENV_FILE=<value-or-unset>`, `WINTER_TMUX_SERVICE_NAMES=(<list>)`, `WINTER_TMUX_SERVICE_CMDS` for `<n>` services, and `setup_tmux`..."
+Tell the user: "Writing `setup-tmux.sh` with `SESSION_PREFIX=<prefix>`, `ENV_FILE=<value-or-unset>`, `WINTER_TMUX_SERVICE_NAMES=(<list>)`, `winter_service_cmd` declarations for `<n>` services, and `setup_tmux`..."
 
 Then write the file. Read `setup-tmux.sh.example` and reproduce its structure exactly, substituting:
 
 - `SESSION_PREFIX` ← the value confirmed in the session-prefix step.
 - `ENV_FILE` ← `".winter.env"` if the env-file step recorded one; omit the line otherwise.
 - `WINTER_TMUX_SERVICE_NAMES` ← the array built in the tmux-session-layout step. For multi-window layouts, use the `"<window>.<pane>:<name>"` form for **every** entry (don't mix bare and prefixed); for single-window layouts, the bare form is fine throughout.
-- `WINTER_TMUX_SERVICE_CMDS` ← a `declare -A` map with one entry per service name, built from the start commands and run directories collected in the identify-services step. Root-level service → just its command (`[backend]="npm run start:dev"`); subdirectory service → relative `cd` prefix (`[backend]="cd apps/backend && npm run start:dev"`). Give a purely interactive pane (e.g. `shell`) an empty command (`[shell]=""`). This map is the single source of truth `setup_tmux` and `./restart` both read, so every name in `WINTER_TMUX_SERVICE_NAMES` must have an entry here.
-- `setup_tmux` body ← the layout: `tmux split-window` / `tmux new-window` calls for the windows and panes you designed, launching each service with `winter_tmux_send_service "$session" "<window>.<pane>" "<name>"` (the helper from `winter-service-tmux.sh` that reads `WINTER_TMUX_SERVICE_CMDS`, resets the pane cwd, sources the env file, and sends the command). Do **not** hand-write `tmux send-keys` start strings — route every launch through the helper so `./up` and `./restart` stay identical. The example shows both vertical splits within a window and `tmux new-window` to start a second window — use whichever the layout requires.
+- `winter_service_cmd` declarations ← one `winter_service_cmd <name> "<command>"` line per service, built from the start commands and run directories collected in the identify-services step. Root-level service → just its command (`winter_service_cmd backend "npm run start:dev"`); subdirectory service → relative `cd` prefix (`winter_service_cmd backend "cd apps/backend && npm run start:dev"`). Give a purely interactive pane (e.g. `shell`) an empty command (`winter_service_cmd shell ""`). These declarations are the single source of truth `setup_tmux` and `./restart` both read, so every name in `WINTER_TMUX_SERVICE_NAMES` needs one. (`winter_service_cmd` is provided by `winter-service-tmux.sh`.)
+- `setup_tmux` body ← the layout: `tmux split-window` / `tmux new-window` calls for the windows and panes you designed, launching each service with `winter_tmux_send_service "$session" "<window>.<pane>" "<name>"` (the helper from `winter-service-tmux.sh` that looks up the `winter_service_cmd` command, resets the pane cwd, sources the env file, and sends it). Do **not** hand-write `tmux send-keys` start strings — route every launch through the helper so `./up` and `./restart` stay identical. The example shows both vertical splits within a window and `tmux new-window` to start a second window — use whichever the layout requires.
 - `status_header` ← the body from the status-header step, or `:` for the no-op default.
 
 After writing, mark it executable:
@@ -190,7 +190,7 @@ chmod +x ./ai/project/setup-tmux.sh
 
 Confirm: "`setup-tmux.sh` written and executable at `workspace:/ai/project/setup-tmux.sh`."
 
-**Machine-specific overrides (mention, don't prompt):** the committed `setup-tmux.sh` can be paired with a gitignored `setup-tmux.local.sh` for per-machine tweaks. `./up`, `./down`, `./status`, and `./restart` source the local file **on top of** the committed one (overlay), so it can override `SESSION_PREFIX`/`ENV_FILE`, redefine `setup_tmux`/`status_header`, or extend `WINTER_TMUX_SERVICE_NAMES`/`WINTER_TMUX_SERVICE_CMDS` without touching version control. Don't create one as part of this guide — just tell the user it exists: "If you ever need machine-specific overrides, drop a gitignored `setup-tmux.local.sh` next to this file and it'll be layered on top." Only create it if the user explicitly asks; if you do, ensure it's gitignored.
+**Machine-specific overrides (mention, don't prompt):** the committed `setup-tmux.sh` can be paired with a gitignored `setup-tmux.local.sh` for per-machine tweaks. `./up`, `./down`, `./status`, and `./restart` source the local file **on top of** the committed one (overlay), so it can override `SESSION_PREFIX`/`ENV_FILE`, redefine `setup_tmux`/`status_header`, extend `WINTER_TMUX_SERVICE_NAMES`, or add/override a service's command with another `winter_service_cmd` call, without touching version control. Don't create one as part of this guide — just tell the user it exists: "If you ever need machine-specific overrides, drop a gitignored `setup-tmux.local.sh` next to this file and it'll be layered on top." Only create it if the user explicitly asks; if you do, ensure it's gitignored.
 
 ### 9. Write setup-tmux.md (agent context)
 

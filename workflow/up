@@ -36,10 +36,6 @@ SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SRC")" && pwd)"
 # shellcheck source=winter-service-tmux.sh
 source "$SCRIPT_DIR/winter-service-tmux.sh"
 
-# The config's per-service command map needs bash 4+ (declare -A); fail clearly
-# before sourcing it, rather than letting bash 3.2 choke on `declare -A`.
-winter_tmux_require_bash4 || exit 1
-
 # Load project tmux config — the committed setup-tmux.sh (legacy: workflow.sh)
 # with an optional setup-tmux.local.sh (legacy: workflow.local.sh) overlaid on
 # top. See winter-service-tmux.sh for the resolution rules.

@@ -55,30 +55,40 @@ winter_tmux_config_files() {
   return 0
 }
 
-# winter_tmux_require_bash4
-#
-# The project config (setup-tmux.sh) declares its per-service command map with
-# `declare -A` — an associative array that needs bash 4.0+ (2009). macOS still
-# ships bash 3.2 as /bin/bash, where sourcing that config dies with a cryptic
-# `declare: -A: invalid option`. Check the running bash up front and print a
-# clear message instead, so the user knows exactly what to fix.
-#
-# Called by up / restart / status, which read the command map (or the names
-# array beside it) and can't function without a clean source. down and the
-# destroy hook deliberately DON'T call this: they must reap processes even
-# against a config they can't fully source, and they already redirect the
-# config's stderr to /dev/null. Returns non-zero (without exiting) so callers
-# control their own exit.
-winter_tmux_require_bash4() {
-  if [[ -z "${BASH_VERSINFO:-}" || "${BASH_VERSINFO[0]}" -lt 4 ]]; then
-    echo "Error: winter-service-tmux requires bash 4.0+ (this is bash ${BASH_VERSION:-unknown})." >&2
-    echo "  The project's setup-tmux.sh declares per-service commands with an" >&2
-    echo "  associative array (declare -A), which bash 3.2 — the stock macOS" >&2
-    echo "  /bin/bash — cannot parse. Install a newer bash and put it ahead on PATH:" >&2
-    echo "    brew install bash     # macOS; ensure its bin dir precedes /bin on PATH" >&2
-    return 1
-  fi
-  return 0
+# Per-service command store — the single source of truth for what each service
+# runs. setup-tmux.sh declares one command per service with winter_service_cmd;
+# both setup_tmux (./up) and ./restart resolve a name to its command through
+# winter_service_cmd_get, so the two launch paths can't drift. Storage is two
+# parallel indexed arrays; authoring is name-keyed.
+WINTER_TMUX_CMD_KEYS=()
+WINTER_TMUX_CMD_VALS=()
+
+# winter_service_cmd <service-name> <command>
+# Declare the command a service runs, keyed by service name. Called from
+# setup-tmux.sh, and from a setup-tmux.local.sh overlay to add or override a
+# service. Re-declaring a name overrides it — winter_service_cmd_get returns the
+# last declaration.
+winter_service_cmd() {
+  WINTER_TMUX_CMD_KEYS+=("$1")
+  WINTER_TMUX_CMD_VALS+=("$2")
+}
+
+# winter_service_cmd_get <service-name>
+# Print the declared command for a service to stdout and return 0; return 1
+# (printing nothing) when the service was never declared. An empty command (a
+# bare interactive pane like `shell`) is a declared command — it returns 0 with
+# empty output — so callers branch on the exit status, not on whether stdout is
+# empty. Returns the last declaration for the name.
+winter_service_cmd_get() {
+  local name="$1" i found=1 val=""
+  for i in "${!WINTER_TMUX_CMD_KEYS[@]}"; do
+    if [[ "${WINTER_TMUX_CMD_KEYS[$i]}" == "$name" ]]; then
+      val="${WINTER_TMUX_CMD_VALS[$i]}"
+      found=0
+    fi
+  done
+  [[ "$found" -eq 0 ]] && printf '%s' "$val"
+  return "$found"
 }
 
 # winter_tmux_send_service <session> <pane-target> <service-name>
@@ -88,9 +98,9 @@ winter_tmux_require_bash4() {
 # driven by the up script) and the restart script call it, so the command a
 # service runs can never drift between the two paths.
 #
-# The command itself comes from the WINTER_TMUX_SERVICE_CMDS associative array
-# in setup-tmux.sh, keyed by service name (the same names declared in
-# WINTER_TMUX_SERVICE_NAMES). The launch line is assembled as:
+# The command itself comes from the winter_service_cmd store in setup-tmux.sh,
+# keyed by service name (the same names declared in WINTER_TMUX_SERVICE_NAMES).
+# The launch line is assembled as:
 #
 #   cd '<worktree>' && [source '<env>' &&] echo '=== <name> ===' [&& <cmd>]
 #
@@ -110,11 +120,14 @@ winter_tmux_require_bash4() {
 winter_tmux_send_service() {
   local session="$1" pane="$2" name="$3"
 
-  if [[ -z "${WINTER_TMUX_SERVICE_CMDS[$name]+x}" ]]; then
-    echo "winter-service-tmux: no command declared for service '$name' in WINTER_TMUX_SERVICE_CMDS" >&2
+  # `local cmd` on its own line: a `local cmd=$(...)` would mask the command
+  # substitution's exit status (local always returns 0), so we can't detect an
+  # undeclared service. Assign separately and branch on the getter's status.
+  local cmd
+  if ! cmd="$(winter_service_cmd_get "$name")"; then
+    echo "winter-service-tmux: no command declared for service '$name' (declare it with winter_service_cmd in setup-tmux.sh)" >&2
     return 1
   fi
-  local cmd="${WINTER_TMUX_SERVICE_CMDS[$name]}"
 
   local prefix=""
   [[ -n "${WINTER_TMUX_WORKTREE_DIR:-}" ]] && prefix="cd '$WINTER_TMUX_WORKTREE_DIR' && "

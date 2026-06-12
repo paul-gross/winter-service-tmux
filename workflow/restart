@@ -39,10 +39,6 @@ SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SRC")" && pwd)"
 # shellcheck source=winter-service-tmux.sh
 source "$SCRIPT_DIR/winter-service-tmux.sh"
 
-# The command map this script re-runs from needs bash 4+ (declare -A); fail
-# clearly before sourcing the config rather than choking on `declare -A`.
-winter_tmux_require_bash4 || exit 1
-
 # Load project tmux config — the committed setup-tmux.sh (legacy: workflow.sh)
 # with an optional setup-tmux.local.sh (legacy: workflow.local.sh) overlaid on
 # top. See winter-service-tmux.sh for the resolution rules.
@@ -61,16 +57,6 @@ done
 
 if [[ -z "${WINTER_TMUX_SERVICE_NAMES+x}" ]]; then
   echo "Error: setup-tmux.sh must define WINTER_TMUX_SERVICE_NAMES array"
-  exit 1
-fi
-# Test for the associative array with `declare -p`, not `${...+x}`: the latter
-# probes key "0", which an associative array keyed by service name never has, so
-# it would report a populated map as unset.
-if ! declare -p WINTER_TMUX_SERVICE_CMDS >/dev/null 2>&1; then
-  echo "Error: setup-tmux.sh must define WINTER_TMUX_SERVICE_CMDS to use ./restart."
-  echo "  Add a per-service command map keyed by service name, e.g.:"
-  echo "    declare -A WINTER_TMUX_SERVICE_CMDS=([backend]=\"npm run dev\")"
-  echo "  See winter-service-tmux:/workflow/setup-tmux.sh.example for the shape."
   exit 1
 fi
 
@@ -100,6 +86,15 @@ fi
 if [[ -z "$PANE_TARGET" ]]; then
   echo "Error: unknown service '$SERVICE'"
   echo "Declared services: ${DECLARED_NAMES[*]}"
+  exit 1
+fi
+
+# Confirm the service has a declared command before reaping its pane, so we never
+# tear a service down and then fail to bring it back.
+if ! winter_service_cmd_get "$SERVICE" >/dev/null; then
+  echo "Error: service '$SERVICE' has no command declared."
+  echo "  Declare it with 'winter_service_cmd $SERVICE \"<command>\"' in setup-tmux.sh."
+  echo "  See winter-service-tmux:/workflow/setup-tmux.sh.example for the shape."
   exit 1
 fi
 

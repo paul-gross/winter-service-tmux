@@ -5,12 +5,11 @@
 # workspace:/ai/winter-cli/setup.md#doctor-probes. One object per line:
 #   {"name": "...", "status": "pass|warn|fail", "message"?: "...", "remediation"?: "..."}
 #
-# Four checks:
+# Three checks:
 #   1. tmux binary on PATH
-#   2. bash 4.0+ (the config's per-service command map uses `declare -A`)
-#   3. SESSION_PREFIX declared in workspace:/ai/project/setup-tmux.sh
+#   2. SESSION_PREFIX declared in workspace:/ai/project/setup-tmux.sh
 #      (legacy: workflow.sh), with an optional setup-tmux.local.sh overlay
-#   4. session-name collision with foreign tmux sessions sharing the prefix
+#   3. session-name collision with foreign tmux sessions sharing the prefix
 #
 # Each probe is implemented as an explicit branch that emits its own NDJSON;
 # the script exits 0 at the end so per-probe statuses surface individually.
@@ -65,19 +64,7 @@ else
     "Install tmux (e.g. \`dnf install tmux\`, \`brew install tmux\`)."
 fi
 
-# ---- Probe 2: bash 4.0+ -------------------------------------------------------
-
-# This probe runs under the same `#!/usr/bin/env bash` resolution as the up/
-# restart/status scripts, so the version it sees is the one they'd run under.
-if [[ -n "${BASH_VERSINFO:-}" && "${BASH_VERSINFO[0]}" -ge 4 ]]; then
-  emit "bash 4.0+" pass "bash ${BASH_VERSION}"
-else
-  emit "bash 4.0+" fail \
-    "bash ${BASH_VERSION:-3.x} cannot parse the per-service command map (declare -A) in setup-tmux.sh" \
-    "Install bash 4.0+ and put it ahead on PATH (e.g. \`brew install bash\` on macOS)."
-fi
-
-# ---- Probe 3: SESSION_PREFIX declared -----------------------------------------
+# ---- Probe 2: SESSION_PREFIX declared -----------------------------------------
 
 session_prefix=""
 session_prefix_ok=false
@@ -130,7 +117,7 @@ else
   esac
 fi
 
-# ---- Probe 4: session-name collision ------------------------------------------
+# ---- Probe 3: session-name collision ------------------------------------------
 
 if [[ "$tmux_ok" != true ]]; then
   emit "session-name collision" warn "skipped: tmux not installed"
