@@ -12,10 +12,13 @@
 # another project's tmux sessions on a shared machine.
 SESSION_PREFIX="myprefix"
 
-# Append a personal service to the ones the committed config declares.
-# WINTER_TMUX_SERVICE_NAMES already exists here (it was set by setup-tmux.sh),
-# so extend it rather than reassigning from scratch.
+# Append a personal service to the ones the committed config declares. Both the
+# names array and the command map already exist here (set by setup-tmux.sh), so
+# extend them rather than reassigning from scratch. Add a command-map entry for
+# any service you add, or ./restart can't re-run it (and your setup_tmux override
+# can't launch it via winter_tmux_send_service).
 WINTER_TMUX_SERVICE_NAMES+=("1.0:debugger")
+WINTER_TMUX_SERVICE_CMDS[debugger]="npm run debug"
 
 # Redefine a function to change behavior locally. Because this file is sourced
 # after setup-tmux.sh, the definition below wins. Wrap or replace as needed.

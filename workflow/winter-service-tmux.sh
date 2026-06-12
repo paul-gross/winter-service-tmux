@@ -54,3 +54,73 @@ winter_tmux_config_files() {
   # status of its last conditional would abort the script.
   return 0
 }
+
+# winter_tmux_require_bash4
+#
+# The project config (setup-tmux.sh) declares its per-service command map with
+# `declare -A` — an associative array that needs bash 4.0+ (2009). macOS still
+# ships bash 3.2 as /bin/bash, where sourcing that config dies with a cryptic
+# `declare: -A: invalid option`. Check the running bash up front and print a
+# clear message instead, so the user knows exactly what to fix.
+#
+# Called by up / restart / status, which read the command map (or the names
+# array beside it) and can't function without a clean source. down and the
+# destroy hook deliberately DON'T call this: they must reap processes even
+# against a config they can't fully source, and they already redirect the
+# config's stderr to /dev/null. Returns non-zero (without exiting) so callers
+# control their own exit.
+winter_tmux_require_bash4() {
+  if [[ -z "${BASH_VERSINFO:-}" || "${BASH_VERSINFO[0]}" -lt 4 ]]; then
+    echo "Error: winter-service-tmux requires bash 4.0+ (this is bash ${BASH_VERSION:-unknown})." >&2
+    echo "  The project's setup-tmux.sh declares per-service commands with an" >&2
+    echo "  associative array (declare -A), which bash 3.2 — the stock macOS" >&2
+    echo "  /bin/bash — cannot parse. Install a newer bash and put it ahead on PATH:" >&2
+    echo "    brew install bash     # macOS; ensure its bin dir precedes /bin on PATH" >&2
+    return 1
+  fi
+  return 0
+}
+
+# winter_tmux_send_service <session> <pane-target> <service-name>
+#
+# Launch a declared service into an existing tmux pane. This is the single
+# source of truth for *how* a service is launched: both setup_tmux (first start,
+# driven by the up script) and the restart script call it, so the command a
+# service runs can never drift between the two paths.
+#
+# The command itself comes from the WINTER_TMUX_SERVICE_CMDS associative array
+# in setup-tmux.sh, keyed by service name (the same names declared in
+# WINTER_TMUX_SERVICE_NAMES). The launch line is assembled as:
+#
+#   cd '<worktree>' && [source '<env>' &&] echo '=== <name> ===' [&& <cmd>]
+#
+# - The leading `cd` resets the pane to the worktree root (read from the
+#   exported WINTER_TMUX_WORKTREE_DIR) so the command runs from a deterministic
+#   cwd whether the pane was freshly created (up) or its shell has drifted into
+#   a subdirectory from a prior run (restart). Relative paths inside <cmd> —
+#   e.g. `cd apps/backend && npm run dev` — are thus always relative to the
+#   worktree root on every launch.
+# - The env-file source is included only when ENV_PATH is set (the up/restart
+#   scripts export it after sourcing ENV_FILE).
+# - An empty command (e.g. an interactive `shell` pane) yields just the banner,
+#   leaving the pane at a prompt.
+#
+# Returns non-zero without sending anything if the service has no declared
+# command, so callers can surface a clear error.
+winter_tmux_send_service() {
+  local session="$1" pane="$2" name="$3"
+
+  if [[ -z "${WINTER_TMUX_SERVICE_CMDS[$name]+x}" ]]; then
+    echo "winter-service-tmux: no command declared for service '$name' in WINTER_TMUX_SERVICE_CMDS" >&2
+    return 1
+  fi
+  local cmd="${WINTER_TMUX_SERVICE_CMDS[$name]}"
+
+  local prefix=""
+  [[ -n "${WINTER_TMUX_WORKTREE_DIR:-}" ]] && prefix="cd '$WINTER_TMUX_WORKTREE_DIR' && "
+  [[ -n "${ENV_PATH:-}" ]] && prefix="${prefix}source '$ENV_PATH' && "
+
+  local line="${prefix}echo '=== $name ==='"
+  [[ -n "$cmd" ]] && line="$line && $cmd"
+  tmux send-keys -t "$session:$pane" "$line" Enter
+}

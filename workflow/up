@@ -36,6 +36,10 @@ SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SRC")" && pwd)"
 # shellcheck source=winter-service-tmux.sh
 source "$SCRIPT_DIR/winter-service-tmux.sh"
 
+# The config's per-service command map needs bash 4+ (declare -A); fail clearly
+# before sourcing it, rather than letting bash 3.2 choke on `declare -A`.
+winter_tmux_require_bash4 || exit 1
+
 # Load project tmux config — the committed setup-tmux.sh (legacy: workflow.sh)
 # with an optional setup-tmux.local.sh (legacy: workflow.local.sh) overlaid on
 # top. See winter-service-tmux.sh for the resolution rules.
@@ -68,6 +72,11 @@ if [[ -z "$NAME" ]]; then
 fi
 
 SESSION="${SESSION_PREFIX}-${NAME}"
+
+# Worktree root — exported so winter_tmux_send_service can reset each pane to a
+# deterministic cwd before launching (see winter-service-tmux.sh). setup_tmux
+# also receives it as its $2 argument.
+export WINTER_TMUX_WORKTREE_DIR="$WORKTREE_DIR"
 
 # Resolve environment file path — exported so setup_tmux can source it in each pane
 # 'local' mode skips the env file so services use default ports

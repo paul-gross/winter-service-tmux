@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Symlink the up/down/status scripts into the feature env root.
+# Symlink the up/down/status/restart scripts into the feature env root.
 #
 # Invoked by `winter ws init` for every standalone repo whose winter-ext.toml
 # declares `[hooks] on_env_init`. The CLI runs this script with cwd set to
@@ -14,7 +14,7 @@ set -euo pipefail
 
 : "${WINTER_EXT_DIR:?WINTER_EXT_DIR not set}"
 
-for script in up down status; do
+for script in up down status restart; do
   src="$WINTER_EXT_DIR/workflow/$script"
   if [[ ! -x "$src" ]]; then
     echo "warning: $src missing or not executable" >&2

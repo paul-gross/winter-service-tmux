@@ -3,10 +3,11 @@
 # Copy this to workspace:/ai/project/setup-tmux.sh and customize.
 #
 # For machine-specific overrides that shouldn't be committed, add a sibling
-# setup-tmux.local.sh — the up/down/status scripts source it on top of this
-# file (overlay), so it can override SESSION_PREFIX/ENV_FILE, redefine
-# setup_tmux/status_header, or extend WINTER_TMUX_SERVICE_NAMES. Keep it
-# gitignored. The legacy names workflow.sh / workflow.local.sh still work.
+# setup-tmux.local.sh — the up/down/status/restart scripts source it on top of
+# this file (overlay), so it can override SESSION_PREFIX/ENV_FILE, redefine
+# setup_tmux/status_header, or extend WINTER_TMUX_SERVICE_NAMES/
+# WINTER_TMUX_SERVICE_CMDS. Keep it gitignored. The legacy names
+# workflow.sh / workflow.local.sh still work.
 
 # Session prefix — tmux sessions will be named <prefix>-<worktree>
 # e.g., "mp" produces "mp-alpha", "mp-beta"
@@ -15,46 +16,66 @@ SESSION_PREFIX="mp"
 # Environment file to source (relative to worktree root, optional)
 ENV_FILE=".winter.env"
 
-# Service names — used by the status script to label each declared service.
-# Entries can be either:
+# Service names — used by the status script to label each declared service, and
+# by ./restart to resolve a service to its pane. Entries can be either:
 #   "<name>"                  — defaults to window 0; pane index = array position.
 #                               Use this for simple single-window layouts.
 #   "<window>.<pane>:<name>"  — explicit target. Required when services live in
 #                               additional tmux windows.
 WINTER_TMUX_SERVICE_NAMES=("0.0:backend" "0.1:frontend" "1.0:shell")
 
+# Per-service start commands, keyed by the service names declared above. This is
+# the single source of truth for *what* each service runs: setup_tmux launches
+# them on `./up`, and `./restart <service>` re-runs the same command in place.
+# Keep one entry per service in WINTER_TMUX_SERVICE_NAMES.
+#
+# NOTE: `declare -A` (associative array) requires bash 4.0+. macOS ships bash 3.2
+# as /bin/bash — install a newer bash (e.g. `brew install bash`) and keep it ahead
+# on PATH. `winter doctor` flags an old bash, and ./up/./restart/./status refuse
+# with a clear message rather than a cryptic `declare: -A` error.
+#
+#   - A relative `cd` is resolved against the worktree root on every launch, so a
+#     service in a subdirectory is just `cd <subdir> && <cmd>` (the helper resets
+#     the pane's cwd first — see winter-service-tmux:/workflow/winter-service-tmux.sh).
+#   - Leave a command empty for an interactive pane (e.g. the `shell` below): the
+#     pane gets the env sourced and a banner, then sits at a prompt.
+declare -A WINTER_TMUX_SERVICE_CMDS=(
+  [backend]="npm run start:dev"
+  [frontend]="npm run dev"
+  [shell]=""
+)
+
 # setup_tmux — called by the up script to create tmux windows/panes and start services.
 # Arguments: $1=SESSION, $2=WORKTREE_DIR, $3=NAME
+#
+# This function owns the *layout* (which windows/panes exist and how they split);
+# the per-service command comes from WINTER_TMUX_SERVICE_CMDS above. Launch each
+# service with `winter_tmux_send_service <session> <pane> <name>` — the helper
+# (provided by winter-service-tmux.sh) looks the command up, resets the pane to
+# the worktree root, sources the env file when set, prints a banner, and sends it.
+# Using the helper here means ./up and ./restart launch services identically.
 #
 # Renamed from `setup_panes` when multi-window support landed; the up script errors
 # out clearly if only the legacy name is defined.
 setup_tmux() {
   local session="$1" dir="$2" name="$3"
-  # ENV_PATH is set by the up script when ENV_FILE is configured
-  local env_cmd=""
-  if [[ -n "${ENV_PATH:-}" ]]; then
-    env_cmd="source '$ENV_PATH' && "
-  fi
 
   # --- Window 0: application services (backend + frontend) ---
 
   # Pane 0.0: Backend
-  tmux send-keys -t "$session:0.0" \
-    "${env_cmd}echo '=== backend ===' && npm run start:dev" Enter
+  winter_tmux_send_service "$session" "0.0" "backend"
 
   # Split window 0 vertically (top/bottom)
   tmux split-window -v -t "$session:0.0" -c "$dir"
 
   # Pane 0.1: Frontend
-  tmux send-keys -t "$session:0.1" \
-    "${env_cmd}echo '=== frontend ===' && npm run dev" Enter
+  winter_tmux_send_service "$session" "0.1" "frontend"
 
   # --- Window 1: utility shell ---
 
   # Create window 1 (single pane, 1.0)
   tmux new-window -t "$session" -c "$dir"
-  tmux send-keys -t "$session:1.0" \
-    "${env_cmd}echo '=== $name shell ==='" Enter
+  winter_tmux_send_service "$session" "1.0" "shell"
 
   # Land focus on window 0, backend pane
   tmux select-window -t "$session:0"
