@@ -69,7 +69,7 @@ fi
 
 **Pre-`./restart` config (legacy):** if `setup_tmux` hand-writes its own `tmux send-keys` start strings with **no** `winter_service_cmd` declarations, `./up`/`./down`/`./status` still work but `./restart` errors. Lift the start commands into `winter_service_cmd <name> "<command>"` declarations and switch `setup_tmux` to `winter_tmux_send_service`. Flag it: "Your `setup-tmux.sh` predates `./restart` — I'll lift its start commands into `winter_service_cmd` declarations so `./restart` works." Treat that as a forced "replace" path.
 
-- "keep": skip ahead to the "Write setup-tmux.md" step using the `SESSION_PREFIX` and `WINTER_TMUX_SERVICE_NAMES` you just read — that step is idempotent and will report "unchanged" if `setup-tmux.md` is already in sync. Then offer the smoke test and continue into the final report.
+- "keep": skip ahead to the "Generate setup-tmux.md" step and run the generator against the existing `setup-tmux.sh` — it's idempotent and writes byte-identical content when nothing changed. Then offer the smoke test and continue into the final report.
 - "replace": continue from the next step as if no file existed.
 - "tweak": ask **"What would you like to change?"** and skip to the relevant step.
 
@@ -192,55 +192,21 @@ Confirm: "`setup-tmux.sh` written and executable at `workspace:/ai/project/setup
 
 **Machine-specific overrides (mention, don't prompt):** the committed `setup-tmux.sh` can be paired with a gitignored `setup-tmux.local.sh` for per-machine tweaks. `./up`, `./down`, `./status`, and `./restart` source the local file **on top of** the committed one (overlay), so it can override `SESSION_PREFIX`/`ENV_FILE`, redefine `setup_tmux`/`status_header`, extend `WINTER_TMUX_SERVICE_NAMES`, or add/override a service's command with another `winter_service_cmd` call, without touching version control. Don't create one as part of this guide — just tell the user it exists: "If you ever need machine-specific overrides, drop a gitignored `setup-tmux.local.sh` next to this file and it'll be layered on top." Only create it if the user explicitly asks; if you do, ensure it's gitignored.
 
-### 9. Write setup-tmux.md (agent context)
+### 9. Generate setup-tmux.md (agent context)
 
-**Explain first:** "Agents read service output via `tmux capture-pane -t <session>:<window>.<pane>`. Without help, they'd have to open `setup-tmux.sh` and count `WINTER_TMUX_SERVICE_NAMES` indices to translate a service name into a pane target. `setup-tmux.md` is a short, agent-readable sibling of `setup-tmux.sh` that lists each declared service alongside its `<window>.<pane>` and the capture-pane template. The extension's own `index.md` (auto-loaded into every session) already points agents at `setup-tmux.md` — generating the file is the only step here."
+**Explain first:** "Agents read service output via `tmux capture-pane -t <session>:<window>.<pane>`. Without help, they'd have to open `setup-tmux.sh` and count `WINTER_TMUX_SERVICE_NAMES` indices to translate a service name into a pane target. `setup-tmux.md` is a short, agent-readable sibling that lists each declared service alongside its `<window>.<pane>` and the capture-pane template. It is **generated from `setup-tmux.sh`, never hand-written** — the `render-setup-md.sh` generator reads `SESSION_PREFIX` and `WINTER_TMUX_SERVICE_NAMES` from the config you just wrote and emits the canonical content. Run it whenever `setup-tmux.sh` changes; `winter doctor` flags drift if you forget."
 
-Build the expected `setup-tmux.md` content from the values just confirmed (`SESSION_PREFIX` plus `WINTER_TMUX_SERVICE_NAMES`). Resolve each `WINTER_TMUX_SERVICE_NAMES` entry to a `<window>.<pane>` target:
+Run the generator from the workspace root (where the rest of this guide runs), writing to the canonical path (resolve `winter-service-tmux:` via the `# Winter Extensions` block in workspace `CLAUDE.md`):
 
-- Bare entry `"<name>"` at array index `i` → target `0.i`.
-- Prefixed entry `"<window>.<pane>:<name>"` → target is the prefix, name is the suffix.
-
-Worked example — `SESSION_PREFIX="wws"` with `WINTER_TMUX_SERVICE_NAMES=("backend" "frontend" "shell")` renders to:
-
-```markdown
-# Service panes
-
-Tmux session: `<SESSION_PREFIX>-<worktree>` (e.g. `wws-alpha`).
-
-Capture a service's output:
-
-    tmux capture-pane -t <session>:<window>.<pane> -p | tail -20
-
-Restart one service in place (reap its pane, re-run its command):
-
-    ./restart <service>
-
-Declared services:
-
-- `backend` → `0.0`
-- `frontend` → `0.1`
-- `shell` → `0.2`
+```bash
+"<ext-dir>/workflow/render-setup-md.sh" "$PWD" > ./ai/project/setup-tmux.md
 ```
 
-The `<SESSION_PREFIX>`, `<worktree>`, `<session>`, `<window>`, `<pane>`, and `<service>` placeholders are kept literal in the rendered file — they're templates a reading agent fills in per-worktree (`<service>` is any of the declared names below). Only the `e.g.` value (`wws-alpha` above) and the bulleted service list use the actual confirmed values.
+The generator resolves each service to its target (bare entry → window 0 at its array index; `"<window>.<pane>:<name>"` → the explicit target), keeps the `<SESSION_PREFIX>`/`<worktree>`/`<session>`/`<window>`/`<pane>`/`<service>` placeholders literal for the reading agent to fill per-worktree, and is byte-stable across runs.
 
-For a multi-window project — `SESSION_PREFIX="wws"` with `WINTER_TMUX_SERVICE_NAMES=("0.0:backend" "0.1:frontend" "1.0:shell")` — the bulleted list reflects the explicit targets:
+Tell the user "Generated `setup-tmux.md` with `<n>` services: `backend` → `0.0`, `frontend` → `0.1`, ..." (read the targets back from the output).
 
-```markdown
-Declared services:
-
-- `backend` → `0.0`
-- `frontend` → `0.1`
-- `shell` → `1.0`
-```
-
-Then look at the existing `workspace:/ai/project/setup-tmux.md`:
-
-- **Missing, or doesn't match what you just rendered**: write the new content. Tell the user "Writing `setup-tmux.md` with `<n>` services: `backend` → `0.0`, `frontend` → `0.1`, ..."
-- **Already matches**: tell the user "`setup-tmux.md` unchanged — skipping write." and move on.
-
-Confirm: "`setup-tmux.md` is at `workspace:/ai/project/setup-tmux.md`."
+Confirm: "`setup-tmux.md` is at `workspace:/ai/project/setup-tmux.md`, generated from `setup-tmux.sh`. `winter doctor` warns if the two ever drift."
 
 ### 10. Smoke test (optional)
 

@@ -4,11 +4,13 @@ Tmux-based service orchestration for winter workspaces. Runs project services (b
 
 ## Feature environment setup steps
 
-This extension needs a project-specific `setup-tmux.sh` to know which services to run in each feature environment. After `winter ws init` clones the extension, walk the user through [ai/workflow-setup.md](./ai/workflow-setup.md) to generate `workspace:/ai/project/setup-tmux.sh` **and** `workspace:/ai/project/setup-tmux.md` (the agent-facing reference that maps service names to `<window>.<pane>` targets). Without it, `./up` errors out in any feature environment.
+This extension needs a project-specific `setup-tmux.sh` to know which services to run in each feature environment. After `winter ws init` clones the extension, walk the user through [ai/workflow-setup.md](./ai/workflow-setup.md) to author `workspace:/ai/project/setup-tmux.sh`. Without it, `./up` errors out in any feature environment.
 
-The committed `setup-tmux.sh` can be paired with a gitignored `setup-tmux.local.sh` for machine-specific overrides — `./up`, `./down`, `./status`, and `./restart` source the local file on top of the committed one. The legacy names `workflow.sh` / `workflow.local.sh` (and the agent reference `workflow.md`) are still honored as fallbacks.
+`setup-tmux.sh` is the single source of truth. The agent-facing reference `workspace:/ai/project/setup-tmux.md` (which maps service names to `<window>.<pane>` targets) is **generated from it** — never hand-edited. `winter doctor` warns if the two drift, and the workflow-setup walkthrough regenerates it. The generated map reflects committed config only, not the gitignored `setup-tmux.local.sh` overlay.
 
-If `setup-tmux.md` is missing, re-run the [workflow-setup walkthrough](./ai/workflow-setup.md) to regenerate it. Agents should not reverse-engineer pane indices out of `setup-tmux.sh`.
+The committed `setup-tmux.sh` can be paired with a gitignored `setup-tmux.local.sh` for machine-specific overrides — `./up`, `./down`, `./status`, and `./restart` source the local file on top of the committed one. The legacy names `workflow.sh` / `workflow.local.sh` are still honored as fallbacks by those scripts.
+
+Agents should not reverse-engineer pane indices out of `setup-tmux.sh` — read `setup-tmux.md`.
 
 ## Service management rules
 

@@ -5,11 +5,12 @@
 # workspace:/ai/winter-cli/setup.md#doctor-probes. One object per line:
 #   {"name": "...", "status": "pass|warn|fail", "message"?: "...", "remediation"?: "..."}
 #
-# Three checks:
+# Four checks:
 #   1. tmux binary on PATH
 #   2. SESSION_PREFIX declared in workspace:/ai/project/setup-tmux.sh
 #      (legacy: workflow.sh), with an optional setup-tmux.local.sh overlay
 #   3. session-name collision with foreign tmux sessions sharing the prefix
+#   4. setup-tmux.md is in sync with setup-tmux.sh (rendered by render-setup-md.sh)
 #
 # Each probe is implemented as an explicit branch that emits its own NDJSON;
 # the script exits 0 at the end so per-probe statuses surface individually.
@@ -154,6 +155,32 @@ else
         "Rename SESSION_PREFIX in setup-tmux.sh or stop the foreign sessions."
     fi
   fi
+fi
+
+# ---- Probe 4: setup-tmux.md drift ---------------------------------------------
+#
+# setup-tmux.md is generated from setup-tmux.sh by render-setup-md.sh (invoked
+# from the workflow-setup walkthrough). It goes stale if setup-tmux.sh is edited
+# without regenerating — this probe renders fresh and byte-diffs the committed
+# file. Regeneration is the walkthrough's job, not `winter ws init` (a
+# workspace-level regeneration hook is tracked in winter#47).
+
+render_script="$DOCTOR_DIR/render-setup-md.sh"
+committed_md="$WORKSPACE_DIR/ai/project/setup-tmux.md"
+regen_hint="Regenerate it with the render-setup-md.sh generator (see the workflow-setup walkthrough)."
+
+if [[ "$session_prefix_ok" != true ]]; then
+  emit "setup-tmux.md fresh" warn "skipped: no parseable setup-tmux.sh"
+elif ! rendered_md=$("$render_script" "$WORKSPACE_DIR" 2>/dev/null); then
+  emit "setup-tmux.md fresh" warn "skipped: render-setup-md.sh could not render from setup-tmux.sh"
+elif [[ ! -f "$committed_md" ]]; then
+  emit "setup-tmux.md fresh" warn "no setup-tmux.md found at ai/project/" "$regen_hint"
+elif printf '%s\n' "$rendered_md" | cmp -s - "$committed_md"; then
+  emit "setup-tmux.md fresh" pass "setup-tmux.md matches setup-tmux.sh"
+else
+  emit "setup-tmux.md fresh" warn \
+    "setup-tmux.md is stale — it no longer matches setup-tmux.sh" \
+    "$regen_hint"
 fi
 
 exit 0

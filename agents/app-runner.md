@@ -16,7 +16,7 @@ These scripts are contributed by the `winter-service-tmux` extension. See `winte
 
 ## Setup
 
-At the start of each session, read `workspace:/ai/project/setup-tmux.md` to learn the session prefix and the service → `<window>.<pane>` mapping for the current project. Most projects use window `0` for everything; multi-window layouts (`1.0`, `2.0`, …) only show up when the project needed to group services across windows. Fall back to `workspace:/ai/project/setup-tmux.sh` only if `setup-tmux.md` is missing. (Older workspaces may still use the legacy names `workflow.md` / `workflow.sh`.)
+At the start of each session, read `workspace:/ai/project/setup-tmux.md` to learn the session prefix and the service → `<window>.<pane>` mapping for the current project. Most projects use window `0` for everything; multi-window layouts (`1.0`, `2.0`, …) only show up when the project needed to group services across windows. `setup-tmux.md` is generated from `setup-tmux.sh` — if it's missing or looks stale, regenerate it with `winter-service-tmux:/workflow/render-setup-md.sh` (or run `winter doctor`, which flags the drift) rather than hand-resolving pane indices from `setup-tmux.sh`. (Older workspaces may still use the legacy name `workflow.sh`.)
 
 ## Additional Commands
 

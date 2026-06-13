@@ -16,12 +16,20 @@ SESSION_PREFIX="mp"
 # Environment file to source (relative to worktree root, optional)
 ENV_FILE=".winter.env"
 
-# Service names — used by the status script to label each declared service, and
-# by ./restart to resolve a service to its pane. Entries can be either:
+# Service names — used by the status script to label each declared service, by
+# ./restart to resolve a service to its pane, and as the source the agent-facing
+# setup-tmux.md is generated from. Entries can be either:
 #   "<name>"                  — defaults to window 0; pane index = array position.
 #                               Use this for simple single-window layouts.
 #   "<window>.<pane>:<name>"  — explicit target. Required when services live in
 #                               additional tmux windows.
+#
+# This array is the authoritative service→pane encoding: render-setup-md.sh trusts
+# it verbatim, so setup_tmux below MUST place each pane where the array says. With
+# bare entries that means panes created in array order within window 0; if your
+# layout deviates from that (panes in a different order, or any service outside
+# window 0), use the explicit "<window>.<pane>:<name>" form for every entry so the
+# generated map can't lie.
 WINTER_TMUX_SERVICE_NAMES=("0.0:backend" "0.1:frontend" "1.0:shell")
 
 # Per-service start commands — one `winter_service_cmd <name> <command>` per
