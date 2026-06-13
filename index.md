@@ -6,7 +6,9 @@ Tmux-based service orchestration for winter workspaces. Runs project services (b
 
 This extension needs a project-specific `setup-tmux.sh` to know which services to run in each feature environment. After `winter ws init` clones the extension, walk the user through [ai/workflow-setup.md](./ai/workflow-setup.md) to author `workspace:/ai/project/setup-tmux.sh`. Without it, `./up` errors out in any feature environment.
 
-`setup-tmux.sh` is the single source of truth. The agent-facing reference `workspace:/ai/project/setup-tmux.md` (which maps service names to `<window>.<pane>` targets) is **generated from it** — never hand-edited. `winter doctor` warns if the two drift, and the workflow-setup walkthrough regenerates it. The generated map reflects committed config only, not the gitignored `setup-tmux.local.sh` overlay.
+`setup-tmux.sh` is the single source of truth. The agent-facing reference `workspace:/ai/project/setup-tmux.md` (which maps service names to `<window>.<pane>` targets) is **generated from it** — never hand-edited. `winter doctor` warns if the two drift. The generated map reflects committed config only, not the gitignored `setup-tmux.local.sh` overlay.
+
+`setup-tmux.md` is regenerated automatically on every workspace reconcile (`winter ws init`). If you change `setup-tmux.sh` outside of a reconcile, regenerate it manually by running `render-setup-md.sh` as described in step 9 of `ai/workflow-setup.md`.
 
 The committed `setup-tmux.sh` can be paired with a gitignored `setup-tmux.local.sh` for machine-specific overrides — `./up`, `./down`, `./status`, and `./restart` source the local file on top of the committed one. The legacy names `workflow.sh` / `workflow.local.sh` are still honored as fallbacks by those scripts.
 

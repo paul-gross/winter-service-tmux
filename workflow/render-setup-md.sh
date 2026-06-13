@@ -6,11 +6,12 @@
 # and WINTER_TMUX_SERVICE_NAMES, resolves each declared service to its
 # <window>.<pane> target, and prints the canonical setup-tmux.md to stdout.
 # It writes nothing. Writing is the caller's job:
-#   - the workflow-setup walkthrough (ai/workflow-setup.md step 9) redirects this
-#     into workspace:/ai/project/setup-tmux.md whenever setup-tmux.sh changes;
+#   - hooks/reconcile-workspace.sh (the on_workspace_reconcile hook) runs this
+#     automatically during `winter ws init` and writes the result to
+#     workspace:/ai/project/setup-tmux.md;
+#   - the workflow-setup walkthrough (ai/workflow-setup.md step 9) invokes it
+#     directly when setup-tmux.sh changes outside of a reconcile;
 #   - doctor.sh renders and diffs to warn when the committed file drifts.
-# (setup-tmux.md is a workspace-level artifact, so regeneration is NOT wired into
-# the per-env on_env_init hook; a workspace-level hook is tracked in winter#47.)
 #
 # The gitignored setup-tmux.local.sh overlay is intentionally NOT sourced — the
 # generated doc reflects committed config only (a machine-specific overlay is

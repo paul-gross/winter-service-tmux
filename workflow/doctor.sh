@@ -159,15 +159,14 @@ fi
 
 # ---- Probe 4: setup-tmux.md drift ---------------------------------------------
 #
-# setup-tmux.md is generated from setup-tmux.sh by render-setup-md.sh (invoked
-# from the workflow-setup walkthrough). It goes stale if setup-tmux.sh is edited
-# without regenerating — this probe renders fresh and byte-diffs the committed
-# file. Regeneration is the walkthrough's job, not `winter ws init` (a
-# workspace-level regeneration hook is tracked in winter#47).
+# setup-tmux.md is generated from setup-tmux.sh by render-setup-md.sh, wired into
+# `winter ws init` (workspace reconcile) via the on_workspace_reconcile hook. It
+# goes stale only if setup-tmux.sh is edited without a reconcile — this probe
+# renders fresh and byte-diffs the committed file.
 
 render_script="$DOCTOR_DIR/render-setup-md.sh"
 committed_md="$WORKSPACE_DIR/ai/project/setup-tmux.md"
-regen_hint="Regenerate it with the render-setup-md.sh generator (see the workflow-setup walkthrough)."
+regen_hint="Run 'winter ws init' to regenerate it (workspace reconcile), or run render-setup-md.sh directly if you changed setup-tmux.sh outside a reconcile."
 
 if [[ "$session_prefix_ok" != true ]]; then
   emit "setup-tmux.md fresh" warn "skipped: no parseable setup-tmux.sh"

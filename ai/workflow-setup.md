@@ -194,7 +194,7 @@ Confirm: "`setup-tmux.sh` written and executable at `workspace:/ai/project/setup
 
 ### 9. Generate setup-tmux.md (agent context)
 
-**Explain first:** "Agents read service output via `tmux capture-pane -t <session>:<window>.<pane>`. Without help, they'd have to open `setup-tmux.sh` and count `WINTER_TMUX_SERVICE_NAMES` indices to translate a service name into a pane target. `setup-tmux.md` is a short, agent-readable sibling that lists each declared service alongside its `<window>.<pane>` and the capture-pane template. It is **generated from `setup-tmux.sh`, never hand-written** — the `render-setup-md.sh` generator reads `SESSION_PREFIX` and `WINTER_TMUX_SERVICE_NAMES` from the config you just wrote and emits the canonical content. Run it whenever `setup-tmux.sh` changes; `winter doctor` flags drift if you forget."
+**Explain first:** "Agents read service output via `tmux capture-pane -t <session>:<window>.<pane>`. Without help, they'd have to open `setup-tmux.sh` and count `WINTER_TMUX_SERVICE_NAMES` indices to translate a service name into a pane target. `setup-tmux.md` is a short, agent-readable sibling that lists each declared service alongside its `<window>.<pane>` and the capture-pane template. It is **generated from `setup-tmux.sh`, never hand-written** — the `render-setup-md.sh` generator reads `SESSION_PREFIX` and `WINTER_TMUX_SERVICE_NAMES` from the config you just wrote and emits the canonical content. Going forward, `setup-tmux.md` is regenerated automatically on every workspace reconcile (`winter ws init`) via the `on_workspace_reconcile` hook. Run it manually now (and whenever `setup-tmux.sh` changes outside of a reconcile); `winter doctor` flags drift if it falls out of sync."
 
 Run the generator from the workspace root (where the rest of this guide runs), writing to the canonical path (resolve `winter-service-tmux:` via the `# Winter Extensions` block in workspace `CLAUDE.md`):
 
@@ -206,7 +206,7 @@ The generator resolves each service to its target (bare entry → window 0 at it
 
 Tell the user "Generated `setup-tmux.md` with `<n>` services: `backend` → `0.0`, `frontend` → `0.1`, ..." (read the targets back from the output).
 
-Confirm: "`setup-tmux.md` is at `workspace:/ai/project/setup-tmux.md`, generated from `setup-tmux.sh`. `winter doctor` warns if the two ever drift."
+Confirm: "`setup-tmux.md` is at `workspace:/ai/project/setup-tmux.md`, generated from `setup-tmux.sh`. Future reconciles keep it in sync automatically; `winter doctor` warns if it ever drifts."
 
 ### 10. Smoke test (optional)
 
