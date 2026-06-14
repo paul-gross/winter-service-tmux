@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# Layout hook for winter-service-tmux — LAYOUT ONLY.
+# Copy this to workspace:/ai/project/layout-hook.sh and customize.
+#
+# =============================================================================
+# CONTRACT (load-bearing — read before editing)
+# =============================================================================
+#
+# INVOKED BY
+#   The future Python orchestrator (issue #6), once per `./up`, AFTER the
+#   tmux session has been created and BEFORE any service commands are sent.
+#   The field that activates this hook is `layout_hook` in setup-tmux.toml.
+#   Issue #7 ships the example and documents the contract; issue #6 invokes it.
+#
+# ENVIRONMENT PROVIDED (proposed names; issue #6 confirms)
+#   WINTER_TMUX_SESSION       — the fully-qualified tmux session name, e.g. "mp-alpha"
+#   WINTER_TMUX_WORKTREE_DIR  — absolute path to the worktree root
+#   WINTER_ENV                — env name (e.g. "alpha")
+#   WINTER_ENV_INDEX          — numeric env index (e.g. "1" for alpha)
+#   WINTER_PORT_BASE          — base port for this env (e.g. "4100")
+#
+# PURPOSE — LAYOUT ONLY
+#   This script creates the windows and panes that the manifest's [[service]]
+#   targets refer to. Nothing else.
+#
+#   The orchestrator creates the session (tmux new-session), calls this hook,
+#   then sends each service's command into its pane via tmux send-keys.
+#
+# CONSTRAINTS — DO NOT VIOLATE
+#   - DO NOT use `tmux send-keys` here. The orchestrator sends commands.
+#     Sending keys in the hook bypasses the orchestrator's env-sourcing,
+#     banner, and restart-path identity guarantees.
+#   - DO NOT source env files. The orchestrator sources ENV_FILE per pane.
+#   - DO NOT `cd` into subdirectories. The orchestrator resets each pane's
+#     cwd to WINTER_TMUX_WORKTREE_DIR before sending the service command.
+#   - DO NOT start services, install dependencies, or do anything beyond
+#     creating tmux windows and panes. Side effects in the hook break
+#     `./restart` (which re-sends a single service's command into its
+#     existing pane) and make layout changes harder to reason about.
+#
+# WINDOW/PANE TARGETS
+#   Must match the `target` fields declared in setup-tmux.toml exactly:
+#     "0.0"  — window 0, pane 0  (the initial pane, always exists after new-session)
+#     "0.1"  — window 0, pane 1  (first split of window 0)
+#     "1.0"  — window 1, pane 0  (first pane of a new window)
+#   Use explicit `-t "$WINTER_TMUX_SESSION:<window>.<pane>"` targeting so the
+#   orchestrator's pane address map is authoritative.
+#
+# EXAMPLE BELOW
+#   Matches the targets in workflow/setup-tmux.toml.example:
+#     backend   → 0.0  (initial pane in window 0)
+#     frontend  → 0.1  (vertical split of window 0)
+#     shell     → 1.0  (new window 1, single pane)
+# =============================================================================
+
+set -euo pipefail
+
+: "${WINTER_TMUX_SESSION:?WINTER_TMUX_SESSION not set}"
+: "${WINTER_TMUX_WORKTREE_DIR:?WINTER_TMUX_WORKTREE_DIR not set}"
+
+# ---------------------------------------------------------------------------
+# Window 0 — application services (backend + frontend)
+# ---------------------------------------------------------------------------
+
+# Pane 0.0: backend — the initial pane created by `tmux new-session`.
+# No explicit `tmux new-window` needed; it already exists. Just note the
+# target here to keep the layout self-documenting.
+# (Nothing to do — pane 0.0 was created by new-session.)
+
+# Pane 0.1: frontend — split window 0 vertically (top/bottom halves).
+# -v   : vertical split (produces top + bottom panes)
+# -t   : target the initial pane in window 0
+# -c   : set initial cwd (the orchestrator resets it per-send anyway, but
+#        this ensures a clean starting cwd if the hook is re-run)
+tmux split-window -v \
+  -t "$WINTER_TMUX_SESSION:0.0" \
+  -c "$WINTER_TMUX_WORKTREE_DIR"
+
+# ---------------------------------------------------------------------------
+# Window 1 — utility shell
+# ---------------------------------------------------------------------------
+
+# Pane 1.0: shell — create a new window (becomes window 1, pane 0).
+# -t "$WINTER_TMUX_SESSION" : create the window in this session
+# -c                        : initial cwd
+tmux new-window \
+  -t "$WINTER_TMUX_SESSION" \
+  -c "$WINTER_TMUX_WORKTREE_DIR"
+
+# ---------------------------------------------------------------------------
+# Focus — land on window 0, backend pane, so the user sees the main service
+# when they attach. (Cosmetic only; no effect on service startup.)
+# ---------------------------------------------------------------------------
+tmux select-window -t "$WINTER_TMUX_SESSION:0"
+tmux select-pane   -t "$WINTER_TMUX_SESSION:0.0"

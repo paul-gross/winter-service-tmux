@@ -1,0 +1,52 @@
+# Machine-specific overrides for winter-service-tmux (TOML format). OPTIONAL.
+# Copy this to workspace:/ai/project/setup-tmux.local.toml and customize, then
+# keep it gitignored — it's a per-developer / per-machine override that should
+# never be committed.
+#
+# This file is merged ON TOP of the committed setup-tmux.toml (overlay), so you
+# only redeclare what you want to change. Everything you don't touch keeps the
+# committed value. The reader always processes the committed file first, then
+# this overlay.
+#
+# Overlay merge semantics:
+#   Scalars (session_prefix, env_file, layout_hook):
+#     The overlay value REPLACES the committed value when present.
+#
+#   [[service]] — keyed by "name":
+#     A service whose "name" matches a committed service OVERRIDES it (the
+#     overlay fields are merged into the committed entry; unspecified fields
+#     keep their committed values). A service with a new "name" is APPENDED
+#     after all committed services.
+#
+#   [[status.url]] — keyed by "label":
+#     Same override-or-append rule as [[service]], keyed by "label".
+
+# Override the session prefix — handy when the committed prefix collides with
+# another project's tmux sessions on a shared machine.
+session_prefix = "myprefix"
+
+# Override a committed service by name — change only what differs locally.
+# The orchestrator will use "my-debug-backend" as the command for this pane
+# instead of the committed "npm run start:dev", keeping name and target.
+[[service]]
+name = "backend"
+command = "npm run start:debug"
+
+# Append a personal service that isn't in the committed manifest.
+# The layout hook (or setup_tmux for now) must also be updated locally to
+# create this pane — otherwise the orchestrator will have nowhere to send it.
+[[service]]
+name = "debugger"
+target = "2.0"
+command = "node --inspect src/index.js"
+
+# Override a committed status URL by label — point the Backend URL at a
+# different port locally.
+[[status.url]]
+label = "Backend"
+url = "http://localhost:${LOCAL_BACKEND_PORT}"
+
+# Append a new status URL that only makes sense on this machine.
+[[status.url]]
+label = "Debug Inspector"
+url = "http://localhost:9229"

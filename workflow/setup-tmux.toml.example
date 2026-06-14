@@ -1,0 +1,88 @@
+# Declarative manifest for winter-service-tmux (TOML format). ADDITIVE GROUNDWORK.
+# Copy this to workspace:/ai/project/setup-tmux.toml and customize.
+#
+# This file is the declarative counterpart to setup-tmux.sh — it describes the
+# same services in a structured, machine-readable format. The bash setup-tmux.sh
+# remains the live configuration until issue #6 (orchestrator cutover). Both
+# formats coexist; you can maintain them in parallel or keep only the TOML.
+#
+# The Python reader (service_manifest.reader) loads ai/project/setup-tmux.toml,
+# merges ai/project/setup-tmux.local.toml on top (if present), and returns a
+# validated ServiceManifest. Structural errors (missing keys, malformed TOML)
+# raise ManifestError. Semantic violations (duplicate targets, unresolvable
+# ${VAR}) are returned as a list by the validator.
+#
+# Validate with:
+#   PYTHONPATH=src python3 -m service_manifest.cli validate <workspace-or-worktree-dir>
+#
+# For machine-specific overrides that shouldn't be committed, add a sibling
+# setup-tmux.local.toml — the reader merges it on top using the same overlay
+# semantics as setup-tmux.sh / setup-tmux.local.sh. Keep it gitignored.
+
+# Session prefix — tmux sessions will be named <session_prefix>-<env>
+# e.g., "mp" produces "mp-alpha", "mp-beta"
+session_prefix = "mp"
+
+# Environment file to load for ${VAR} interpolation and pane env sourcing
+# (relative to the worktree root, optional).
+env_file = ".winter.env"
+
+# Optional bash layout hook — invoked by the future orchestrator (issue #6)
+# once per ./up, AFTER the tmux session is created. The hook creates the
+# windows/panes; the orchestrator sends each service's command into its pane.
+# Absent until you need a non-default layout; the doctor probe checks that this
+# file exists and is executable when the field is set.
+layout_hook = "ai/project/layout-hook.sh"
+
+# ---------------------------------------------------------------------------
+# Services — one [[service]] table per tmux pane
+# ---------------------------------------------------------------------------
+#
+# Fields:
+#   name     (required) — unique identifier; used in status output and ./restart
+#   target   (required) — "<window>.<pane>", both zero-based integers
+#   command  (optional, default "") — shell command to run in the pane;
+#                                     "" means interactive pane (sits at prompt)
+#
+# Targets must be unique across all services. The layout hook is responsible
+# for creating the windows/panes named here; the orchestrator sends the
+# commands into them.
+
+[[service]]
+name = "backend"
+target = "0.0"
+command = "npm run start:dev"
+
+[[service]]
+name = "frontend"
+target = "0.1"
+command = "npm run dev"
+
+[[service]]
+# Interactive pane — command is empty; the pane gets the env sourced and a
+# banner, then sits at a shell prompt. Mirrors `winter_service_cmd shell ""`
+# in the bash config.
+name = "shell"
+target = "1.0"
+command = ""
+
+# ---------------------------------------------------------------------------
+# Status URLs — displayed in the ./status output header
+# ---------------------------------------------------------------------------
+#
+# Fields:
+#   label (required) — display name shown in ./status
+#   url   (required) — template string; ${VAR} placeholders are resolved from
+#                      env_file at validation time
+#
+# The validator reports unresolvable ${VAR} when an env file is present. When
+# the env file is absent, ${VAR} resolution is skipped (warn-and-continue,
+# matching the bash up script's behaviour).
+
+[[status.url]]
+label = "Backend"
+url = "http://localhost:${BACKEND_PORT}"
+
+[[status.url]]
+label = "Frontend"
+url = "http://localhost:${FRONTEND_PORT}"

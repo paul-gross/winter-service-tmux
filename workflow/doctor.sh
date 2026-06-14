@@ -5,12 +5,13 @@
 # workspace:/ai/winter-cli/setup.md#doctor-probes. One object per line:
 #   {"name": "...", "status": "pass|warn|fail", "message"?: "...", "remediation"?: "..."}
 #
-# Four checks:
+# Five checks:
 #   1. tmux binary on PATH
 #   2. SESSION_PREFIX declared in workspace:/ai/project/setup-tmux.sh
 #      (legacy: workflow.sh), with an optional setup-tmux.local.sh overlay
 #   3. session-name collision with foreign tmux sessions sharing the prefix
 #   4. setup-tmux.md is in sync with setup-tmux.sh (rendered by render-setup-md.sh)
+#   5. setup-tmux.toml manifest valid (when present); layout_hook exists + executable
 #
 # Each probe is implemented as an explicit branch that emits its own NDJSON;
 # the script exits 0 at the end so per-probe statuses surface individually.
@@ -180,6 +181,89 @@ else
   emit "setup-tmux.md fresh" warn \
     "setup-tmux.md is stale — it no longer matches setup-tmux.sh" \
     "$regen_hint"
+fi
+
+# ---- Probe 5: setup-tmux.toml manifest ---------------------------------------
+#
+# If ai/project/setup-tmux.toml is absent, skip quietly (manifest is optional in
+# issue #7).  If present, validate it via the service_manifest CLI (stdlib-only,
+# python3 required).  Violations → warn (not fail: manifest isn't load-bearing
+# yet).  Also checks that layout_hook points to an existing executable file when
+# declared.
+
+MANIFEST_PATH="$WORKSPACE_DIR/ai/project/setup-tmux.toml"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+EXT_SRC="$SCRIPT_DIR/../src"
+
+if [[ ! -f "$MANIFEST_PATH" ]]; then
+  emit "setup-tmux.toml manifest" pass "no setup-tmux.toml present (optional)"
+else
+  # Locate a python interpreter.
+  PY=""
+  if command -v python3 >/dev/null 2>&1; then
+    PY="python3"
+  elif command -v python >/dev/null 2>&1; then
+    PY="python"
+  fi
+
+  if [[ -z "$PY" ]]; then
+    emit "setup-tmux.toml manifest" warn "skipped: python3 not found"
+  else
+    # Run the validator; capture stdout and exit code.
+    cli_out=$(PYTHONPATH="$EXT_SRC" "$PY" -m service_manifest.cli validate "$WORKSPACE_DIR" --json 2>/dev/null)
+    cli_exit=$?
+
+    if [[ $cli_exit -ne 0 ]] && ! printf '%s' "$cli_out" | grep -q '"ok"'; then
+      # Non-zero exit with no parseable JSON — likely Python < 3.11 / import failure.
+      emit "setup-tmux.toml manifest" warn \
+        "skipped: manifest validation unavailable (Python 3.11+ required)"
+    else
+      # Parse the JSON output with python to avoid whitespace/quoting fragility.
+      parsed=$(printf '%s' "$cli_out" | "$PY" -c '
+import json, sys
+data = json.load(sys.stdin)
+ok = data.get("ok", False)
+violations = data.get("violations", [])
+print("true" if ok else "false")
+print(len(violations))
+print("; ".join(violations))
+')
+      ok_val=$(printf '%s' "$parsed" | sed -n '1p')
+      vcount=$(printf '%s' "$parsed" | sed -n '2p')
+      violations_msg=$(printf '%s' "$parsed" | sed -n '3p')
+
+      if [[ "$ok_val" == "true" ]]; then
+        emit "setup-tmux.toml manifest" pass "setup-tmux.toml valid"
+      else
+        emit "setup-tmux.toml manifest" warn \
+          "${vcount} violation(s): ${violations_msg}"
+      fi
+    fi
+
+    # ---- layout_hook sub-check ------------------------------------------------
+    # Extract layout_hook value from the TOML with a simple grep — the field is
+    # a top-level scalar so the pattern is reliable.
+    # Note: reads the committed setup-tmux.toml only. The gitignored
+    # setup-tmux.local.toml overlay may declare a different layout_hook; that
+    # override is not seen by this bash sub-check.
+    layout_hook_val=$(grep -E '^[[:space:]]*layout_hook[[:space:]]*=' "$MANIFEST_PATH" \
+      | sed 's/.*=[[:space:]]*//' | tr -d '"'"'"' ')
+
+    if [[ -n "$layout_hook_val" ]]; then
+      hook_path="$WORKSPACE_DIR/$layout_hook_val"
+      if [[ -x "$hook_path" ]]; then
+        emit "setup-tmux.toml layout_hook" pass "layout_hook exists and is executable: $layout_hook_val"
+      elif [[ -f "$hook_path" ]]; then
+        emit "setup-tmux.toml layout_hook" warn \
+          "layout_hook file exists but is not executable: $layout_hook_val" \
+          "Run: chmod +x $hook_path"
+      else
+        emit "setup-tmux.toml layout_hook" warn \
+          "layout_hook file not found: $layout_hook_val" \
+          "Create the file at $hook_path or remove layout_hook from setup-tmux.toml."
+      fi
+    fi
+  fi
 fi
 
 exit 0

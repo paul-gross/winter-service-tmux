@@ -39,3 +39,9 @@ ln -sfn ../.winter/ext/service-tmux/workflow/up alpha/up   # restore — always,
 ```
 
 Repeat per script you changed. **Restore is mandatory** — a left-over override silently makes every later service call in that env run worktree code. This is the service-orchestration case of the generic "verify against the real environment" guidance in `winter-harness:/workflows/feature-delivery.md`.
+
+## Declarative manifest (additive groundwork — not yet live)
+
+A `setup-tmux.toml` manifest and stdlib-only Python reader/validator exist as additive groundwork for the future Python orchestrator (issue #6). **The bash `setup-tmux.sh` remains the live config; nothing in the current orchestrator reads the TOML manifest at runtime.** A `doctor` Probe 5 validates the manifest when present; a missing manifest is a quiet pass.
+
+See `winter-service-tmux:/workflow/setup-tmux.toml.example`, `winter-service-tmux:/workflow/setup-tmux.local.toml.example`, and `winter-service-tmux:/workflow/layout-hook.sh.example` for annotated examples of the schema, overlay semantics, and layout hook contract. The validator CLI is documented in `src/service_manifest/cli.py`.
