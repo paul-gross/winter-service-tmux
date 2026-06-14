@@ -26,3 +26,16 @@ Once installed, the workspace conventions are:
 - Read pane output with `tmux capture-pane`. The per-service `<window>.<pane>` targets and the capture-pane template live in `workspace:/ai/project/setup-tmux.md` — start there to map a service name to its pane target.
 
 Tmux session names are `<SESSION_PREFIX>-<env>` — e.g. `mp-alpha`. The prefix and pane layout are declared in `workspace:/ai/project/setup-tmux.sh`.
+
+## Testing changed service scripts against a worktree
+
+The env-root `./up`/`./down`/`./status`/`./restart` symlinks resolve to the **installed** extension (`.winter/ext/service-tmux/workflow/<script>`), not your in-progress worktree — so they run committed code until you repoint them. To exercise changed script code, override the symlink at the worktree's copy, run the real entrypoint, then restore it (using `alpha` as the example env):
+
+```bash
+readlink alpha/up                                          # record original: ../.winter/ext/service-tmux/workflow/up
+ln -sfn winter-service-tmux/workflow/up alpha/up           # override -> alpha/winter-service-tmux/workflow/up (sibling-relative)
+cd alpha && ./up && ./status                               # exercise via the real entrypoint
+ln -sfn ../.winter/ext/service-tmux/workflow/up alpha/up   # restore — always, even if the test failed
+```
+
+Repeat per script you changed. **Restore is mandatory** — a left-over override silently makes every later service call in that env run worktree code. This is the service-orchestration case of the generic "verify against the real environment" guidance in `winter-harness:/workflows/feature-delivery.md`.
