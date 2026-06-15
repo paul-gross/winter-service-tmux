@@ -1,23 +1,21 @@
-# Declarative manifest for winter-service-tmux (TOML format). ADDITIVE GROUNDWORK.
+# Declarative manifest for winter-service-tmux (TOML format).
 # Copy this to workspace:/ai/project/setup-tmux.toml and customize.
 #
-# This file is the declarative counterpart to setup-tmux.sh — it describes the
-# same services in a structured, machine-readable format. The bash setup-tmux.sh
-# remains the live configuration until issue #6 (orchestrator cutover). Both
-# formats coexist; you can maintain them in parallel or keep only the TOML.
-#
-# The Python reader (service_manifest.reader) loads ai/project/setup-tmux.toml,
-# merges ai/project/setup-tmux.local.toml on top (if present), and returns a
-# validated ServiceManifest. Structural errors (missing keys, malformed TOML)
-# raise ManifestError. Semantic violations (duplicate targets, unresolvable
-# ${VAR}) are returned as a list by the validator.
+# This file is the live configuration for the Python orchestrator. It describes
+# every service in a structured, machine-readable format consumed at runtime by
+# the service_orchestrator package. The Python reader (service_manifest.reader)
+# loads ai/project/setup-tmux.toml, merges ai/project/setup-tmux.local.toml on
+# top (if present), and returns a validated ServiceManifest. Structural errors
+# (missing keys, malformed TOML) raise ManifestError. Semantic violations
+# (duplicate targets, unresolvable ${VAR}) are returned as a list by the validator.
 #
 # Validate with:
 #   PYTHONPATH=src python3 -m service_manifest.cli validate <workspace-or-worktree-dir>
 #
 # For machine-specific overrides that shouldn't be committed, add a sibling
 # setup-tmux.local.toml — the reader merges it on top using the same overlay
-# semantics as setup-tmux.sh / setup-tmux.local.sh. Keep it gitignored.
+# semantics (scalars replace; [[service]] and [[status.url]] merge keyed by
+# name/label). Keep it gitignored.
 
 # Session prefix — tmux sessions will be named <session_prefix>-<env>
 # e.g., "mp" produces "mp-alpha", "mp-beta"

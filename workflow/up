@@ -1,187 +1,21 @@
-#!/usr/bin/env bash
-# -E (errtrace) is required so the ERR trap installed before setup_tmux fires
-# when a command inside that function fails — bash doesn't propagate ERR traps
-# into functions without it.
-set -Eeuo pipefail
+#!/bin/sh
+# Env-root symlink shim — delegates to the Python env_cli door.
+# This script is symlinked into feature env dirs (e.g. alpha/up).
+# The symlink's parent directory is the worktree; used to derive env + workspace.
 
-# This script is invoked via a symlink in a worktree (e.g. alpha/up). The
-# symlink's parent directory is the worktree; the worktree's parent is the
-# workspace root.
-INVOKE_DIR="$(cd "$(dirname "$0")" && pwd)"
-WORKTREE_DIR="$INVOKE_DIR"
-WORKTREE_NAME="$(basename "$WORKTREE_DIR")"
-WORKSPACE_DIR="$(cd "$WORKTREE_DIR/.." && pwd)"
-
-# Parse arguments
-ATTACH=false
-NAME=""
-LOCAL=false
-for arg in "$@"; do
-  case "$arg" in
-    -a|--attach) ATTACH=true ;;
-    local)       LOCAL=true; NAME="local" ;;
-    *)           NAME="$arg" ;;
-  esac
+_SELF="$0"
+while [ -L "$_SELF" ]; do
+    _SELF="$(readlink "$_SELF")"
 done
+_SRC="$(cd "$(dirname "$_SELF")/.." && pwd)/src"
 
-# Resolve this script's real directory through the env-dir symlink so we can
-# source the config-path resolver beside it. `readlink -f` is absent on stock
-# macOS, so walk the symlink chain with plain `readlink`.
-SCRIPT_SRC="$0"
-while [[ -L "$SCRIPT_SRC" ]]; do
-  SCRIPT_LINK="$(readlink "$SCRIPT_SRC")"
-  [[ "$SCRIPT_LINK" == /* ]] && SCRIPT_SRC="$SCRIPT_LINK" || SCRIPT_SRC="$(dirname "$SCRIPT_SRC")/$SCRIPT_LINK"
-done
-SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SRC")" && pwd)"
-# shellcheck source=winter-service-tmux.sh
-source "$SCRIPT_DIR/winter-service-tmux.sh"
+# Resolve the symlink's absolute path (the env-dir entry, not the real script).
+# Passed as argv[0] so env_cli._resolve_from_argv0 can infer env name + workspace.
+_SHIM_ABS="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 
-# Load project tmux config — the committed setup-tmux.sh (legacy: workflow.sh)
-# with an optional setup-tmux.local.sh (legacy: workflow.local.sh) overlaid on
-# top. See winter-service-tmux.sh for the resolution rules.
-winter_tmux_config_files "$WORKSPACE_DIR"
-if [[ ${#WINTER_TMUX_CONFIG_FILES[@]} -eq 0 ]]; then
-  echo "Error: No setup-tmux.sh config found."
-  echo "Expected at: workspace:/ai/project/setup-tmux.sh (legacy: workflow.sh)"
-  echo ""
-  echo "Create one to define SESSION_PREFIX, ENV_FILE, and panes."
-  echo "See setup-tmux.sh.example in the winter-service-tmux extension for a template."
-  exit 1
-fi
-for cfg in "${WINTER_TMUX_CONFIG_FILES[@]}"; do
-  # shellcheck disable=SC1090
-  source "$cfg"
-done
-
-# Validate required config
-: "${SESSION_PREFIX:?setup-tmux.sh must define SESSION_PREFIX}"
-
-# Determine worktree name if not set by arguments
-if [[ -z "$NAME" ]]; then
-  NAME="$WORKTREE_NAME"
-  if [[ "$NAME" == "project" ]]; then
-    echo "Error: cannot run services directly in project/"
-    echo "Usage: ./up [local] [-a|--attach] [<worktree-name>]"
-    echo "  Run from a feature worktree, or pass a worktree name"
-    exit 1
-  fi
-fi
-
-SESSION="${SESSION_PREFIX}-${NAME}"
-
-# Worktree root — exported so winter_tmux_send_service can reset each pane to a
-# deterministic cwd before launching (see winter-service-tmux.sh). setup_tmux
-# also receives it as its $2 argument.
-export WINTER_TMUX_WORKTREE_DIR="$WORKTREE_DIR"
-
-# Resolve environment file path — exported so setup_tmux can source it in each pane
-# 'local' mode skips the env file so services use default ports
-export ENV_PATH=""
-if [[ "$LOCAL" == false && -n "${ENV_FILE:-}" ]]; then
-  ENV_PATH="$WORKTREE_DIR/$ENV_FILE"
-  if [[ -f "$ENV_PATH" ]]; then
-    source "$ENV_PATH"
-  else
-    echo "Warning: ENV_FILE=$ENV_FILE not found at $ENV_PATH"
-    ENV_PATH=""
-  fi
-elif [[ "$LOCAL" == true ]]; then
-  echo "Running with default ports (no env file)"
-fi
-
-# Serialize concurrent `./up` invocations for the same session. Without this,
-# two agents racing `./up alpha` both pass the has-session check and the
-# second `tmux new-session` crashes mid-setup_tmux. flock makes the second
-# invocation block briefly, see the session already exists, and exit 0.
-#
-# We only hold the lock across the has-session check and `new-session` itself,
-# then explicitly release it via `flock -u`. Two reasons we can't just close
-# the fd:
-#   1. `tmux new-session -d` forks a long-lived tmux server that inherits
-#      every open fd, so the OFD lock stays held until the server (and any
-#      services it spawns) exit — effectively forever.
-#   2. `exec tmux attach-session` later in the script preserves fds across
-#      the image swap, blocking future invocations until the user detaches.
-# `flock -u <fd>` releases the OFD lock regardless of who else holds the fd.
-HAVE_FLOCK=true
-if ! command -v flock >/dev/null 2>&1; then
-  HAVE_FLOCK=false
-  echo "Warning: flock not found — concurrent ./up invocations are not serialized" >&2
-fi
-LOCK_FILE="${TMPDIR:-/tmp}/winter-tmux-${SESSION}.lock"
-exec {LOCK_FD}>"$LOCK_FILE"
-release_lock() {
-  if [[ -n "${LOCK_FD:-}" ]]; then
-    [[ "$HAVE_FLOCK" == true ]] && flock -u "$LOCK_FD" 2>/dev/null || true
-    exec {LOCK_FD}>&-
-    LOCK_FD=""
-  fi
-}
-[[ "$HAVE_FLOCK" == true ]] && flock "$LOCK_FD"
-
-# If session already exists, report and exit (or attach)
-if tmux has-session -t "$SESSION" 2>/dev/null; then
-  release_lock
-  echo "Session '$SESSION' is already running."
-  if [[ "$ATTACH" == true ]]; then
-    exec tmux attach-session -t "$SESSION"
-  fi
-  echo "Use ./status to check services, or ./down to stop."
-  exit 0
-fi
-
-# setup_tmux is defined in setup-tmux.sh — it receives SESSION, WORKTREE_DIR, NAME
-# ENV_PATH is available for setup_tmux to source in each tmux pane
-if declare -f setup_tmux >/dev/null 2>&1; then
-  tmux new-session -d -s "$SESSION" -c "$WORKTREE_DIR" -x 200 -y 50
-  # Session now exists; release the lock so it doesn't get pinned by the tmux
-  # server inheriting the fd. From here on, a concurrent ./up will see
-  # has-session=true and exit cleanly.
-  release_lock
-  # If setup_tmux returns non-zero we have to decide whether the session is
-  # salvageable. The naive "kill on any error" was wrong: project-supplied
-  # setup_tmux bodies routinely contain non-tmux commands (grep -oP that
-  # produces no match, env-var probes, status-header builders) whose non-zero
-  # exit is benign and shouldn't tear down an already-running set of services.
-  #
-  # Heuristic: if setup_tmux had progressed far enough to add at least one
-  # window beyond the default tmux session-creation window, the failure
-  # happened mid-startup and the session has services running — keep it and
-  # warn. If we're still at one window (likely a failure before any
-  # tmux new-window / send-keys ran), tear down — there's nothing useful in it.
-  trap '
-    rc=$?
-    win_count=$(tmux list-windows -t "$SESSION" 2>/dev/null | wc -l)
-    if [[ "$win_count" -le 1 ]]; then
-      tmux kill-session -t "$SESSION" 2>/dev/null || true
-      echo "Error: setup_tmux failed (exit $rc) before any windows were created; session $SESSION torn down." >&2
-    else
-      echo "Warning: setup_tmux returned exit $rc but session $SESSION has $win_count windows running." >&2
-      echo "  This often means a benign non-zero exit (e.g. grep -oP with no match) inside setup_tmux." >&2
-      echo "  Inspect with ./status; stop with ./down if the session is unhealthy." >&2
-    fi
-    exit "$rc"
-  ' ERR
-  setup_tmux "$SESSION" "$WORKTREE_DIR" "$NAME"
-  trap - ERR
-elif declare -f setup_panes >/dev/null 2>&1; then
-  release_lock
-  echo "Error: setup-tmux.sh defines setup_panes — rename it to setup_tmux."
-  echo "  See winter-service-tmux:/workflow/setup-tmux.sh.example for the current shape."
-  echo "  This rename came with multi-window support; also rename PANE_NAMES to WINTER_TMUX_SERVICE_NAMES."
-  exit 1
-else
-  release_lock
-  echo "Error: setup-tmux.sh must define a setup_tmux function"
-  exit 1
-fi
-
-# Report
-echo "Started services in tmux session '$SESSION'"
-echo "  Status: ./status"
-echo "  Stop:   ./down"
-
-# Attach if requested
-if [[ "$ATTACH" == true ]]; then
-  exec tmux attach-session -t "$SESSION"
-fi
+export PYTHONPATH="$_SRC${PYTHONPATH:+:$PYTHONPATH}"
+exec python3 -c "
+import sys, runpy
+sys.argv[0] = sys.argv.pop(1)
+runpy.run_module('service_orchestrator.env_cli', run_name='__main__', alter_sys=False)
+" "$_SHIM_ABS" up "$@"

@@ -13,58 +13,18 @@
 #   WINTER_PORT_BASE
 #
 # Idempotent: if the session is already gone (e.g. user ran `./down` before
-# `winter ws destroy`), exits 0 without complaint.
+# `winter ws destroy`), exits 0 without complaint. The Python `down` door
+# has its own env-suffix fallback when the manifest is unreadable, so this
+# hook never gets stuck.
 set -uo pipefail
 
 : "${WINTER_EXT_DIR:?WINTER_EXT_DIR not set}"
-: "${WINTER_WORKSPACE_DIR:?WINTER_WORKSPACE_DIR not set}"
 : "${WINTER_ENV:?WINTER_ENV not set}"
 
-# shellcheck source=../workflow/winter-service-tmux.sh
-source "$WINTER_EXT_DIR/workflow/winter-service-tmux.sh"
-
-winter_tmux_config_files "$WINTER_WORKSPACE_DIR"
-if [[ ${#WINTER_TMUX_CONFIG_FILES[@]} -eq 0 ]]; then
-  # No config = no services to stop. Not an error during destroy.
-  exit 0
-fi
-
-# Tolerate a broken config — destroy must remain idempotent even if the user is
-# mid-edit or a file has a syntax error. Disable `set -u` across the source so
-# an unbound variable inside the config doesn't abort the hook. SESSION_PREFIX
-# keeps the last good value across the overlay, so a broken local file doesn't
-# discard a valid committed prefix.
-SESSION_PREFIX=""
-set +u
-for cfg in "${WINTER_TMUX_CONFIG_FILES[@]}"; do
-  # shellcheck disable=SC1090
-  if ! source "$cfg" 2>/dev/null; then
-    echo "warning: source $cfg failed; falling back to env-suffix session lookup" >&2
-  fi
-done
-set -u
-
-if [[ -n "$SESSION_PREFIX" ]]; then
-  SESSION="${SESSION_PREFIX}-${WINTER_ENV}"
-  if ! tmux has-session -t "$SESSION" 2>/dev/null; then
-    exit 0
-  fi
-else
-  # No SESSION_PREFIX — match any tmux session whose name ends with -<env>.
-  # If there are none, exit 0 (the idempotency contract).
-  SESSION="$(tmux ls -F '#{session_name}' 2>/dev/null | grep -E -- "-${WINTER_ENV}\$" | head -1 || true)"
-  if [[ -z "$SESSION" ]]; then
-    exit 0
-  fi
-  echo "warning: using session '$SESSION' inferred from env suffix" >&2
-fi
-
-# Prefer the extension's own ./down (handles child-process reaping). Fall back
-# to a direct kill-session if ./down can't be located or fails (e.g. ./down
-# also sources the broken config).
+# Invoke the extension's `down` shim for this env. The Python env_cli door
+# handles the manifest-unreadable case via env-suffix session matching
+# (resolved decision #2), so no bash-level fallback is needed here.
 DOWN="$WINTER_EXT_DIR/workflow/down"
 if [[ -x "$DOWN" ]]; then
-  "$DOWN" "$WINTER_ENV" || tmux kill-session -t "$SESSION" 2>/dev/null || true
-else
-  tmux kill-session -t "$SESSION" 2>/dev/null || true
+  "$DOWN" "$WINTER_ENV" || true
 fi

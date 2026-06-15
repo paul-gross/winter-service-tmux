@@ -1,137 +1,21 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+# Env-root symlink shim — delegates to the Python env_cli door.
+# This script is symlinked into feature env dirs (e.g. alpha/status).
+# The symlink's parent directory is the worktree; used to derive env + workspace.
 
-INVOKE_DIR="$(cd "$(dirname "$0")" && pwd)"
-WORKSPACE_DIR="$(cd "$INVOKE_DIR/.." && pwd)"
-ENV_NAME="$(basename "$INVOKE_DIR")"
-
-# By default, report only the env this script lives in (<SESSION_PREFIX>-<env>),
-# matching how ./up and ./down default to the invoking worktree. Pass --all (or
-# 'all') to report every running env instead.
-ALL=false
-for arg in "$@"; do
-  case "$arg" in
-    --all|all) ALL=true ;;
-    *)
-      echo "Usage: ./status [--all]"
-      echo "  (no argument) report this env's services; --all reports every env"
-      exit 1
-      ;;
-  esac
+_SELF="$0"
+while [ -L "$_SELF" ]; do
+    _SELF="$(readlink "$_SELF")"
 done
+_SRC="$(cd "$(dirname "$_SELF")/.." && pwd)/src"
 
-# Resolve this script's real directory through the env-dir symlink so we can
-# source the config-path resolver beside it. `readlink -f` is absent on stock
-# macOS, so walk the symlink chain with plain `readlink`.
-SCRIPT_SRC="$0"
-while [[ -L "$SCRIPT_SRC" ]]; do
-  SCRIPT_LINK="$(readlink "$SCRIPT_SRC")"
-  [[ "$SCRIPT_LINK" == /* ]] && SCRIPT_SRC="$SCRIPT_LINK" || SCRIPT_SRC="$(dirname "$SCRIPT_SRC")/$SCRIPT_LINK"
-done
-SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SRC")" && pwd)"
-# shellcheck source=winter-service-tmux.sh
-source "$SCRIPT_DIR/winter-service-tmux.sh"
+# Resolve the symlink's absolute path (the env-dir entry, not the real script).
+# Passed as argv[0] so env_cli._resolve_from_argv0 can infer env name + workspace.
+_SHIM_ABS="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 
-winter_tmux_config_files "$WORKSPACE_DIR"
-if [[ ${#WINTER_TMUX_CONFIG_FILES[@]} -eq 0 ]]; then
-  echo "Error: No setup-tmux.sh config found."
-  exit 1
-fi
-
-for cfg in "${WINTER_TMUX_CONFIG_FILES[@]}"; do
-  # shellcheck disable=SC1090
-  source "$cfg"
-done
-: "${SESSION_PREFIX:?setup-tmux.sh must define SESSION_PREFIX}"
-
-# WINTER_TMUX_SERVICE_NAMES should be defined in setup-tmux.sh as an array
-if [[ -z "${WINTER_TMUX_SERVICE_NAMES+x}" ]]; then
-  if [[ -n "${PANE_NAMES+x}" ]]; then
-    echo "Error: setup-tmux.sh defines PANE_NAMES — rename it to WINTER_TMUX_SERVICE_NAMES."
-    echo "  See winter-service-tmux:/workflow/setup-tmux.sh.example for the current shape."
-  else
-    echo "Error: setup-tmux.sh must define WINTER_TMUX_SERVICE_NAMES array"
-  fi
-  exit 1
-fi
-
-# Select which sessions to report. Default: just this env's session; --all
-# widens to every running env (anchored so -alpha doesn't match -alpha2).
-if [[ "$ALL" == true ]]; then
-  SESSION_FILTER="^${SESSION_PREFIX}-"
-  EMPTY_MSG="No ${SESSION_PREFIX}-* sessions running."
-else
-  SESSION_FILTER="^${SESSION_PREFIX}-${ENV_NAME}$"
-  EMPTY_MSG="No ${SESSION_PREFIX}-${ENV_NAME} session running."
-fi
-
-SESSIONS=()
-while IFS= read -r line; do
-  [[ -n "$line" ]] && SESSIONS+=("$line")
-done < <(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep "$SESSION_FILTER" || true)
-
-if [[ ${#SESSIONS[@]} -eq 0 ]]; then
-  echo "$EMPTY_MSG"
-  exit 0
-fi
-
-for SESSION in "${SESSIONS[@]}"; do
-  NAME="${SESSION#${SESSION_PREFIX}-}"
-  SESSION_WORKTREE_DIR="$WORKSPACE_DIR/$NAME"
-
-  if ! tmux has-session -t "$SESSION" 2>/dev/null; then
-    echo "=== $NAME === (no session)"
-    echo ""
-    continue
-  fi
-
-  echo "=== $NAME ==="
-
-  # Run project-specific status header if defined. Skip when the worktree
-  # dir is gone (orphaned session) so a removed worktree doesn't crash status.
-  if declare -f status_header >/dev/null 2>&1 && [[ -d "$SESSION_WORKTREE_DIR" ]]; then
-    status_header "$NAME" "$SESSION_WORKTREE_DIR"
-  fi
-
-  # Snapshot all panes in the session (across every window) keyed by <window>.<pane>
-  PANE_INDEX_TO_PID=$(tmux list-panes -s -t "$SESSION" -F '#{window_index}.#{pane_index} #{pane_pid}' 2>/dev/null)
-
-  # Check each declared service. WINTER_TMUX_SERVICE_NAMES entries are either:
-  #   "<name>"                     → defaults to window 0, pane = array index
-  #   "<window>.<pane>:<name>"     → explicit target (use for multi-window layouts)
-  for i in "${!WINTER_TMUX_SERVICE_NAMES[@]}"; do
-    ENTRY="${WINTER_TMUX_SERVICE_NAMES[$i]}"
-    if [[ "$ENTRY" == *:* ]]; then
-      PANE_TARGET="${ENTRY%%:*}"
-      SERVICE_NAME="${ENTRY#*:}"
-    else
-      PANE_TARGET="0.$i"
-      SERVICE_NAME="$ENTRY"
-    fi
-
-    PANE_PID=$(echo "$PANE_INDEX_TO_PID" | awk -v t="$PANE_TARGET" '$1==t {print $2}')
-    if [[ -z "$PANE_PID" ]]; then
-      printf "  %-14s %s\n" "$SERVICE_NAME:" "missing"
-      continue
-    fi
-
-    # `|| true`: grep exits non-zero when the pane has no non-empty lines (e.g.
-    # a service that hasn't printed yet); without it, pipefail + set -e would
-    # abort the whole status run on an empty pane.
-    LAST_LINE=$(tmux capture-pane -t "$SESSION:$PANE_TARGET" -p 2>/dev/null | grep -v '^$' | tail -1 || true)
-
-    # PANE_PID is the pane's login shell, which outlives any service started in
-    # it via send-keys. So a live shell PID only means "the pane exists", not
-    # "the service is running". Check instead whether the shell has a child
-    # process: a foreground job means something is running; no children means
-    # the pane is idle at a prompt (service exited, or a declared utility shell).
-    if pgrep -P "$PANE_PID" >/dev/null 2>&1; then
-      STATUS="running"
-    else
-      STATUS="stopped"
-    fi
-
-    printf "  %-14s %-8s  %s\n" "$SERVICE_NAME:" "$STATUS" "${LAST_LINE:0:80}"
-  done
-  echo ""
-done
+export PYTHONPATH="$_SRC${PYTHONPATH:+:$PYTHONPATH}"
+exec python3 -c "
+import sys, runpy
+sys.argv[0] = sys.argv.pop(1)
+runpy.run_module('service_orchestrator.env_cli', run_name='__main__', alter_sys=False)
+" "$_SHIM_ABS" status "$@"

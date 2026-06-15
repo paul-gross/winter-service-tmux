@@ -1,0 +1,83 @@
+"""Tests for EnvWorkspaceLocator.
+
+Coverage:
+- WINTER_WORKSPACE_DIR env var is honored when set.
+- Marker-walk fallback finds .winter/config.toml walking up from start_dir.
+- worktree_dir(env) joins the env name onto workspace_root().
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from service_orchestrator.core.internal.env_workspace_locator import EnvWorkspaceLocator
+
+
+def test_workspace_root_honors_env_var(monkeypatch, tmp_path):
+    monkeypatch.setenv("WINTER_WORKSPACE_DIR", str(tmp_path))
+    locator = EnvWorkspaceLocator()
+    assert locator.workspace_root() == tmp_path
+
+
+def test_workspace_root_env_var_cached(monkeypatch, tmp_path):
+    monkeypatch.setenv("WINTER_WORKSPACE_DIR", str(tmp_path))
+    locator = EnvWorkspaceLocator()
+    root1 = locator.workspace_root()
+    root2 = locator.workspace_root()
+    assert root1 is root2
+
+
+def test_workspace_root_marker_walk_finds_config(monkeypatch, tmp_path):
+    monkeypatch.delenv("WINTER_WORKSPACE_DIR", raising=False)
+
+    # Set up: workspace_root / .winter / config.toml
+    marker_dir = tmp_path / ".winter"
+    marker_dir.mkdir()
+    (marker_dir / "config.toml").write_text("")
+
+    # start_dir is several levels deep inside workspace_root
+    start = tmp_path / "alpha" / "my-app" / "src"
+    start.mkdir(parents=True)
+
+    locator = EnvWorkspaceLocator(start_dir=start)
+    assert locator.workspace_root() == tmp_path
+
+
+def test_workspace_root_marker_walk_result_is_cached(monkeypatch, tmp_path):
+    monkeypatch.delenv("WINTER_WORKSPACE_DIR", raising=False)
+
+    marker_dir = tmp_path / ".winter"
+    marker_dir.mkdir()
+    (marker_dir / "config.toml").write_text("")
+
+    start = tmp_path / "alpha"
+    start.mkdir()
+
+    locator = EnvWorkspaceLocator(start_dir=start)
+    root1 = locator.workspace_root()
+    root2 = locator.workspace_root()
+    assert root1 is root2
+
+
+def test_workspace_root_marker_walk_raises_when_not_found(monkeypatch, tmp_path):
+    monkeypatch.delenv("WINTER_WORKSPACE_DIR", raising=False)
+
+    # No .winter/config.toml anywhere in tmp_path
+    start = tmp_path / "deep" / "nested"
+    start.mkdir(parents=True)
+
+    locator = EnvWorkspaceLocator(start_dir=start)
+    with pytest.raises(RuntimeError, match="workspace root not found"):
+        locator.workspace_root()
+
+
+def test_worktree_dir_joins_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("WINTER_WORKSPACE_DIR", str(tmp_path))
+    locator = EnvWorkspaceLocator()
+    assert locator.worktree_dir("alpha") == tmp_path / "alpha"
+
+
+def test_worktree_dir_arbitrary_env_name(monkeypatch, tmp_path):
+    monkeypatch.setenv("WINTER_WORKSPACE_DIR", str(tmp_path))
+    locator = EnvWorkspaceLocator()
+    assert locator.worktree_dir("my-feature") == tmp_path / "my-feature"

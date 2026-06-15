@@ -2,8 +2,8 @@ name = "winter-service-tmux"
 prefix = "wst"
 
 doctor = "workflow/doctor.sh"
+orchestrate_services = "workflow/orchestrate"
 
 [hooks]
-on_env_init            = "./hooks/init-worktree.sh"
-on_env_destroy         = "./hooks/destroy-worktree.sh"
-on_workspace_reconcile = "./hooks/reconcile-workspace.sh"
+on_env_init    = "./hooks/init-worktree.sh"
+on_env_destroy = "./hooks/destroy-worktree.sh"

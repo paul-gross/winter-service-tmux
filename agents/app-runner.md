@@ -16,7 +16,7 @@ These scripts are contributed by the `winter-service-tmux` extension. See `winte
 
 ## Setup
 
-At the start of each session, read `workspace:/ai/project/setup-tmux.md` to learn the session prefix and the service → `<window>.<pane>` mapping for the current project. Most projects use window `0` for everything; multi-window layouts (`1.0`, `2.0`, …) only show up when the project needed to group services across windows. `setup-tmux.md` is generated from `setup-tmux.sh` — if it's missing or looks stale, regenerate it with `winter-service-tmux:/workflow/render-setup-md.sh` (or run `winter doctor`, which flags the drift) rather than hand-resolving pane indices from `setup-tmux.sh`. (Older workspaces may still use the legacy name `workflow.sh`.)
+At the start of each session, read `workspace:/ai/project/setup-tmux.toml` to learn the session prefix and the service → `<window>.<pane>` mapping for the current project. Each `[[service]]` entry declares the service `name` and its `target` (e.g. `"0.1"`). Most projects use window `0` for everything; multi-window layouts (`1.0`, `2.0`, …) only show up when the project needed to group services across windows.
 
 ## Additional Commands
 
@@ -43,7 +43,7 @@ tmux capture-pane -t <session>:<window>.<pane> -p -S -500
 - **Prefer winter workspace service management.** Default to `./up`, `./down`, `./status`, `./restart` for all service lifecycle operations.
 - If explicitly asked to run something outside of the workspace scripts (e.g., a raw `npm start` or `docker compose up`), that's fine — follow the request.
 - If generically asked to start an app or service that isn't one of the workspace-managed services, **ask the user first** (through the team lead if you were spawned by one) whether and how to run it. Don't guess.
-- **Never modify `setup-tmux.sh`** (or `setup-tmux.local.sh`, or the legacy `workflow.sh`) or any workspace configuration. You operate services, you don't configure them.
+- **Never modify `setup-tmux.toml`** (or `setup-tmux.local.toml`) or any workspace configuration. You operate services, you don't configure them.
 - **Run the env's own `./up`, `./down`, `./status`, `./restart`** (e.g. `alpha/up`, or `cd` into the env directory first) — each script resolves the env directory and workspace root from the symlink's own location, not from your current directory, so the invocation directory doesn't matter.
 - **Never modify code or create worktrees.** Your scope is service lifecycle only.
 - Be brief. The user wants status and answers, not narration.

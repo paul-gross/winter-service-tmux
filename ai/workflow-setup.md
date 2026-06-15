@@ -1,10 +1,10 @@
 # Workflow setup walkthrough
 
-This guide is an interactive walkthrough that produces `workspace:/ai/project/setup-tmux.sh` — the shell script that configures the service management scripts (`./up`, `./down`, `./status`) for every feature worktree in the workspace. It defines what services run, how they start, and how they're organised in tmux panes.
+This guide is an interactive walkthrough that produces `workspace:/ai/project/setup-tmux.toml` and `workspace:/ai/project/layout-hook.sh` — the declarative manifest and layout hook that configure the service orchestrator (`./up`, `./down`, `./status`, `./restart`) for every feature worktree in the workspace. The manifest defines what services run, how they start, and which tmux panes they occupy. The layout hook creates those panes.
 
 Run it on a fresh workspace, or any time you want to (re)configure how services are launched — add new services, rename panes, change the session prefix, switch which env file gets sourced.
 
-**Idempotent:** safe to re-run at any time. Before each step, check the current state of `workspace:/ai/project/setup-tmux.sh`. If the step is already done, **say so explicitly** ("`SESSION_PREFIX` is already set to `wws` — skipping") and move on. Don't silent skip.
+**Idempotent:** safe to re-run at any time. Before each step, check the current state of `workspace:/ai/project/setup-tmux.toml`. If the step is already done, **say so explicitly** ("`session_prefix` is already set to `wws` — skipping") and move on. Don't silent skip.
 
 ## How to run this guide
 
@@ -16,64 +16,57 @@ This is a guided walkthrough, not a script. Your job is to teach the user how th
 - **One step at a time.** Don't preemptively run a later step's commands while the current step is still in progress. Finish the work for the current step before starting the next.
 - **Don't say step numbers.** Don't say "step 1 of 9" or "step 3" or "next step" — just describe what's happening and what's next. The user shouldn't be tracking a counter.
 - **Speak before acting.** At the start of every step, send a short message that describes what's about to happen and *why* it matters. Don't dive straight into a question or a command.
-- **Narrate actions.** Before running a command or editing a file, tell the user what's about to happen ("Writing `setup-tmux.sh` with `SESSION_PREFIX=wws` and a single shell pane..."). After it runs, tell them what changed.
+- **Narrate actions.** Before running a command or editing a file, tell the user what's about to happen ("Writing `setup-tmux.toml` with `session_prefix = "wws"` and a single shell service..."). After it runs, tell them what changed.
 - **Don't pause between steps.** When a step's work is done, report what changed in one line and move directly into the next step. Don't ask "ready for the next one?" — just continue. The user can interrupt at any time.
-- **Show, don't hide.** When you skip a step because the state is already correct, *show* what you found ("`setup-tmux.sh` already declares 3 panes: `backend`, `frontend`, `shell`. Skipping tmux session layout."). Never silent skip.
+- **Show, don't hide.** When you skip a step because the state is already correct, *show* what you found ("`setup-tmux.toml` already declares 3 services: `backend`, `frontend`, `shell`. Skipping service declaration."). Never silent skip.
 
 ## Why this matters
 
-When an agent spins up a feature environment, it runs `./up` to start all the services needed to use the application. `setup-tmux.sh` tells `./up` exactly what to launch and in which tmux pane. Without it, `./up` errors out in every worktree.
+When an agent spins up a feature environment, it runs `./up` to start all the services needed to use the application. `setup-tmux.toml` tells the orchestrator exactly what to launch and in which tmux pane. Without it, `./up` errors out in every worktree.
 
-This extension does **not** own `.winter.env`. The workspace base seeds it during `winter ws init <name>` with `WINTER_ENV`, `WINTER_ENV_INDEX`, and `WINTER_PORT_BASE`. The project's own `project-setup.md` appends project-specific variables (e.g. `BACKEND_PORT`, `DATABASE_URL`) below the managed block. This extension just *reads* `.winter.env` — when `ENV_FILE=".winter.env"` is set in `setup-tmux.sh`, the `up` script sources it before launching panes, so every service starts with whatever vars the workspace and the project have populated.
+This extension does **not** own `.winter.env`. The workspace base seeds it during `winter ws init <name>` with `WINTER_ENV`, `WINTER_ENV_INDEX`, and `WINTER_PORT_BASE`. The project's own `project-setup.md` appends project-specific variables (e.g. `BACKEND_PORT`, `DATABASE_URL`) below the managed block. This extension just *reads* `.winter.env` — when `env_file = ".winter.env"` is set in `setup-tmux.toml`, the orchestrator sources it before launching each service pane, so every service starts with whatever vars the workspace and the project have populated.
 
 ## Prerequisites
 
 Before running this guide:
 - The workspace has been set up via `/ws-setup` (or the underlying `winter ws init` has been run).
-- The `winter-service-tmux` extension is installed (its standalone clone exists at `workspace:/winter-service-tmux/` and its `on_env_init` hook is wired into the workspace).
-- Read `winter-service-tmux:/workflow/setup-tmux.sh.example` to understand the structural template you'll be writing.
+- The `winter-service-tmux` extension is installed (its standalone clone exists and its `on_env_init` hook is wired into the workspace).
+- Read `winter-service-tmux:/workflow/setup-tmux.toml.example` to understand the manifest schema you'll be writing.
+- Read `winter-service-tmux:/workflow/layout-hook.sh.example` to understand the layout hook contract.
 
 ## Opening preamble (always send first)
 
 Before doing anything, send a short orientation message, then continue straight into the first step:
 
-> "I'll walk you through setting up `setup-tmux.sh` so `./up`, `./down`, and `./status` know which services to run in each feature worktree. Stop me or ask questions at any time."
+> "I'll walk you through setting up `setup-tmux.toml` and `layout-hook.sh` so `./up`, `./down`, and `./status` know which services to run in each feature worktree. Stop me or ask questions at any time."
 
 Don't wait for a "go" signal — just begin.
 
 ## Steps
 
-### 1. Check existing setup-tmux.sh
+### 1. Check existing setup-tmux.toml
 
-**Explain first:** "Before changing anything, I need to know what's already there. `workspace:/ai/project/setup-tmux.sh` is the canonical source of truth — if it exists, it tells me your current `SESSION_PREFIX`, `ENV_FILE`, tmux session layout, and any custom `setup_tmux`/`status_header` logic."
+**Explain first:** "Before changing anything, I need to know what's already there. `workspace:/ai/project/setup-tmux.toml` is the canonical source of truth — if it exists, it tells me your current `session_prefix`, `env_file`, services, and any status URLs."
 
-**If the existing file defines `setup_panes` (the pre-multi-window name)**, flag it: "Your `setup-tmux.sh` defines `setup_panes` — that's the old name. The current scripts expect `setup_tmux`. I'll rename it (and update any references) as part of this guide." Treat that as a forced "replace" path: rebuild the file from the current values rather than asking the user to "keep" the broken version.
-
-**Legacy filename:** the config used to be called `workflow.sh`. The scripts still source `workflow.sh` as a fallback, but the canonical name is now `setup-tmux.sh`. If you find a `workflow.sh` and no `setup-tmux.sh`, flag it: "Your config is at the legacy path `workflow.sh` — I'll migrate it to `setup-tmux.sh` as part of this guide (`git mv ai/project/workflow.sh ai/project/setup-tmux.sh`), then apply any edits." Migrate before writing.
-
-Check the current state (prefer the canonical name, fall back to the legacy one):
+Check the current state:
 
 ```bash
-if [[ -f ./ai/project/setup-tmux.sh ]]; then
-  cat ./ai/project/setup-tmux.sh
-elif [[ -f ./ai/project/workflow.sh ]]; then
-  echo "(legacy workflow.sh — migrate to setup-tmux.sh)"; cat ./ai/project/workflow.sh
+if [[ -f ./ai/project/setup-tmux.toml ]]; then
+  cat ./ai/project/setup-tmux.toml
 else
-  echo "(no setup-tmux.sh)"
+  echo "(no setup-tmux.toml)"
 fi
 ```
 
-**If a config already exists** (at either name), parse out and report what you found:
+**If a config already exists**, parse out and report what you found:
 
-> "Your `setup-tmux.sh` already exists: `SESSION_PREFIX=<value>`, `ENV_FILE=<value or 'unset'>`, `WINTER_TMUX_SERVICE_NAMES=(<list>)`, `winter_service_cmd` declarations for `<n>` services. Want to keep it as-is, replace it from scratch, or tweak something specific?"
+> "Your `setup-tmux.toml` already exists: `session_prefix = "<value>"`, `env_file = "<value or 'unset'>"`, `<n>` services declared (`<name-list>`). Want to keep it as-is, replace it from scratch, or tweak something specific?"
 
-**Pre-`./restart` config (legacy):** if `setup_tmux` hand-writes its own `tmux send-keys` start strings with **no** `winter_service_cmd` declarations, `./up`/`./down`/`./status` still work but `./restart` errors. Lift the start commands into `winter_service_cmd <name> "<command>"` declarations and switch `setup_tmux` to `winter_tmux_send_service`. Flag it: "Your `setup-tmux.sh` predates `./restart` — I'll lift its start commands into `winter_service_cmd` declarations so `./restart` works." Treat that as a forced "replace" path.
-
-- "keep": skip ahead to the "Generate setup-tmux.md" step and run the generator against the existing `setup-tmux.sh` — it's idempotent and writes byte-identical content when nothing changed. Then offer the smoke test and continue into the final report.
+- "keep": skip ahead to the "Validate" step and run the validator against the existing file — it's idempotent. Then offer the smoke test and continue into the final report.
 - "replace": continue from the next step as if no file existed.
 - "tweak": ask **"What would you like to change?"** and skip to the relevant step.
 
-**If `setup-tmux.sh` does not exist**, tell the user: "No `setup-tmux.sh` yet — let's build one from scratch." Then continue.
+**If `setup-tmux.toml` does not exist**, tell the user: "No `setup-tmux.toml` yet — let's build one from scratch." Then continue.
 
 ### 2. Decide research vs. guided approach
 
@@ -88,10 +81,10 @@ Ask **one** question:
   - Ask it to find: start commands per service (`npm run dev`, `python manage.py runserver`, etc.), the directory each runs from, ports each service binds to, env vars each consumes from `.winter.env`, any docker-compose services that need to be `up`'d
   - Cap the response under 600 words
   - Tell it to be honest if a repo has no runtime services
-  - Have it end with a synthesis: which panes the setup-tmux.sh should declare, in what order, with what start commands
+  - Have it end with a synthesis: which services the manifest should declare, in what order, with what start commands
 - "guided": fall through to the next step.
 
-When the subagent reports back, present the findings to the user and ask **"Use these as the basis for `setup-tmux.sh`?"** before proceeding.
+When the subagent reports back, present the findings to the user and ask **"Use these as the basis for `setup-tmux.toml`?"** before proceeding.
 
 ### 3. Identify services
 
@@ -107,11 +100,11 @@ Once the user lists them, **for each service** ask in turn (one question per tur
 2. **"Which directory does it run from?"** (relative to the worktree root, e.g. `apps/backend`)
 3. **"Which env vars from `.winter.env` does it need?"** (e.g. `$BACKEND_PORT`, `$DATABASE_URL`) — accept "none" as an answer.
 
-The start command and run directory combine into one **`winter_service_cmd` declaration** later (written in step 8): a service that runs from the worktree root is just its command (`winter_service_cmd backend "npm run dev"`); a service in a subdirectory prepends a *relative* `cd` (`winter_service_cmd backend "cd apps/backend && npm run dev"`). Keep that `cd` relative — the launch helper resets each pane to the worktree root before running, so the same command works on both `./up` and `./restart`.
+The start command and run directory combine into one `command` field in the manifest: a service that runs from the worktree root is just its command (`command = "npm run dev"`); a service in a subdirectory prepends a *relative* `cd` (`command = "cd apps/backend && npm run dev"`). Keep that `cd` relative — the orchestrator resets each pane to the worktree root before running, so the same command works on both `./up` and `./restart`.
 
 Record each answer before moving to the next service. After all services are described, summarise back: "OK — you have `<n>` services: `<service-1>` running `<cmd-1>` from `<dir-1>`, `<service-2>` running `<cmd-2>` from `<dir-2>`, ..." and ask **"Anything to add, change, or remove?"** before continuing.
 
-A common pattern is one pane per service plus an extra `shell` pane for ad-hoc commands. Suggest it if the user didn't include one: **"Add a `shell` pane for ad-hoc commands?"**
+A common pattern is one pane per service plus an extra `shell` pane for ad-hoc commands. Suggest it if the user didn't include one: **"Add a `shell` pane for ad-hoc commands?"** (A shell pane uses an empty command: `command = ""`.)
 
 ### 4. Session prefix
 
@@ -126,26 +119,26 @@ Ask **one** question:
 - "confirm" / "yes" / the same value: use it.
 - different value: validate against the constraints (2-4 chars, lowercase, alphanumeric/`-`). If it fails any constraint, tell the user which one and ask again.
 
-Record the confirmed value as `SESSION_PREFIX`.
+Record the confirmed value as `session_prefix`.
 
 ### 5. Environment file
 
-**Explain first:** "If any service needs vars from `.winter.env` (the seeded `WINTER_PORT_BASE`, or anything `project-setup.md` appends), the `up` script can source it before launching panes. If no service references env vars, `ENV_FILE` can be left unset and panes start in a clean shell."
+**Explain first:** "If any service needs vars from `.winter.env` (the seeded `WINTER_PORT_BASE`, or anything `project-setup.md` appends), the orchestrator can source it before launching each pane. If no service references env vars, `env_file` can be left unset and panes start in a clean shell."
 
-Look back at the env vars collected for each service. If **any** service answered with a non-"none" env var dependency, tell the user: "At least one service uses `.winter.env` — I'll set `ENV_FILE=\".winter.env\"`." and continue.
+Look back at the env vars collected for each service. If **any** service answered with a non-"none" env var dependency, tell the user: "At least one service uses `.winter.env` — I'll set `env_file = \".winter.env\"`." and continue.
 
 If **no** service uses env vars, ask **one** question:
 
-**"No service declared env-var dependencies. Set `ENV_FILE=\".winter.env\"` anyway (so worktree-managed vars like `$WINTER_PORT_BASE` are available in the shell pane), or leave it unset?"**
+**"No service declared env-var dependencies. Set `env_file = \".winter.env\"` anyway (so worktree-managed vars like `$WINTER_PORT_BASE` are available in the shell pane), or leave it unset?"**
 
-- "set" / "yes": record `ENV_FILE=".winter.env"`.
-- "unset" / "no": leave `ENV_FILE` unset.
+- "set" / "yes": record `env_file = ".winter.env"`.
+- "unset" / "no": omit `env_file`.
 
 ### 6. Tmux session layout
 
-**Explain first:** "tmux organises services along two axes: **windows** (separate full-screen tabs, created with `tmux new-window`) and **splits** within a window (horizontal or vertical, created with `tmux split-window`). The `setup_tmux` function uses both to lay out the session; each service is then launched into its pane with `winter_tmux_send_service` (not hand-written `tmux send-keys` — see step 8). Common single-window patterns: vertical split for two services (top/bottom), 2x2 grid for four, or horizontal-then-vertical for three (one big pane + two smaller stacked). Reach for multiple windows when one gets crowded, or to group services logically (e.g. application services in window 0, ad-hoc shells in window 1). Panes are addressed as `<window>.<pane>` — see `setup-tmux.sh.example` for a 2-window layout."
+**Explain first:** "tmux organises services along two axes: **windows** (separate full-screen tabs) and **splits** within a window (horizontal or vertical). The `layout-hook.sh` creates the pane geometry; the orchestrator then sends each service's command into its pane. Panes are addressed as `<window>.<pane>` (both zero-based) — these `target` values in the manifest must exactly match what the layout hook creates. See `winter-service-tmux:/workflow/layout-hook.sh.example` for a 2-window layout."
 
-Based on the services collected, pick a default layout that keeps related services together (e.g. backend + frontend top, shell bottom). Tell the user: "Proposed layout for `<n>` panes: `<pane-0>` top-left, `<pane-1>` top-right, `<pane-2>` bottom-full." (Adjust to the actual count.)
+Based on the services collected, pick a default layout that keeps related services together (e.g. backend + frontend top, shell bottom). Tell the user: "Proposed layout for `<n>` panes: `<service-0>` → `0.0`, `<service-1>` → `0.1`, `<service-2>` → `1.0`." (Adjust to the actual count.)
 
 Ask **one** question:
 
@@ -154,80 +147,94 @@ Ask **one** question:
 - "use this": continue.
 - different layout: take the user's description literally — they know their screen.
 
-Record the pane order (this becomes the `WINTER_TMUX_SERVICE_NAMES` array) and the split commands needed for `setup_tmux`. For single-window layouts, `WINTER_TMUX_SERVICE_NAMES` entries are bare names (`"backend"`, `"frontend"`) — each one's pane index is its array position within window 0. For multi-window layouts, use the prefixed form `"<window>.<pane>:<name>"` for **every** entry (even the window-0 ones), e.g. `("0.0:backend" "0.1:frontend" "1.0:worker")`. The bare form is a single-window shorthand; mixing it with prefixed entries technically works but reads ambiguously — pick one form per layout.
+Record each service's `<window>.<pane>` target. Every target must be unique.
 
-### 7. Status header (optional)
+### 7. Status URLs (optional)
 
-**Explain first:** "`./status` reads each pane's last few lines and prints them. You can optionally inject a header above that — useful for showing per-environment URLs, ports, or any quick orientation info. If you don't need one, leave it as a no-op."
+**Explain first:** "`./status` reads each pane's last few lines and prints them. You can optionally inject a header above that with per-env URLs — useful for showing which ports are live. If you don't need one, skip this step."
 
 Ask **one** question:
 
-**"Want a `./status` header? If yes, what should it show? (e.g. `http://localhost:$BACKEND_PORT` for the backend, the worktree's database name)"**
+**"Want status URL entries? If yes, what should they show? (e.g. `http://localhost:$BACKEND_PORT` for the backend)"**
 
-- "no" / "skip": leave `status_header()` as `:` (no-op).
-- otherwise: take the user's spec and translate it into shell that reads `$ENV_PATH` (when set) and echoes the requested info.
+- "no" / "skip": omit `[[status.url]]` entries.
+- otherwise: take the user's spec and translate it into `[[status.url]]` table entries. `${VAR}` placeholders in the `url` field are resolved from the env file at status time.
 
-### 8. Write setup-tmux.sh
+### 8. Write setup-tmux.toml
 
-**Explain first:** "Now I have everything needed to write `workspace:/ai/project/setup-tmux.sh`. The canonical structural template is `winter-service-tmux:/workflow/setup-tmux.sh.example` — follow it exactly and substitute the values we just collected."
+**Explain first:** "Now I have everything needed to write `workspace:/ai/project/setup-tmux.toml`. The annotated schema reference is `winter-service-tmux:/workflow/setup-tmux.toml.example` — follow its structure and substitute the values we just collected."
 
-Tell the user: "Writing `setup-tmux.sh` with `SESSION_PREFIX=<prefix>`, `ENV_FILE=<value-or-unset>`, `WINTER_TMUX_SERVICE_NAMES=(<list>)`, `winter_service_cmd` declarations for `<n>` services, and `setup_tmux`..."
+Tell the user: "Writing `setup-tmux.toml` with `session_prefix = "<prefix>"`, `env_file = "<value-or-omitted>"`, `<n>` services..."
 
-Then write the file. Read `setup-tmux.sh.example` and reproduce its structure exactly, substituting:
+Then write the file. Read `setup-tmux.toml.example` and reproduce its structure, substituting:
 
-- `SESSION_PREFIX` ← the value confirmed in the session-prefix step.
-- `ENV_FILE` ← `".winter.env"` if the env-file step recorded one; omit the line otherwise.
-- `WINTER_TMUX_SERVICE_NAMES` ← the array built in the tmux-session-layout step. For multi-window layouts, use the `"<window>.<pane>:<name>"` form for **every** entry (don't mix bare and prefixed); for single-window layouts, the bare form is fine throughout.
-- `winter_service_cmd` declarations ← one `winter_service_cmd <name> "<command>"` line per service, built from the start commands and run directories collected in the identify-services step. Root-level service → just its command (`winter_service_cmd backend "npm run start:dev"`); subdirectory service → relative `cd` prefix (`winter_service_cmd backend "cd apps/backend && npm run start:dev"`). Give a purely interactive pane (e.g. `shell`) an empty command (`winter_service_cmd shell ""`). These declarations are the single source of truth `setup_tmux` and `./restart` both read, so every name in `WINTER_TMUX_SERVICE_NAMES` needs one. (`winter_service_cmd` is provided by `winter-service-tmux.sh`.)
-- `setup_tmux` body ← the layout: `tmux split-window` / `tmux new-window` calls for the windows and panes you designed, launching each service with `winter_tmux_send_service "$session" "<window>.<pane>" "<name>"` (the helper from `winter-service-tmux.sh` that looks up the `winter_service_cmd` command, resets the pane cwd, sources the env file, and sends it). Do **not** hand-write `tmux send-keys` start strings — route every launch through the helper so `./up` and `./restart` stay identical. The example shows both vertical splits within a window and `tmux new-window` to start a second window — use whichever the layout requires.
-- `status_header` ← the body from the status-header step, or `:` for the no-op default.
+- `session_prefix` ← the value confirmed in the session-prefix step.
+- `env_file` ← `".winter.env"` if the env-file step recorded one; omit the key otherwise.
+- `layout_hook` ← `"ai/project/layout-hook.sh"` (the file you'll write in the next step).
+- `[[service]]` entries ← one table per service, with `name`, `target`, and `command`. Empty command (`command = ""`) for interactive panes.
+- `[[status.url]]` entries ← one table per URL from the status-URLs step (omit section if none).
+
+Confirm: "`setup-tmux.toml` written at `workspace:/ai/project/setup-tmux.toml`."
+
+**Machine-specific overrides (mention, don't prompt):** the committed `setup-tmux.toml` can be paired with a gitignored `setup-tmux.local.toml` for per-machine tweaks. The reader merges it on top using the same key-based semantics (scalars replace; services/URLs merge by `name`/`label`). Don't create one as part of this guide — just tell the user it exists: "If you ever need machine-specific overrides, drop a gitignored `setup-tmux.local.toml` next to this file and it'll be merged on top." Only create it if the user explicitly asks; if you do, ensure it's gitignored.
+
+### 9. Write layout-hook.sh
+
+**Explain first:** "The orchestrator calls `layout-hook.sh` once per `./up`, after creating the tmux session and before sending any service commands. Its only job is to create the windows and panes the manifest's `[[service]]` targets refer to — nothing else. The annotated contract is `winter-service-tmux:/workflow/layout-hook.sh.example`."
+
+Tell the user: "Writing `layout-hook.sh` to create the pane geometry we designed..."
+
+Then write the file at `workspace:/ai/project/layout-hook.sh`. Read `layout-hook.sh.example` and follow its contract exactly:
+
+- `set -euo pipefail`
+- Assert `WINTER_TMUX_SESSION` and `WINTER_TMUX_WORKTREE_DIR` are set (the orchestrator always provides them).
+- Create windows/panes to match the targets declared in `setup-tmux.toml`. Pane `0.0` always exists after `tmux new-session` — don't create it. Use `tmux split-window` for splits within a window; use `tmux new-window` for additional windows.
+- **DO NOT** `tmux send-keys`, source env files, or `cd`. The orchestrator does all of that.
+- End with a `tmux select-pane` (and optionally `tmux select-window`) to set the focus on attach.
 
 After writing, mark it executable:
 
 ```bash
-chmod +x ./ai/project/setup-tmux.sh
+chmod +x ./ai/project/layout-hook.sh
 ```
 
-Confirm: "`setup-tmux.sh` written and executable at `workspace:/ai/project/setup-tmux.sh`."
+Confirm: "`layout-hook.sh` written and executable at `workspace:/ai/project/layout-hook.sh`."
 
-**Machine-specific overrides (mention, don't prompt):** the committed `setup-tmux.sh` can be paired with a gitignored `setup-tmux.local.sh` for per-machine tweaks. `./up`, `./down`, `./status`, and `./restart` source the local file **on top of** the committed one (overlay), so it can override `SESSION_PREFIX`/`ENV_FILE`, redefine `setup_tmux`/`status_header`, extend `WINTER_TMUX_SERVICE_NAMES`, or add/override a service's command with another `winter_service_cmd` call, without touching version control. Don't create one as part of this guide — just tell the user it exists: "If you ever need machine-specific overrides, drop a gitignored `setup-tmux.local.sh` next to this file and it'll be layered on top." Only create it if the user explicitly asks; if you do, ensure it's gitignored.
+### 10. Validate
 
-### 9. Generate setup-tmux.md (agent context)
+**Explain first:** "Before testing live, validate the manifest — the validator catches schema errors, duplicate targets, and missing-service issues before they reach a running tmux session."
 
-**Explain first:** "Agents read service output via `tmux capture-pane -t <session>:<window>.<pane>`. Without help, they'd have to open `setup-tmux.sh` and count `WINTER_TMUX_SERVICE_NAMES` indices to translate a service name into a pane target. `setup-tmux.md` is a short, agent-readable sibling that lists each declared service alongside its `<window>.<pane>` and the capture-pane template. It is **generated from `setup-tmux.sh`, never hand-written** — the `render-setup-md.sh` generator reads `SESSION_PREFIX` and `WINTER_TMUX_SERVICE_NAMES` from the config you just wrote and emits the canonical content. Going forward, `setup-tmux.md` is regenerated automatically on every workspace reconcile (`winter ws init`) via the `on_workspace_reconcile` hook. Run it manually now (and whenever `setup-tmux.sh` changes outside of a reconcile); `winter doctor` flags drift if it falls out of sync."
-
-Run the generator from the workspace root (where the rest of this guide runs), writing to the canonical path (resolve `winter-service-tmux:` via the `# Winter Extensions` block in workspace `CLAUDE.md`):
+Run the validator from the extension worktree (substituting the actual worktree path):
 
 ```bash
-"<ext-dir>/workflow/render-setup-md.sh" "$PWD" > ./ai/project/setup-tmux.md
+cd alpha/winter-service-tmux
+PYTHONPATH=src python3 -m service_manifest.cli validate ../../
 ```
 
-The generator resolves each service to its target (bare entry → window 0 at its array index; `"<window>.<pane>:<name>"` → the explicit target), keeps the `<SESSION_PREFIX>`/`<worktree>`/`<session>`/`<window>`/`<pane>`/`<service>` placeholders literal for the reading agent to fill per-worktree, and is byte-stable across runs.
+If the validator reports errors, fix them in `setup-tmux.toml` (or `layout-hook.sh` if the issue is an unreachable `layout_hook` path) before continuing.
 
-Tell the user "Generated `setup-tmux.md` with `<n>` services: `backend` → `0.0`, `frontend` → `0.1`, ..." (read the targets back from the output).
+Confirm: "Manifest validates cleanly."
 
-Confirm: "`setup-tmux.md` is at `workspace:/ai/project/setup-tmux.md`, generated from `setup-tmux.sh`. Future reconciles keep it in sync automatically; `winter doctor` warns if it ever drifts."
+### 11. Smoke test (optional)
 
-### 10. Smoke test (optional)
-
-**Explain first:** "Before declaring done, you can verify the script parses and `./up` reaches the launch step in a real worktree. The cheapest test: run `./up` in `alpha/` and check `./status` afterward."
+**Explain first:** "Before declaring done, you can verify the full lifecycle in a real worktree."
 
 Ask **one** question:
 
-**"Run a smoke test in `alpha/` now (`cd alpha && ./up && ./status`), or skip?"**
+**"Run a smoke test in `alpha/` now (`cd alpha && ./up && ./status && ./down`), or skip?"**
 
 - "skip" / "no": continue.
-- "run" / "yes": tell the user "Running `./up` in `alpha/`..." then run it. After it returns, run `./status` and report the pane states. If any pane shows an error, tell the user exactly what failed and offer to revisit the relevant step.
+- "run" / "yes": tell the user "Running `./up` in `alpha/`..." then run it. After it returns, run `./status` and report the pane states. If any pane shows an error, tell the user exactly what failed and offer to revisit the relevant step. After confirming services look healthy, run `./down` to tear the session down cleanly.
 
 ### Final report
 
 Summarise everything that happened in a single message:
-- `setup-tmux.sh` location: `workspace:/ai/project/setup-tmux.sh` (created / replaced / unchanged)
-- `SESSION_PREFIX`
-- `ENV_FILE` (value or "unset")
-- `WINTER_TMUX_SERVICE_NAMES` (the list)
-- Number of panes and their start commands
-- `setup-tmux.md`: `workspace:/ai/project/setup-tmux.md` (written / unchanged)
+- `setup-tmux.toml` location: `workspace:/ai/project/setup-tmux.toml` (created / replaced / unchanged)
+- `session_prefix`
+- `env_file` (value or "unset")
+- Services declared (names and targets)
+- `layout-hook.sh`: `workspace:/ai/project/layout-hook.sh` (written / unchanged)
+- Validation: passed / errors (if errors, what to fix)
 - Smoke test: ran / skipped / failed (if failed, what to fix)
 - Any manual steps still pending
 

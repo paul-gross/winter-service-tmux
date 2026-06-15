@@ -1,166 +1,21 @@
-#!/usr/bin/env bash
-# Restart a single declared service in this env's running tmux session, without
-# touching the other panes. Reaps the target pane's child processes (TERM, then
-# KILL survivors — the same reap pattern as ./down) and re-runs the service's
-# declared command in the same pane. The sanctioned alternative to a manual
-# kill/pkill, and to a full ./down && ./up when only one service is wedged.
-#
-# -E (errtrace) keeps error behavior consistent with ./up.
-set -Eeuo pipefail
+#!/bin/sh
+# Env-root symlink shim — delegates to the Python env_cli door.
+# This script is symlinked into feature env dirs (e.g. alpha/restart).
+# The symlink's parent directory is the worktree; used to derive env + workspace.
 
-# This script is invoked via a symlink in a worktree (e.g. alpha/restart). The
-# symlink's parent directory is the worktree; the worktree's parent is the
-# workspace root.
-INVOKE_DIR="$(cd "$(dirname "$0")" && pwd)"
-WORKTREE_DIR="$INVOKE_DIR"
-WORKTREE_NAME="$(basename "$WORKTREE_DIR")"
-WORKSPACE_DIR="$(cd "$WORKTREE_DIR/.." && pwd)"
-
-# Single positional argument: the service name to restart. Not a flag, and not
-# an env/worktree — the env is derived from this script's symlink directory,
-# exactly like ./up and ./status. Reject a leading-dash arg so a mistyped flag
-# fails loudly instead of being treated as a (then "unknown") service name.
-SERVICE="${1:-}"
-if [[ "$SERVICE" == -* ]]; then
-  echo "Usage: ./restart <service>"
-  echo "  ./restart takes a declared service name, not a flag."
-  exit 1
-fi
-
-# Resolve this script's real directory through the env-dir symlink so we can
-# source the config-path resolver beside it. `readlink -f` is absent on stock
-# macOS, so walk the symlink chain with plain `readlink`.
-SCRIPT_SRC="$0"
-while [[ -L "$SCRIPT_SRC" ]]; do
-  SCRIPT_LINK="$(readlink "$SCRIPT_SRC")"
-  [[ "$SCRIPT_LINK" == /* ]] && SCRIPT_SRC="$SCRIPT_LINK" || SCRIPT_SRC="$(dirname "$SCRIPT_SRC")/$SCRIPT_LINK"
+_SELF="$0"
+while [ -L "$_SELF" ]; do
+    _SELF="$(readlink "$_SELF")"
 done
-SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SRC")" && pwd)"
-# shellcheck source=winter-service-tmux.sh
-source "$SCRIPT_DIR/winter-service-tmux.sh"
+_SRC="$(cd "$(dirname "$_SELF")/.." && pwd)/src"
 
-# Load project tmux config — the committed setup-tmux.sh (legacy: workflow.sh)
-# with an optional setup-tmux.local.sh (legacy: workflow.local.sh) overlaid on
-# top. See winter-service-tmux.sh for the resolution rules.
-winter_tmux_config_files "$WORKSPACE_DIR"
-if [[ ${#WINTER_TMUX_CONFIG_FILES[@]} -eq 0 ]]; then
-  echo "Error: No setup-tmux.sh config found."
-  echo "Expected at: workspace:/ai/project/setup-tmux.sh (legacy: workflow.sh)"
-  exit 1
-fi
-for cfg in "${WINTER_TMUX_CONFIG_FILES[@]}"; do
-  # shellcheck disable=SC1090
-  source "$cfg"
-done
+# Resolve the symlink's absolute path (the env-dir entry, not the real script).
+# Passed as argv[0] so env_cli._resolve_from_argv0 can infer env name + workspace.
+_SHIM_ABS="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 
-: "${SESSION_PREFIX:?setup-tmux.sh must define SESSION_PREFIX}"
-
-if [[ -z "${WINTER_TMUX_SERVICE_NAMES+x}" ]]; then
-  echo "Error: setup-tmux.sh must define WINTER_TMUX_SERVICE_NAMES array"
-  exit 1
-fi
-
-# Resolve declared service names to their <window>.<pane> targets, mirroring the
-# status script: a bare "<name>" entry sits at window 0, pane = array index; a
-# "<window>.<pane>:<name>" entry carries an explicit target.
-PANE_TARGET=""
-DECLARED_NAMES=()
-for i in "${!WINTER_TMUX_SERVICE_NAMES[@]}"; do
-  ENTRY="${WINTER_TMUX_SERVICE_NAMES[$i]}"
-  if [[ "$ENTRY" == *:* ]]; then
-    target="${ENTRY%%:*}"
-    sname="${ENTRY#*:}"
-  else
-    target="0.$i"
-    sname="$ENTRY"
-  fi
-  DECLARED_NAMES+=("$sname")
-  [[ "$sname" == "$SERVICE" ]] && PANE_TARGET="$target"
-done
-
-if [[ -z "$SERVICE" ]]; then
-  echo "Usage: ./restart <service>"
-  echo "Declared services: ${DECLARED_NAMES[*]}"
-  exit 1
-fi
-if [[ -z "$PANE_TARGET" ]]; then
-  echo "Error: unknown service '$SERVICE'"
-  echo "Declared services: ${DECLARED_NAMES[*]}"
-  exit 1
-fi
-
-# Confirm the service has a declared command before reaping its pane, so we never
-# tear a service down and then fail to bring it back.
-if ! winter_service_cmd_get "$SERVICE" >/dev/null; then
-  echo "Error: service '$SERVICE' has no command declared."
-  echo "  Declare it with 'winter_service_cmd $SERVICE \"<command>\"' in setup-tmux.sh."
-  echo "  See winter-service-tmux:/workflow/setup-tmux.sh.example for the shape."
-  exit 1
-fi
-
-if [[ "$WORKTREE_NAME" == "project" ]]; then
-  echo "Error: cannot run services directly in project/"
-  exit 1
-fi
-
-SESSION="${SESSION_PREFIX}-${WORKTREE_NAME}"
-if ! tmux has-session -t "$SESSION" 2>/dev/null; then
-  echo "No running session '$SESSION'. Start it with ./up."
-  exit 1
-fi
-
-# Resolve the env file the same way ./up does, so the restarted service starts
-# with the same vars as a fresh launch. Exported for winter_tmux_send_service.
-export WINTER_TMUX_WORKTREE_DIR="$WORKTREE_DIR"
-export ENV_PATH=""
-if [[ -n "${ENV_FILE:-}" ]]; then
-  ENV_PATH="$WORKTREE_DIR/$ENV_FILE"
-  if [[ -f "$ENV_PATH" ]]; then
-    # shellcheck disable=SC1090
-    source "$ENV_PATH"
-  else
-    echo "Warning: ENV_FILE=$ENV_FILE not found at $ENV_PATH"
-    ENV_PATH=""
-  fi
-fi
-
-# Locate the target pane's process (the pane's login shell — services are launched
-# into it via send-keys, so the shell is the pane leader and must survive).
-PANE_PID=$(tmux list-panes -s -t "$SESSION" -F '#{window_index}.#{pane_index} #{pane_pid}' 2>/dev/null \
-  | awk -v t="$PANE_TARGET" '$1==t {print $2}')
-if [[ -z "$PANE_PID" ]]; then
-  echo "Error: pane $PANE_TARGET for service '$SERVICE' not found in session $SESSION."
-  echo "  The running session may not match setup-tmux.sh — try ./down && ./up."
-  exit 1
-fi
-
-# Reap the pane's children (everything below the shell), TERM then KILL the
-# survivors — the same sweep as ./down, but scoped to this one pane and excluding
-# the pane's shell so we can reuse it. When the service has already exited the
-# pane is at a prompt with no children, so this is a no-op and the re-run below
-# still succeeds.
-PANE_CHILD_PIDS=()
-collect_descendants() {
-  local children
-  children=$(pgrep -P "$1" 2>/dev/null) || true
-  for child in $children; do
-    collect_descendants "$child"
-  done
-  [[ "$1" -ne "$PANE_PID" ]] && PANE_CHILD_PIDS+=("$1")
-  # Explicit success: the trailing [[ ]] above is false for the pane's own shell,
-  # which would otherwise make the function return 1 and abort the script under
-  # `set -e`. (The ./down twin runs without -e, so it never needed this.)
-  return 0
-}
-collect_descendants "$PANE_PID"
-
-if [[ ${#PANE_CHILD_PIDS[@]} -gt 0 ]]; then
-  kill -TERM "${PANE_CHILD_PIDS[@]}" 2>/dev/null || true
-  sleep 1
-  kill -9 "${PANE_CHILD_PIDS[@]}" 2>/dev/null || true
-fi
-
-# Re-run the declared command in the same pane via the shared launch helper —
-# the identical path setup_tmux uses on first start.
-winter_tmux_send_service "$SESSION" "$PANE_TARGET" "$SERVICE"
-echo "Restarted '$SERVICE' in $SESSION:$PANE_TARGET"
+export PYTHONPATH="$_SRC${PYTHONPATH:+:$PYTHONPATH}"
+exec python3 -c "
+import sys, runpy
+sys.argv[0] = sys.argv.pop(1)
+runpy.run_module('service_orchestrator.env_cli', run_name='__main__', alter_sys=False)
+" "$_SHIM_ABS" restart "$@"

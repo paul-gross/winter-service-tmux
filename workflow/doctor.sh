@@ -5,13 +5,11 @@
 # workspace:/ai/winter-cli/setup.md#doctor-probes. One object per line:
 #   {"name": "...", "status": "pass|warn|fail", "message"?: "...", "remediation"?: "..."}
 #
-# Five checks:
+# Four checks:
 #   1. tmux binary on PATH
-#   2. SESSION_PREFIX declared in workspace:/ai/project/setup-tmux.sh
-#      (legacy: workflow.sh), with an optional setup-tmux.local.sh overlay
+#   2. setup-tmux.toml manifest present and valid (required — this is now live config)
 #   3. session-name collision with foreign tmux sessions sharing the prefix
-#   4. setup-tmux.md is in sync with setup-tmux.sh (rendered by render-setup-md.sh)
-#   5. setup-tmux.toml manifest valid (when present); layout_hook exists + executable
+#   4. layout_hook exists and is executable (when declared in the manifest)
 #
 # Each probe is implemented as an explicit branch that emits its own NDJSON;
 # the script exits 0 at the end so per-probe statuses surface individually.
@@ -21,11 +19,8 @@ set -uo pipefail
 
 WORKSPACE_DIR="${WINTER_WORKSPACE_DIR:-$(pwd)}"
 
-# This probe is invoked by its real path (not a symlink), so its sibling
-# config-path resolver is reachable via $0's directory.
-DOCTOR_DIR="$(cd "$(dirname "$0")" && pwd)"
-# shellcheck source=winter-service-tmux.sh
-source "$DOCTOR_DIR/winter-service-tmux.sh"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+EXT_SRC="$SCRIPT_DIR/../src"
 
 json_escape() {
   local s="$1"
@@ -66,137 +61,21 @@ else
     "Install tmux (e.g. \`dnf install tmux\`, \`brew install tmux\`)."
 fi
 
-# ---- Probe 2: SESSION_PREFIX declared -----------------------------------------
-
-session_prefix=""
-session_prefix_ok=false
-
-winter_tmux_config_files "$WORKSPACE_DIR"
-
-if [[ ${#WINTER_TMUX_CONFIG_FILES[@]} -eq 0 ]]; then
-  emit "SESSION_PREFIX declared" fail \
-    "no setup-tmux.sh found at ai/project/ (legacy: workflow.sh)" \
-    "Run the workflow-setup walkthrough at winter-service-tmux:/ai/workflow-setup.md."
-else
-  # Source in a subshell so the config's functions/vars don't leak into our
-  # environment. Disable -u inside the subshell because the config isn't
-  # required to be -u-safe (it's user-authored). The committed file and its
-  # optional local overlay are sourced in order; if either fails, the probe
-  # reports a source failure. Status and value are joined by US (\x1f) so an
-  # empty SESSION_PREFIX survives $()'s trailing-newline stripping.
-  source_result=$(
-    set +u
-    ok=true
-    for cfg in "${WINTER_TMUX_CONFIG_FILES[@]}"; do
-      source "$cfg" 2>/dev/null || ok=false
-    done
-    if [[ "$ok" == true ]]; then
-      printf 'ok\x1f%s' "${SESSION_PREFIX:-}"
-    else
-      printf 'fail\x1f'
-    fi
-  )
-  source_status="${source_result%%$'\x1f'*}"
-  source_value="${source_result#*$'\x1f'}"
-
-  case "$source_status" in
-    ok)
-      if [[ -n "$source_value" ]]; then
-        session_prefix="$source_value"
-        session_prefix_ok=true
-        emit "SESSION_PREFIX declared" pass "SESSION_PREFIX=$session_prefix"
-      else
-        emit "SESSION_PREFIX declared" fail \
-          "tmux config does not define SESSION_PREFIX" \
-          "Re-run the workflow-setup walkthrough at winter-service-tmux:/ai/workflow-setup.md."
-      fi
-      ;;
-    *)
-      emit "SESSION_PREFIX declared" fail \
-        "tmux config failed to source (syntax error or runtime failure)" \
-        "Fix workspace:/ai/project/setup-tmux.sh (legacy: workflow.sh), then re-run \`winter doctor\`."
-      ;;
-  esac
-fi
-
-# ---- Probe 3: session-name collision ------------------------------------------
-
-if [[ "$tmux_ok" != true ]]; then
-  emit "session-name collision" warn "skipped: tmux not installed"
-elif [[ "$session_prefix_ok" != true ]]; then
-  emit "session-name collision" warn "skipped: SESSION_PREFIX undetermined"
-else
-  # `tmux ls` exits non-zero when no tmux server is running; treat that as
-  # "no collision possible" rather than an error.
-  if ! sessions=$(tmux ls -F '#{session_name}' 2>/dev/null); then
-    emit "session-name collision" pass "no tmux server running"
-  else
-    conflicting=()
-    while IFS= read -r session; do
-      [[ -z "$session" ]] && continue
-      [[ "$session" == "$session_prefix"-* ]] || continue
-      env_name="${session#"$session_prefix"-}"
-      # A session is "ours" iff `<workspace>/<env_name>/` is a feature env —
-      # i.e. has a `.winter.env` file (seeded by `winter ws init`). Plain
-      # directory existence is too weak: the workspace root also contains
-      # source checkouts, helper dirs (`tools/`, `projects/`, `docs/`), and
-      # standalone extension clones whose names could otherwise mask a real
-      # collision.
-      if [[ -f "$WORKSPACE_DIR/$env_name/.winter.env" ]]; then
-        continue
-      fi
-      conflicting+=("$session")
-    done <<< "$sessions"
-
-    if [[ ${#conflicting[@]} -eq 0 ]]; then
-      emit "session-name collision" pass "no foreign tmux sessions match \`${session_prefix}-*\`"
-    else
-      emit "session-name collision" warn \
-        "foreign tmux sessions match \`${session_prefix}-*\`: ${conflicting[*]}" \
-        "Rename SESSION_PREFIX in setup-tmux.sh or stop the foreign sessions."
-    fi
-  fi
-fi
-
-# ---- Probe 4: setup-tmux.md drift ---------------------------------------------
+# ---- Probe 2: setup-tmux.toml manifest ----------------------------------------
 #
-# setup-tmux.md is generated from setup-tmux.sh by render-setup-md.sh, wired into
-# `winter ws init` (workspace reconcile) via the on_workspace_reconcile hook. It
-# goes stale only if setup-tmux.sh is edited without a reconcile — this probe
-# renders fresh and byte-diffs the committed file.
-
-render_script="$DOCTOR_DIR/render-setup-md.sh"
-committed_md="$WORKSPACE_DIR/ai/project/setup-tmux.md"
-regen_hint="Run 'winter ws init' to regenerate it (workspace reconcile), or run render-setup-md.sh directly if you changed setup-tmux.sh outside a reconcile."
-
-if [[ "$session_prefix_ok" != true ]]; then
-  emit "setup-tmux.md fresh" warn "skipped: no parseable setup-tmux.sh"
-elif ! rendered_md=$("$render_script" "$WORKSPACE_DIR" 2>/dev/null); then
-  emit "setup-tmux.md fresh" warn "skipped: render-setup-md.sh could not render from setup-tmux.sh"
-elif [[ ! -f "$committed_md" ]]; then
-  emit "setup-tmux.md fresh" warn "no setup-tmux.md found at ai/project/" "$regen_hint"
-elif printf '%s\n' "$rendered_md" | cmp -s - "$committed_md"; then
-  emit "setup-tmux.md fresh" pass "setup-tmux.md matches setup-tmux.sh"
-else
-  emit "setup-tmux.md fresh" warn \
-    "setup-tmux.md is stale — it no longer matches setup-tmux.sh" \
-    "$regen_hint"
-fi
-
-# ---- Probe 5: setup-tmux.toml manifest ---------------------------------------
-#
-# If ai/project/setup-tmux.toml is absent, skip quietly (manifest is optional in
-# issue #7).  If present, validate it via the service_manifest CLI (stdlib-only,
-# python3 required).  Violations → warn (not fail: manifest isn't load-bearing
-# yet).  Also checks that layout_hook points to an existing executable file when
-# declared.
+# The manifest is now live config (not optional). A missing or invalid manifest
+# is a real finding (fail). Validates via the service_manifest CLI (stdlib-only,
+# python3 required). Populates session_prefix for probe 3.
 
 MANIFEST_PATH="$WORKSPACE_DIR/ai/project/setup-tmux.toml"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-EXT_SRC="$SCRIPT_DIR/../src"
+
+manifest_ok=false
+session_prefix=""
 
 if [[ ! -f "$MANIFEST_PATH" ]]; then
-  emit "setup-tmux.toml manifest" pass "no setup-tmux.toml present (optional)"
+  emit "setup-tmux.toml manifest" fail \
+    "no setup-tmux.toml found at ai/project/" \
+    "Create ai/project/setup-tmux.toml — see winter-service-tmux:/workflow/setup-tmux.toml.example."
 else
   # Locate a python interpreter.
   PY=""
@@ -233,35 +112,85 @@ print("; ".join(violations))
       violations_msg=$(printf '%s' "$parsed" | sed -n '3p')
 
       if [[ "$ok_val" == "true" ]]; then
+        manifest_ok=true
         emit "setup-tmux.toml manifest" pass "setup-tmux.toml valid"
       else
-        emit "setup-tmux.toml manifest" warn \
-          "${vcount} violation(s): ${violations_msg}"
+        emit "setup-tmux.toml manifest" fail \
+          "${vcount} violation(s): ${violations_msg}" \
+          "Fix ai/project/setup-tmux.toml, then re-run \`winter doctor\`."
       fi
     fi
 
-    # ---- layout_hook sub-check ------------------------------------------------
-    # Extract layout_hook value from the TOML with a simple grep — the field is
-    # a top-level scalar so the pattern is reliable.
-    # Note: reads the committed setup-tmux.toml only. The gitignored
-    # setup-tmux.local.toml overlay may declare a different layout_hook; that
-    # override is not seen by this bash sub-check.
-    layout_hook_val=$(grep -E '^[[:space:]]*layout_hook[[:space:]]*=' "$MANIFEST_PATH" \
+    # Extract session_prefix from the TOML for probe 3 (simple grep; the field
+    # is a top-level scalar so the pattern is reliable).
+    session_prefix=$(grep -E '^[[:space:]]*session_prefix[[:space:]]*=' "$MANIFEST_PATH" \
       | sed 's/.*=[[:space:]]*//' | tr -d '"'"'"' ')
+  fi
+fi
 
-    if [[ -n "$layout_hook_val" ]]; then
-      hook_path="$WORKSPACE_DIR/$layout_hook_val"
-      if [[ -x "$hook_path" ]]; then
-        emit "setup-tmux.toml layout_hook" pass "layout_hook exists and is executable: $layout_hook_val"
-      elif [[ -f "$hook_path" ]]; then
-        emit "setup-tmux.toml layout_hook" warn \
-          "layout_hook file exists but is not executable: $layout_hook_val" \
-          "Run: chmod +x $hook_path"
-      else
-        emit "setup-tmux.toml layout_hook" warn \
-          "layout_hook file not found: $layout_hook_val" \
-          "Create the file at $hook_path or remove layout_hook from setup-tmux.toml."
+# ---- Probe 3: session-name collision ------------------------------------------
+
+if [[ "$tmux_ok" != true ]]; then
+  emit "session-name collision" warn "skipped: tmux not installed"
+elif [[ "$manifest_ok" != true ]]; then
+  emit "session-name collision" warn "skipped: manifest absent or invalid"
+elif [[ -z "$session_prefix" ]]; then
+  emit "session-name collision" warn "skipped: session_prefix not found in setup-tmux.toml"
+else
+  # `tmux ls` exits non-zero when no tmux server is running; treat that as
+  # "no collision possible" rather than an error.
+  if ! sessions=$(tmux ls -F '#{session_name}' 2>/dev/null); then
+    emit "session-name collision" pass "no tmux server running"
+  else
+    conflicting=()
+    while IFS= read -r session; do
+      [[ -z "$session" ]] && continue
+      [[ "$session" == "$session_prefix"-* ]] || continue
+      env_name="${session#"$session_prefix"-}"
+      # A session is "ours" iff `<workspace>/<env_name>/` is a feature env —
+      # i.e. has a `.winter.env` file (seeded by `winter ws init`). Plain
+      # directory existence is too weak: the workspace root also contains
+      # source checkouts, helper dirs (`tools/`, `projects/`, `docs/`), and
+      # standalone extension clones whose names could otherwise mask a real
+      # collision.
+      if [[ -f "$WORKSPACE_DIR/$env_name/.winter.env" ]]; then
+        continue
       fi
+      conflicting+=("$session")
+    done <<< "$sessions"
+
+    if [[ ${#conflicting[@]} -eq 0 ]]; then
+      emit "session-name collision" pass "no foreign tmux sessions match \`${session_prefix}-*\`"
+    else
+      emit "session-name collision" warn \
+        "foreign tmux sessions match \`${session_prefix}-*\`: ${conflicting[*]}" \
+        "Rename session_prefix in setup-tmux.toml or stop the foreign sessions."
+    fi
+  fi
+fi
+
+# ---- Probe 4: layout_hook exists and is executable ----------------------------
+#
+# Reads the committed setup-tmux.toml only. The gitignored
+# setup-tmux.local.toml overlay may declare a different layout_hook; that
+# override is not seen by this bash sub-check.
+
+if [[ -f "$MANIFEST_PATH" ]]; then
+  layout_hook_val=$(grep -E '^[[:space:]]*layout_hook[[:space:]]*=' "$MANIFEST_PATH" \
+    | sed 's/.*=[[:space:]]*//' | tr -d '"'"'"' ')
+
+  if [[ -n "$layout_hook_val" ]]; then
+    hook_path="$WORKSPACE_DIR/$layout_hook_val"
+    if [[ -x "$hook_path" ]]; then
+      emit "setup-tmux.toml layout_hook" pass "layout_hook exists and is executable: $layout_hook_val"
+    elif [[ -f "$hook_path" ]]; then
+      emit "setup-tmux.toml layout_hook" warn \
+        "layout_hook file exists but is not executable: $layout_hook_val" \
+        "Run: chmod +x $hook_path"
+    else
+      emit "setup-tmux.toml layout_hook" warn \
+        "layout_hook file not found: $layout_hook_val" \
+        "Create the file at $hook_path or remove layout_hook from setup-tmux.toml."
     fi
   fi
 fi

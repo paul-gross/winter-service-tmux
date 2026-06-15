@@ -7,12 +7,11 @@
 # =============================================================================
 #
 # INVOKED BY
-#   The future Python orchestrator (issue #6), once per `./up`, AFTER the
-#   tmux session has been created and BEFORE any service commands are sent.
-#   The field that activates this hook is `layout_hook` in setup-tmux.toml.
-#   Issue #7 ships the example and documents the contract; issue #6 invokes it.
+#   The Python orchestrator, once per `./up`, AFTER the tmux session has been
+#   created and BEFORE any service commands are sent. The field that activates
+#   this hook is `layout_hook` in setup-tmux.toml.
 #
-# ENVIRONMENT PROVIDED (proposed names; issue #6 confirms)
+# ENVIRONMENT PROVIDED
 #   WINTER_TMUX_SESSION       — the fully-qualified tmux session name, e.g. "mp-alpha"
 #   WINTER_TMUX_WORKTREE_DIR  — absolute path to the worktree root
 #   WINTER_ENV                — env name (e.g. "alpha")
