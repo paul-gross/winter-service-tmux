@@ -2,7 +2,7 @@
 
 from dataclasses import FrozenInstanceError
 
-from service_manifest.modules.manifest.model import Service, ServiceManifest, StatusUrl, Target
+from service_manifest.modules.manifest.model import LogConfig, LogMode, Service, ServiceManifest, StatusUrl, Target
 
 
 def test_target_construction_and_equality() -> None:
@@ -103,6 +103,89 @@ def test_service_manifest_is_frozen() -> None:
     )
     with pytest.raises(FrozenInstanceError):
         manifest.session_prefix = "other"  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# LogConfig
+# ---------------------------------------------------------------------------
+
+
+def test_log_config_defaults() -> None:
+    lc = LogConfig()
+    assert lc.rotate_size_bytes == 10485760
+    assert lc.max_rotations == 5
+    assert lc.retention_seconds == 604800
+
+
+def test_log_config_custom_values() -> None:
+    lc = LogConfig(rotate_size_bytes=1024, max_rotations=3, retention_seconds=86400)
+    assert lc.rotate_size_bytes == 1024
+    assert lc.max_rotations == 3
+    assert lc.retention_seconds == 86400
+
+
+def test_log_config_is_frozen() -> None:
+    import pytest
+
+    lc = LogConfig()
+    with pytest.raises(FrozenInstanceError):
+        lc.rotate_size_bytes = 999  # type: ignore[misc]
+
+
+def test_log_config_equality() -> None:
+    assert LogConfig() == LogConfig()
+    assert LogConfig(max_rotations=0) != LogConfig()
+
+
+# ---------------------------------------------------------------------------
+# ServiceManifest.logs default
+# ---------------------------------------------------------------------------
+
+
+def test_service_manifest_logs_defaults_to_log_config() -> None:
+    """ServiceManifest.logs is always present — no null-guard needed."""
+    manifest = ServiceManifest(
+        session_prefix="mp",
+        env_file=None,
+        layout_hook=None,
+        services=(),
+        status_urls=(),
+    )
+    assert isinstance(manifest.logs, LogConfig)
+    assert manifest.logs == LogConfig()
+
+
+def test_service_manifest_logs_custom() -> None:
+    lc = LogConfig(rotate_size_bytes=2048, max_rotations=2, retention_seconds=3600)
+    manifest = ServiceManifest(
+        session_prefix="mp",
+        env_file=None,
+        layout_hook=None,
+        services=(),
+        status_urls=(),
+        logs=lc,
+    )
+    assert manifest.logs == lc
+
+
+# ---------------------------------------------------------------------------
+# Service.log default
+# ---------------------------------------------------------------------------
+
+
+def test_service_log_defaults_to_file_mode() -> None:
+    svc = Service(name="backend", target=Target(window=0, pane=0), command="npm start")
+    assert svc.log == LogMode.FILE
+
+
+def test_service_log_can_be_pane_mode() -> None:
+    svc = Service(name="shell", target=Target(window=1, pane=0), command="", log=LogMode.PANE)
+    assert svc.log == LogMode.PANE
+
+
+def test_service_log_can_be_memory_mode() -> None:
+    svc = Service(name="svc", target=Target(window=0, pane=0), command="cmd", log=LogMode.MEMORY)
+    assert svc.log == LogMode.MEMORY
 
 
 def test_service_manifest_equality() -> None:

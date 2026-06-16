@@ -6,14 +6,37 @@ architecture rule.
 
 ``build_launch_line`` assembles the tmux send-keys launch line for a service
 (env-source, banner, command — same logic as the former bash
-``winter_tmux_send_service`` helper).
+``winter_tmux_send_service`` helper).  When *logfile* and *capture_params* are
+supplied the command is wrapped to pipe through the capture writer so output is
+persisted to the log file while the pane stays live.
 ``last_non_blank_line`` and ``truncate_status_line`` format per-pane output
 for the status display.
 """
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+
+
+def logwriter_path() -> Path:
+    """Return the absolute path to the standalone ``logwriter.py`` script.
+
+    Resolution order:
+    1. If ``WINTER_EXT_DIR`` is set (winter sets it on orchestrator dispatch
+       via the ``winter service`` entrypoint), return
+       ``$WINTER_EXT_DIR/src/service_orchestrator/logwriter.py``.
+    2. Otherwise fall back to the ``__file__``-relative path (used when
+       invoked via the env-root ``./up`` symlink, which does not set
+       ``WINTER_EXT_DIR``).  ``logwriter.py`` lives at
+       ``src/service_orchestrator/logwriter.py``; this file is at
+       ``src/service_orchestrator/modules/orchestrate/``, so we walk up two
+       package levels to reach the ``service_orchestrator`` root.
+    """
+    ext_dir = os.environ.get("WINTER_EXT_DIR")
+    if ext_dir:
+        return Path(ext_dir) / "src" / "service_orchestrator" / "logwriter.py"
+    return Path(__file__).resolve().parents[2] / "logwriter.py"
 
 
 def build_launch_line(
@@ -21,6 +44,9 @@ def build_launch_line(
     env_file_path: Path | None,
     name: str,
     command: str,
+    logfile: Path | None = None,
+    rotate_size_bytes: int | None = None,
+    max_rotations: int | None = None,
 ) -> str:
     """Build the tmux send-keys launch line for one service.
 
@@ -31,6 +57,18 @@ def build_launch_line(
     When *command* is empty (an interactive ``shell`` pane), the trailing
     ``&& <command>`` is omitted — the pane gets the banner and sits at a
     prompt, matching the bash convention.
+
+    When *logfile*, *rotate_size_bytes*, and *max_rotations* are all supplied
+    **and** *command* is non-empty, the command is wrapped so its stdout and
+    stderr pipe through the capture writer::
+
+        cd '<wt>' && source '<env>' && echo '=== <name> ===' &&
+        { <command> ; } 2>&1 | python3 '<writer>' '<logfile>'
+        --rotate-size <N> --max-rotations <M>
+
+    The brace group ``{ <command> ; }`` ensures the redirect and pipe apply to
+    the entire command even when it contains ``&&`` or inner pipes.  The writer
+    echoes every raw line to stdout so the pane stays live.
     """
     prefix = f"cd '{worktree_dir}'"
     if env_file_path is not None:
@@ -38,7 +76,22 @@ def build_launch_line(
 
     line = f"{prefix} && echo '=== {name} ==='"
     if command:
-        line = f"{line} && {command}"
+        capture = (
+            logfile is not None
+            and rotate_size_bytes is not None
+            and max_rotations is not None
+        )
+        if capture:
+            writer = logwriter_path()
+            line = (
+                f"{line} && "
+                f"{{ {command} ; }} 2>&1 | "
+                f"python3 '{writer}' '{logfile}' "
+                f"--rotate-size {rotate_size_bytes} "
+                f"--max-rotations {max_rotations}"
+            )
+        else:
+            line = f"{line} && {command}"
     return line
 
 

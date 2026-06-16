@@ -2,7 +2,7 @@
 
 Covers:
 - All five actions accepted by ``main``
-- ``logs`` refused non-zero with message
+- ``logs`` dispatches to ``log_service.logs`` and returns NDJSON
 - ``restart`` reads ``WINTER_SERVICE_NAME``
 - Missing env / unreadable manifest → non-zero with message containing env name
 - Exit-code passthrough from the service
@@ -47,7 +47,13 @@ def _make_ctx(env: str = "alpha") -> EnvContext:
     )
 
 
-def _patch_container(monkeypatch: pytest.MonkeyPatch, *, ctx: EnvContext, service_rc: int = 0) -> MagicMock:
+def _patch_container(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    ctx: EnvContext,
+    service_rc: int = 0,
+    log_rc: int = 0,
+) -> MagicMock:
     """Patch ``service_orchestrator.cli.Container`` with a fake that returns *ctx* and *service_rc*."""
     mock_builder = MagicMock()
     mock_builder.build.return_value = ctx
@@ -58,9 +64,13 @@ def _patch_container(monkeypatch: pytest.MonkeyPatch, *, ctx: EnvContext, servic
     mock_orchestrator.status.return_value = service_rc
     mock_orchestrator.restart.return_value = service_rc
 
+    mock_log_service = MagicMock()
+    mock_log_service.logs.return_value = log_rc
+
     mock_container = MagicMock()
     mock_container.env_context_builder = mock_builder
     mock_container.orchestrator = mock_orchestrator
+    mock_container.log_service = mock_log_service
 
     import service_orchestrator.cli as cli_mod
 
@@ -102,16 +112,70 @@ def test_main_bad_action_returns_2(capsys: pytest.CaptureFixture[str]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# logs → refused non-zero with message
+# logs → dispatches to log_service.logs and returns its exit code
 # ---------------------------------------------------------------------------
 
 
-def test_main_logs_returns_1(capsys: pytest.CaptureFixture[str]) -> None:
+def test_main_logs_dispatches_to_log_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = _make_ctx("alpha")
+    container = _patch_container(monkeypatch, ctx=ctx, log_rc=0)
+    monkeypatch.setenv("WINTER_LOG_SERVICES", "")
+    monkeypatch.setenv("WINTER_LOG_FOLLOW", "0")
+    monkeypatch.setenv("WINTER_LOG_TAIL", "all")
+    monkeypatch.setenv("WINTER_LOG_SINCE", "")
+    monkeypatch.setenv("WINTER_LOG_UNTIL", "")
+    monkeypatch.setenv("WINTER_LOG_TIMESTAMPS", "0")
+
+    rc = main(["logs", "alpha"])
+
+    assert rc == 0
+    container.log_service.logs.assert_called_once()
+    call_args = container.log_service.logs.call_args
+    assert call_args.args[0] == ctx
+
+
+def test_main_logs_passes_query_services(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from service_orchestrator.modules.orchestrate.log_query import LogQuery
+
+    ctx = _make_ctx("alpha")
+    container = _patch_container(monkeypatch, ctx=ctx, log_rc=0)
+    monkeypatch.setenv("WINTER_LOG_SERVICES", "backend frontend")
+    monkeypatch.setenv("WINTER_LOG_FOLLOW", "0")
+    monkeypatch.setenv("WINTER_LOG_TAIL", "50")
+    monkeypatch.setenv("WINTER_LOG_SINCE", "2026-01-01T00:00:00Z")
+    monkeypatch.setenv("WINTER_LOG_UNTIL", "")
+    monkeypatch.setenv("WINTER_LOG_TIMESTAMPS", "1")
+
+    main(["logs", "alpha"])
+
+    call_args = container.log_service.logs.call_args
+    query: LogQuery = call_args.args[1]
+    assert query.services == ("backend", "frontend")
+    assert query.follow is False
+    assert query.tail == 50
+    assert query.since == "2026-01-01T00:00:00Z"
+    assert query.until == ""
+    assert query.timestamps is True
+
+
+def test_main_logs_passthrough_nonzero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = _make_ctx("alpha")
+    _patch_container(monkeypatch, ctx=ctx, log_rc=1)
+    monkeypatch.setenv("WINTER_LOG_SERVICES", "")
+    monkeypatch.setenv("WINTER_LOG_FOLLOW", "0")
+    monkeypatch.setenv("WINTER_LOG_TAIL", "all")
+    monkeypatch.setenv("WINTER_LOG_SINCE", "")
+    monkeypatch.setenv("WINTER_LOG_UNTIL", "")
+    monkeypatch.setenv("WINTER_LOG_TIMESTAMPS", "0")
+
     rc = main(["logs", "alpha"])
     assert rc == 1
-    captured = capsys.readouterr()
-    assert "logs" in captured.err
-    assert "unsupported" in captured.err.lower()
 
 
 # ---------------------------------------------------------------------------

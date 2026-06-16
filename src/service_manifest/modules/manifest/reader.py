@@ -12,7 +12,7 @@ from pathlib import Path
 
 from service_manifest.core.filesystem import IFilesystemReader
 from service_manifest.modules.manifest.errors import ManifestError
-from service_manifest.modules.manifest.model import Service, ServiceManifest, StatusUrl, Target
+from service_manifest.modules.manifest.model import LogConfig, LogMode, Service, ServiceManifest, StatusUrl, Target
 
 # Relative path from the workspace/worktree root to the manifest directory.
 # Mirrors the bash resolution in winter-service-tmux.sh:
@@ -101,6 +101,8 @@ class ManifestReader:
 
         Scalar fields are replaced by the overlay value when present.
         ``[[service]]`` and ``[[status.url]]`` use keyed override-or-append.
+        ``[logs]`` merges per-key — an overlay ``[logs]`` replaces only the keys
+        it sets, keeping committed values for the rest.
         All other top-level keys are replaced wholesale by the overlay value.
         """
         if not local:
@@ -112,6 +114,12 @@ class ManifestReader:
         for key in ("session_prefix", "env_file", "layout_hook"):
             if key in local:
                 result[key] = local[key]
+
+        # --- [logs]: per-key merge so a local overlay can override one key only ---
+        if "logs" in local:
+            committed_logs: dict = dict(committed.get("logs", {}))  # type: ignore[type-arg]
+            committed_logs.update(local["logs"])
+            result["logs"] = committed_logs
 
         # --- [[service]]: keyed by "name", override-or-append ---
         if "service" in local:
@@ -235,7 +243,21 @@ class ManifestReader:
                     f"service '{name}': command must be a string, got {type(command_raw).__name__}"
                 )
             command: str = command_raw
-            services.append(Service(name=name, target=target, command=command))
+            log_raw = raw.get("log", LogMode.FILE.value)
+            _allowed = [m.value for m in LogMode]
+            if not isinstance(log_raw, str):
+                raise ManifestError(
+                    f"service '{name}': 'log' must be a string "
+                    f"({', '.join(repr(v) for v in _allowed)}), "
+                    f"got {type(log_raw).__name__}"
+                )
+            if log_raw not in _allowed:
+                raise ManifestError(
+                    f"service '{name}': 'log' value {log_raw!r} is not valid; "
+                    f"allowed values are {', '.join(repr(v) for v in _allowed)}"
+                )
+            log_mode = LogMode(log_raw)
+            services.append(Service(name=name, target=target, command=command, log=log_mode))
 
         # --- [[status.url]] ---
         raw_urls: list[dict] = doc.get("status", {}).get("url", [])  # type: ignore[type-arg]
@@ -249,10 +271,25 @@ class ManifestReader:
             url = raw_url.get("url", "")
             status_urls.append(StatusUrl(label=label, url=url))
 
+        # --- [logs] ---
+        raw_logs: dict = doc.get("logs", {})  # type: ignore[type-arg]
+        _log_int_fields = ("rotate_size_bytes", "max_rotations", "retention_seconds")
+        log_kwargs: dict = {}  # type: ignore[type-arg]
+        for field_name in _log_int_fields:
+            if field_name in raw_logs:
+                val = raw_logs[field_name]
+                if not isinstance(val, int):
+                    raise ManifestError(
+                        f"[logs] '{field_name}' must be an integer, got {type(val).__name__}"
+                    )
+                log_kwargs[field_name] = val
+        logs = LogConfig(**log_kwargs)
+
         return ServiceManifest(
             session_prefix=session_prefix,
             env_file=env_file,
             layout_hook=layout_hook,
             services=tuple(services),
             status_urls=tuple(status_urls),
+            logs=logs,
         )

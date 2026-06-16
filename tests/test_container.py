@@ -13,6 +13,7 @@ from service_orchestrator.container import Container
 from service_orchestrator.modules.orchestrate.orchestrator_service import OrchestratorService
 from tests.conftest import (
     FakeLayoutHookRunner,
+    FakeLogRepository,
     FakeProcessReaper,
     FakeTmuxRepository,
     FakeWorkspaceLocator,
@@ -32,12 +33,15 @@ def test_container_resolves_orchestrator_with_fakes() -> None:
     fake_fs = FakeFilesystemReader({Path("/fake/workspace/ai/project/setup-tmux.toml"): toml})
     sm = sm_container_mod.Container(fs=fake_fs)
 
+    log_repo = FakeLogRepository()
+
     container = Container(
         tmux=tmux,
         reaper=reaper,
         hook_runner=hook,
         locator=locator,
         manifest=sm,
+        log_repo=log_repo,
     )
 
     assert isinstance(container.orchestrator, OrchestratorService)
@@ -45,6 +49,7 @@ def test_container_resolves_orchestrator_with_fakes() -> None:
     assert container.reaper is reaper
     assert container.hook_runner is hook
     assert container.locator is locator
+    assert container.log_repo is log_repo
 
 
 def test_container_default_construction_does_not_raise() -> None:

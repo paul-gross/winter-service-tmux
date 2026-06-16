@@ -12,6 +12,12 @@ Per-action parameters arrive via ``WINTER_*`` environment variables:
 - ``WINTER_EXT_DIR``       — path to the extension clone (always set).
 - ``WINTER_EXT_PREFIX``    — resolved symlink prefix (always set).
 - ``WINTER_SERVICE_NAME``  — service name to bounce (set for ``restart``).
+- ``WINTER_LOG_SERVICES``  — space-joined service names; empty = all (set for ``logs``).
+- ``WINTER_LOG_FOLLOW``    — ``1`` = follow, ``0`` = backlog-only (set for ``logs``).
+- ``WINTER_LOG_TAIL``      — positive int or ``all`` (set for ``logs``).
+- ``WINTER_LOG_SINCE``     — RFC3339 timestamp lower bound; empty if unset (set for ``logs``).
+- ``WINTER_LOG_UNTIL``     — RFC3339 timestamp upper bound; empty if unset (set for ``logs``).
+- ``WINTER_LOG_TIMESTAMPS``— ``1`` = timestamps requested (set for ``logs``).
 
 Exit-code passthrough: the orchestrator's return value becomes this process's
 exit code, as required by the contract.
@@ -26,12 +32,33 @@ from pathlib import Path
 from service_manifest.modules.manifest.errors import ManifestError
 from service_orchestrator.container import Container
 from service_orchestrator.modules.orchestrate.errors import OrchestratorError
+from service_orchestrator.modules.orchestrate.log_query import LogQuery
 
 _ACTIONS = ("up", "down", "status", "restart", "logs")
 
 
+def _parse_tail(raw: str) -> int | None:
+    """Parse ``WINTER_LOG_TAIL`` into an int or None.
+
+    ``"all"`` or empty string → ``None`` (return all events).
+    A positive integer string → ``int``.
+    Anything else → ``None`` with a stderr warning.
+    """
+    raw = raw.strip()
+    if not raw or raw == "all":
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        print(
+            f"orchestrate: WINTER_LOG_TAIL '{raw}' is not a valid integer or 'all'; treating as 'all'",
+            file=sys.stderr,
+        )
+        return None
+
+
 def main(argv: list[str]) -> int:
-    """Parse ``[action, env]`` and dispatch to ``OrchestratorService``.
+    """Parse ``[action, env]`` and dispatch to ``OrchestratorService`` or ``LogService``.
 
     Returns an integer exit code (0 = success, non-zero = failure).
     Catches ``OrchestratorError`` and ``ManifestError`` at this boundary;
@@ -53,13 +80,6 @@ def main(argv: list[str]) -> int:
         )
         return 2
 
-    if action == "logs":
-        print(
-            "logs: unsupported action (not implemented until #3)",
-            file=sys.stderr,
-        )
-        return 1
-
     container = Container()
     builder = container.env_context_builder
 
@@ -75,15 +95,13 @@ def main(argv: list[str]) -> int:
         print(f"orchestrate: env '{env}': {exc}", file=sys.stderr)
         return 1
 
-    orchestrator = container.orchestrator
-
     try:
         if action == "up":
-            return orchestrator.up(ctx)
+            return container.orchestrator.up(ctx)
         elif action == "down":
-            return orchestrator.down(ctx)
+            return container.orchestrator.down(ctx)
         elif action == "status":
-            return orchestrator.status(ctx)
+            return container.orchestrator.status(ctx)
         elif action == "restart":
             service_name = os.environ.get("WINTER_SERVICE_NAME", "")
             if not service_name:
@@ -92,7 +110,24 @@ def main(argv: list[str]) -> int:
                     file=sys.stderr,
                 )
                 return 1
-            return orchestrator.restart(ctx, service_name)
+            return container.orchestrator.restart(ctx, service_name)
+        elif action == "logs":
+            services_raw = os.environ.get("WINTER_LOG_SERVICES", "")
+            services = tuple(services_raw.split()) if services_raw.strip() else ()
+            follow = os.environ.get("WINTER_LOG_FOLLOW") == "1"
+            tail = _parse_tail(os.environ.get("WINTER_LOG_TAIL", "all"))
+            since = os.environ.get("WINTER_LOG_SINCE", "")
+            until = os.environ.get("WINTER_LOG_UNTIL", "")
+            timestamps = os.environ.get("WINTER_LOG_TIMESTAMPS") == "1"
+            query = LogQuery(
+                services=services,
+                follow=follow,
+                tail=tail,
+                since=since,
+                until=until,
+                timestamps=timestamps,
+            )
+            return container.log_service.logs(ctx, query)
         else:
             # Should be unreachable — already guarded above.
             print(f"orchestrate: internal error: unhandled action '{action}'", file=sys.stderr)

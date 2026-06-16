@@ -9,11 +9,15 @@ delegated to the injected Protocol seams.
 from __future__ import annotations
 
 import os
+import sys
 
 from service_manifest.modules.manifest.env import interpolate
+from service_manifest.modules.manifest.model import LogMode
 from service_orchestrator.modules.orchestrate.env_context import EnvContext
 from service_orchestrator.modules.orchestrate.errors import OrchestratorError
+from service_orchestrator.modules.orchestrate.follow_clock import IFollowClock
 from service_orchestrator.modules.orchestrate.layout_hook_runner import ILayoutHookRunner
+from service_orchestrator.modules.orchestrate.log_repository import ILogRepository
 from service_orchestrator.modules.orchestrate.reaper import IProcessReaper
 from service_orchestrator.modules.orchestrate.status_report import (
     build_launch_line,
@@ -24,6 +28,24 @@ from service_orchestrator.modules.orchestrate.tmux_repository import ITmuxReposi
 
 _TMUX_WIDTH = 200
 _TMUX_HEIGHT = 50
+
+
+def _segments_to_prune(
+    segments: list,
+    log_repo: ILogRepository,
+    cutoff: float,
+) -> list:
+    """Return the subset of *segments* whose mtime is older than *cutoff*.
+
+    Pure function: takes a list of paths, the log repo (for mtime), and a
+    cutoff timestamp; returns the paths to delete.  Testable without any I/O
+    by injecting a fake log repo.
+    """
+    result = []
+    for path in segments:
+        if log_repo.mtime(path) < cutoff:
+            result.append(path)
+    return result
 
 
 class OrchestratorService:
@@ -37,10 +59,14 @@ class OrchestratorService:
         tmux: ITmuxRepository,
         reaper: IProcessReaper,
         hook_runner: ILayoutHookRunner,
+        log_repo: ILogRepository,
+        clock: IFollowClock | None = None,
     ) -> None:
         self._tmux = tmux
         self._reaper = reaper
         self._hook_runner = hook_runner
+        self._log_repo = log_repo
+        self._clock = clock
 
     # ------------------------------------------------------------------
     # Public actions
@@ -58,6 +84,13 @@ class OrchestratorService:
             print(f"Session '{ctx.session}' is already running.")
             print("Use ./status to check services, or ./down to stop.")
             return 0
+
+        # Prune old rotated log segments opportunistically before starting.
+        # Errors are swallowed so a prune failure never blocks up().
+        try:
+            self.prune(ctx)
+        except Exception as exc:
+            print(f"Warning: prune failed (ignored): {exc}", file=sys.stderr, flush=True)
 
         self._tmux.new_session(
             ctx.session,
@@ -108,14 +141,31 @@ class OrchestratorService:
                 f"manifest targets not found in session '{ctx.session}' after hook: " + ", ".join(missing_targets)
             )
 
+        # Ensure the log directory exists before starting any captured services.
+        self._log_repo.ensure_log_dir(ctx.worktree_dir)
+
         for svc in ctx.manifest.services:
             target = f"{svc.target.window}.{svc.target.pane}"
-            line = build_launch_line(
-                ctx.worktree_dir,
-                ctx.env_file_path,
-                svc.name,
-                svc.command,
-            )
+            # A service is captured iff it has a non-empty command AND log=FILE.
+            captured = bool(svc.command) and svc.log == LogMode.FILE
+            if captured:
+                logfile = self._log_repo.log_path(ctx.worktree_dir, svc.name)
+                line = build_launch_line(
+                    ctx.worktree_dir,
+                    ctx.env_file_path,
+                    svc.name,
+                    svc.command,
+                    logfile=logfile,
+                    rotate_size_bytes=ctx.manifest.logs.rotate_size_bytes,
+                    max_rotations=ctx.manifest.logs.max_rotations,
+                )
+            else:
+                line = build_launch_line(
+                    ctx.worktree_dir,
+                    ctx.env_file_path,
+                    svc.name,
+                    svc.command,
+                )
             self._tmux.send_keys(ctx.session, target, line)
 
         print(f"Started services in tmux session '{ctx.session}'")
@@ -223,6 +273,28 @@ class OrchestratorService:
         self._tmux.send_keys(ctx.session, target, line)
         print(f"Restarted '{service_name}' in {ctx.session}:{target}")
         return 0
+
+    def prune(self, ctx: EnvContext) -> None:
+        """Remove rotated log segments older than the retention window.
+
+        Only operates when the session is NOT running (``tmux.has_session``
+        returns ``False``).  Deletes segments where
+        ``mtime < clock.now() - retention_seconds``.  The active
+        ``<svc>.log`` is never touched — only ``<svc>.log.N`` rotated files.
+
+        A missing clock (``self._clock is None``) is a no-op; callers that
+        need prune should inject the clock via the constructor.
+        """
+        if self._clock is None:
+            return
+        if self._tmux.has_session(ctx.session):
+            return
+        cutoff = self._clock.now() - ctx.manifest.logs.retention_seconds
+        for svc in ctx.manifest.services:
+            segments = self._log_repo.rotated_segments(ctx.worktree_dir, svc.name)
+            to_delete = _segments_to_prune(segments, self._log_repo, cutoff)
+            for path in to_delete:
+                self._log_repo.delete(path)
 
     # ------------------------------------------------------------------
     # Internal helpers

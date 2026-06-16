@@ -1,6 +1,6 @@
 """Tests for service_manifest.modules.manifest.validator — semantic checks over ServiceManifest."""
 
-from service_manifest.modules.manifest.model import Service, ServiceManifest, StatusUrl, Target
+from service_manifest.modules.manifest.model import LogConfig, Service, ServiceManifest, StatusUrl, Target
 from service_manifest.modules.manifest.validator import ManifestValidator
 
 # ---------------------------------------------------------------------------
@@ -14,6 +14,7 @@ def _make_manifest(
     layout_hook: str | None = None,
     services: tuple[Service, ...] = (),
     status_urls: tuple[StatusUrl, ...] = (),
+    logs: LogConfig = LogConfig(),
 ) -> ServiceManifest:
     return ServiceManifest(
         session_prefix=session_prefix,
@@ -21,6 +22,7 @@ def _make_manifest(
         layout_hook=layout_hook,
         services=services,
         status_urls=status_urls,
+        logs=logs,
     )
 
 
@@ -268,3 +270,64 @@ def test_multiple_violations_all_reported() -> None:
 
     # Ensure more than one violation
     assert len(violations) >= 4
+
+
+# ---------------------------------------------------------------------------
+# [logs] value checks
+# ---------------------------------------------------------------------------
+
+
+def test_valid_log_config_no_violations() -> None:
+    manifest = _make_manifest(logs=LogConfig(rotate_size_bytes=1024, max_rotations=5, retention_seconds=3600))
+    assert _validator.validate(manifest) == []
+
+
+def test_log_config_defaults_no_violations() -> None:
+    """Default LogConfig values must all pass validation."""
+    manifest = _make_manifest()
+    assert _validator.validate(manifest) == []
+
+
+def test_rotate_size_bytes_zero_is_violation() -> None:
+    manifest = _make_manifest(logs=LogConfig(rotate_size_bytes=0))
+    violations = _validator.validate(manifest)
+    assert any("rotate_size_bytes" in v for v in violations)
+
+
+def test_rotate_size_bytes_negative_is_violation() -> None:
+    manifest = _make_manifest(logs=LogConfig(rotate_size_bytes=-1))
+    violations = _validator.validate(manifest)
+    assert any("rotate_size_bytes" in v and "-1" in v for v in violations)
+
+
+def test_max_rotations_negative_is_violation() -> None:
+    manifest = _make_manifest(logs=LogConfig(max_rotations=-1))
+    violations = _validator.validate(manifest)
+    assert any("max_rotations" in v and "-1" in v for v in violations)
+
+
+def test_max_rotations_zero_is_valid() -> None:
+    """Zero disables rotation — it is explicitly allowed."""
+    manifest = _make_manifest(logs=LogConfig(max_rotations=0))
+    assert _validator.validate(manifest) == []
+
+
+def test_retention_seconds_negative_is_violation() -> None:
+    manifest = _make_manifest(logs=LogConfig(retention_seconds=-1))
+    violations = _validator.validate(manifest)
+    assert any("retention_seconds" in v and "-1" in v for v in violations)
+
+
+def test_retention_seconds_zero_is_valid() -> None:
+    """Zero disables time-based pruning — it is explicitly allowed."""
+    manifest = _make_manifest(logs=LogConfig(retention_seconds=0))
+    assert _validator.validate(manifest) == []
+
+
+def test_multiple_log_violations_all_reported() -> None:
+    manifest = _make_manifest(logs=LogConfig(rotate_size_bytes=0, max_rotations=-2, retention_seconds=-3))
+    violations = _validator.validate(manifest)
+    assert any("rotate_size_bytes" in v for v in violations)
+    assert any("max_rotations" in v for v in violations)
+    assert any("retention_seconds" in v for v in violations)
+    assert len(violations) == 3

@@ -16,7 +16,7 @@ PYTHONPATH=src python3 -m service_manifest.cli validate <workspace-root>
 
 ## Registering the orchestrator
 
-Add `service_orchestrator = "winter-service-tmux"` as a **root-level key** to the workspace `.winter/config.toml` (see `winter-service-tmux:/winter-ext.toml` for the extension name and `workspace:/ai/winter-cli/usage/service.md` for the full `winter service` contract). `logs` is unsupported until issue #3.
+Add `service_orchestrator = "winter-service-tmux"` as a **root-level key** to the workspace `.winter/config.toml` (see `winter-service-tmux:/winter-ext.toml` for the extension name and `workspace:/ai/winter-cli/usage/service.md` for the full `winter service` contract).
 
 ## Service management rules
 
@@ -27,9 +27,30 @@ Once installed, the workspace conventions are:
 - **To recover a single wedged or crashed service, use `./restart <service>`** — the sanctioned alternative to a manual `kill`/`pkill` or a full `./down && ./up`. It reaps just that service's pane and re-runs its declared command, leaving every other pane in the session running. The argument is a *declared service name*, not an env or worktree (it's env-scoped like `./up`/`./down`/`./status`).
 - **`./status` reports the env it's run from.** `alpha/status` (or `./status` from inside `alpha/`) lists only the `<SESSION_PREFIX>-alpha` session's services; pass `--all` (`./status --all`) for the cross-env view of every running env. There is no `<worktree-name>` argument — scope comes from *which* env's `./status` you invoke, the same way `./up`/`./down` default to their own env.
 - **Run the scripts from an env dir**, not the workspace root — `alpha/up`, or `cd alpha` first. The scripts are env-root symlinks; there is no `./up`/`./down`/`./status`/`./restart` at the workspace root.
-- Read pane output with `tmux capture-pane`. Per-service `<window>.<pane>` targets are declared in the `target` field of each `[[service]]` entry in `workspace:/ai/project/setup-tmux.toml`.
+- **To read service output, use `winter service logs <env>`** (preferred) — output is captured to `<env>/.winter/logs/<service>.log` on `up` and persists across restarts, `down`, and teardown. Logs are timestamped and searchable. Examples:
+
+  ```bash
+  winter service logs alpha              # all services, full backlog
+  winter service logs alpha backend      # one service
+  winter service logs alpha -f           # follow (live tail, Ctrl-C to exit)
+  winter service logs alpha -n 50        # last 50 events
+  winter service logs alpha --since 2026-06-15T10:00:00Z   # time-bounded
+  ```
+
+  The wire contract and rendering (plain lines vs. NDJSON) are winter's responsibility — see `workspace:/ai/winter-cli/usage/service.md`. There is no env-root `./logs` script; the interface is `winter service logs`.
+- **Not all services are captured the same way.** Each `[[service]]` entry has a `log` field (default `"file"`) that controls how its output is captured and read:
+  - `"file"` (default): stdout/stderr is captured to `<env>/.winter/logs/<svc>.log` via the capture writer; `logs` reads the persisted file (timestamped, survives `down`). Note: the live pane shows plain (uncolored) output because stdout is piped.
+  - `"pane"`: the service is launched bare (TTY preserved); `logs` reads the pane buffer via `tmux capture-pane` on demand (no file persistence, no timestamps, requires a running session). Natural for interactive panes (`shell`) or services where TTY fidelity matters more than persistence.
+  - `"memory"`: accepted and validated; not yet implemented — `logs` emits nothing for memory-mode services (future work).
+  Services with an empty `command` (interactive panes) are always launched bare regardless of `log`.
 
 Tmux session names are `<SESSION_PREFIX>-<env>` — e.g. `mp-alpha`. The prefix is declared as `session_prefix` in `workspace:/ai/project/setup-tmux.toml`.
+
+## Log capture configuration
+
+File-mode log output lands at `<env>/.winter/logs/<service>.log`, persists across `down` and teardown, and is size-rotated. Log behavior is configured via the `[logs]` table in `workspace:/ai/project/setup-tmux.toml`; per-machine overrides go in the gitignored `setup-tmux.local.toml`. The full key/default table and overlay semantics are documented in `winter-service-tmux:/workflow/setup-tmux.toml.example` and `winter-service-tmux:/workflow/setup-tmux.local.toml.example`.
+
+**Note on mixed-mode output:** pane-mode events carry no timestamp and sort before file-mode events in the merged stream. When `-n N` spans both file and pane services, N is an approximation across the mixed set.
 
 ## Testing changed orchestrator code against a worktree
 

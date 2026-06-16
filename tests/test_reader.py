@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from service_manifest.modules.manifest.errors import ManifestError
-from service_manifest.modules.manifest.model import Service, ServiceManifest, StatusUrl, Target
+from service_manifest.modules.manifest.model import LogConfig, LogMode, Service, ServiceManifest, StatusUrl, Target
 from service_manifest.modules.manifest.reader import ManifestReader
 from tests.fakes import FakeFilesystemReader
 
@@ -532,3 +532,233 @@ command = "cmd"
 """
     with pytest.raises(ManifestError, match="quoted string"):
         _read({_COMMITTED_PATH: content})
+
+
+# ---------------------------------------------------------------------------
+# [logs] table parsing
+# ---------------------------------------------------------------------------
+
+
+def test_full_logs_table_parsed() -> None:
+    content = """\
+session_prefix = "mp"
+
+[logs]
+rotate_size_bytes = 2048
+max_rotations = 3
+retention_seconds = 86400
+"""
+    manifest = _read({_COMMITTED_PATH: content})
+    assert manifest.logs == LogConfig(
+        rotate_size_bytes=2048, max_rotations=3, retention_seconds=86400
+    )
+
+
+def test_partial_logs_table_fills_defaults() -> None:
+    """Only max_rotations set — the other two fields use LogConfig defaults."""
+    content = """\
+session_prefix = "mp"
+
+[logs]
+max_rotations = 10
+"""
+    manifest = _read({_COMMITTED_PATH: content})
+    assert manifest.logs.max_rotations == 10
+    assert manifest.logs.rotate_size_bytes == LogConfig().rotate_size_bytes
+    assert manifest.logs.retention_seconds == LogConfig().retention_seconds
+
+
+def test_absent_logs_table_uses_defaults() -> None:
+    manifest = _read({_COMMITTED_PATH: 'session_prefix = "mp"\n'})
+    assert manifest.logs == LogConfig()
+
+
+def test_logs_non_int_field_raises() -> None:
+    content = """\
+session_prefix = "mp"
+
+[logs]
+rotate_size_bytes = "big"
+"""
+    with pytest.raises(ManifestError, match="rotate_size_bytes"):
+        _read({_COMMITTED_PATH: content})
+
+
+def test_logs_non_int_max_rotations_raises() -> None:
+    content = """\
+session_prefix = "mp"
+
+[logs]
+max_rotations = 5.5
+"""
+    with pytest.raises(ManifestError, match="max_rotations"):
+        _read({_COMMITTED_PATH: content})
+
+
+# ---------------------------------------------------------------------------
+# [logs] overlay — per-key merge
+# ---------------------------------------------------------------------------
+
+
+def test_overlay_logs_single_key_overrides_only_that_key() -> None:
+    """Local overlay with one [logs] key keeps committed values for the rest."""
+    committed = """\
+session_prefix = "mp"
+
+[logs]
+rotate_size_bytes = 2048
+max_rotations = 3
+retention_seconds = 86400
+"""
+    local = """\
+[logs]
+rotate_size_bytes = 52428800
+"""
+    manifest = _read({_COMMITTED_PATH: committed, _LOCAL_PATH: local})
+    assert manifest.logs.rotate_size_bytes == 52428800
+    assert manifest.logs.max_rotations == 3
+    assert manifest.logs.retention_seconds == 86400
+
+
+def test_overlay_logs_with_no_committed_logs_uses_defaults_plus_override() -> None:
+    """No committed [logs] table; local sets one key — defaults fill the rest."""
+    committed = 'session_prefix = "mp"\n'
+    local = """\
+[logs]
+retention_seconds = 0
+"""
+    manifest = _read({_COMMITTED_PATH: committed, _LOCAL_PATH: local})
+    assert manifest.logs.retention_seconds == 0
+    assert manifest.logs.rotate_size_bytes == LogConfig().rotate_size_bytes
+    assert manifest.logs.max_rotations == LogConfig().max_rotations
+
+
+# ---------------------------------------------------------------------------
+# Per-service log field
+# ---------------------------------------------------------------------------
+
+
+def test_service_log_pane_parsed() -> None:
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "watcher"
+target = "1.0"
+command = "npm run watch"
+log = "pane"
+"""
+    manifest = _read({_COMMITTED_PATH: content})
+    assert manifest.services[0].log == LogMode.PANE
+
+
+def test_service_log_file_parsed() -> None:
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "backend"
+target = "0.0"
+command = "npm run start:dev"
+log = "file"
+"""
+    manifest = _read({_COMMITTED_PATH: content})
+    assert manifest.services[0].log == LogMode.FILE
+
+
+def test_service_log_memory_parsed() -> None:
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "svc"
+target = "0.0"
+command = "cmd"
+log = "memory"
+"""
+    manifest = _read({_COMMITTED_PATH: content})
+    assert manifest.services[0].log == LogMode.MEMORY
+
+
+def test_service_log_defaults_to_file_when_absent() -> None:
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "backend"
+target = "0.0"
+command = "npm start"
+"""
+    manifest = _read({_COMMITTED_PATH: content})
+    assert manifest.services[0].log == LogMode.FILE
+
+
+def test_service_log_invalid_string_raises_naming_allowed_values() -> None:
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "svc"
+target = "0.0"
+command = "cmd"
+log = "yes"
+"""
+    with pytest.raises(ManifestError, match="'log'"):
+        _read({_COMMITTED_PATH: content})
+
+
+def test_service_log_non_string_raises() -> None:
+    """A non-string log value (e.g. boolean true) must be rejected with a clear error."""
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "svc"
+target = "0.0"
+command = "cmd"
+log = true
+"""
+    with pytest.raises(ManifestError, match="'log'"):
+        _read({_COMMITTED_PATH: content})
+
+
+def test_overlay_service_log_pane_inherits_through_merge() -> None:
+    """The per-service log field rides the existing {**committed, **overlay} merge."""
+    committed = """\
+session_prefix = "mp"
+
+[[service]]
+name = "backend"
+target = "0.0"
+command = "npm start"
+log = "pane"
+"""
+    # Local overlay changes command only — log="pane" should be preserved.
+    local = """\
+[[service]]
+name = "backend"
+command = "npm run start:debug"
+"""
+    manifest = _read({_COMMITTED_PATH: committed, _LOCAL_PATH: local})
+    assert manifest.services[0].command == "npm run start:debug"
+    assert manifest.services[0].log == LogMode.PANE
+
+
+def test_overlay_service_can_override_log_to_file() -> None:
+    """Local overlay can change log mode for a committed service."""
+    committed = """\
+session_prefix = "mp"
+
+[[service]]
+name = "watcher"
+target = "0.0"
+command = "npm run watch"
+log = "pane"
+"""
+    local = """\
+[[service]]
+name = "watcher"
+log = "file"
+"""
+    manifest = _read({_COMMITTED_PATH: committed, _LOCAL_PATH: local})
+    assert manifest.services[0].log == LogMode.FILE

@@ -11,14 +11,39 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from service_orchestrator.modules.orchestrate.status_report import (
     build_launch_line,
     last_non_blank_line,
+    logwriter_path,
     truncate_status_line,
 )
 
 _WORKTREE = Path("/workspace/alpha")
 _ENV_FILE = Path("/workspace/alpha/.winter.env")
+
+
+# ---------------------------------------------------------------------------
+# logwriter_path — env-var and fallback branches
+# ---------------------------------------------------------------------------
+
+
+def test_logwriter_path_uses_winter_ext_dir_when_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When WINTER_EXT_DIR is set, logwriter_path() returns path beneath it."""
+    monkeypatch.setenv("WINTER_EXT_DIR", "/opt/ext/service-tmux")
+    result = logwriter_path()
+    assert result == Path("/opt/ext/service-tmux/src/service_orchestrator/logwriter.py")
+
+
+def test_logwriter_path_falls_back_to_file_relative_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When WINTER_EXT_DIR is absent, logwriter_path() falls back to __file__-relative path."""
+    monkeypatch.delenv("WINTER_EXT_DIR", raising=False)
+    result = logwriter_path()
+    # Must end with the expected relative tail.
+    assert result.name == "logwriter.py"
+    assert result.parts[-2] == "service_orchestrator"
+    assert result.is_absolute()
 
 
 # ---------------------------------------------------------------------------
@@ -77,6 +102,44 @@ def test_build_launch_line_source_before_banner() -> None:
     assert parts[0].startswith("cd ")
     assert parts[1].startswith("source ")
     assert "echo '=== svc ==='" in parts[2]
+
+
+def test_build_launch_line_wrapped_when_logfile_supplied() -> None:
+    """When logfile + rotate params are supplied, command is wrapped through the writer."""
+    logfile = Path("/workspace/alpha/.winter/logs/svc.log")
+    writer = logwriter_path()
+    line = build_launch_line(
+        _WORKTREE,
+        None,
+        "svc",
+        "npm run start",
+        logfile=logfile,
+        rotate_size_bytes=10485760,
+        max_rotations=5,
+    )
+    expected = (
+        f"cd '{_WORKTREE}' && echo '=== svc ===' && "
+        f"{{ npm run start ; }} 2>&1 | "
+        f"python3 '{writer}' '{logfile}' "
+        f"--rotate-size 10485760 --max-rotations 5"
+    )
+    assert line == expected
+
+
+def test_build_launch_line_bare_when_command_empty_and_logfile_supplied() -> None:
+    """Empty command → bare banner-only line even when logfile params are supplied."""
+    logfile = Path("/workspace/alpha/.winter/logs/shell.log")
+    line = build_launch_line(
+        _WORKTREE,
+        None,
+        "shell",
+        "",
+        logfile=logfile,
+        rotate_size_bytes=10485760,
+        max_rotations=5,
+    )
+    assert line == f"cd '{_WORKTREE}' && echo '=== shell ==='"
+    assert "python3" not in line
 
 
 # ---------------------------------------------------------------------------

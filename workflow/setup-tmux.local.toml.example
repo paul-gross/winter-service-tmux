@@ -25,12 +25,20 @@
 # another project's tmux sessions on a shared machine.
 session_prefix = "myprefix"
 
+# Override a single [logs] key — the reader merges [logs] per-key, so only
+# the keys you set here replace the committed values; the rest keep their
+# committed defaults.  Example: store larger log files locally.
+[logs]
+rotate_size_bytes = 52428800  # 50 MiB (committed default is 10 MiB)
+
 # Override a committed service by name — change only what differs locally.
-# The orchestrator will use "my-debug-backend" as the command for this pane
+# The orchestrator will use "npm run start:debug" as the command for this pane
 # instead of the committed "npm run start:dev", keeping name and target.
+# log can also be overridden per-service: "file" (default), "pane", or "memory".
 [[service]]
 name = "backend"
 command = "npm run start:debug"
+log = "pane"
 
 # Append a personal service that isn't in the committed manifest.
 # The layout hook (or setup_tmux for now) must also be updated locally to

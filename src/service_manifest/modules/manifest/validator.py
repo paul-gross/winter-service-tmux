@@ -56,6 +56,9 @@ class ManifestValidator:
         - No duplicate service names.
         - No duplicate ``target`` values across services.
         - All targets have non-negative ``window`` and ``pane`` values.
+        - ``logs.rotate_size_bytes`` is positive (> 0).
+        - ``logs.max_rotations`` is non-negative (>= 0).
+        - ``logs.retention_seconds`` is non-negative (>= 0).
         - When *env* is provided: every ``${VAR}`` in a ``status.url`` template
           resolves against *env*; unresolvable vars are reported per-label.
         """
@@ -65,6 +68,7 @@ class ManifestValidator:
         self._check_service_names(manifest, violations)
         self._check_duplicate_targets(manifest, violations)
         self._check_target_non_negative(manifest, violations)
+        self._check_log_config(manifest, violations)
 
         if env is not None:
             self._check_status_url_vars(manifest, env, violations)
@@ -133,6 +137,24 @@ class ManifestValidator:
                 violations.append(
                     f"service '{service.name}': target pane {target.pane} is negative"
                 )
+
+    @staticmethod
+    def _check_log_config(
+        manifest: ServiceManifest, violations: list[str]
+    ) -> None:
+        logs = manifest.logs
+        if logs.rotate_size_bytes <= 0:
+            violations.append(
+                f"[logs] 'rotate_size_bytes' must be positive, got {logs.rotate_size_bytes}"
+            )
+        if logs.max_rotations < 0:
+            violations.append(
+                f"[logs] 'max_rotations' must be non-negative, got {logs.max_rotations}"
+            )
+        if logs.retention_seconds < 0:
+            violations.append(
+                f"[logs] 'retention_seconds' must be non-negative, got {logs.retention_seconds}"
+            )
 
     @staticmethod
     def _check_status_url_vars(

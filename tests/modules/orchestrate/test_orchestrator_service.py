@@ -11,11 +11,18 @@ from pathlib import Path
 import pytest
 
 import service_manifest.container as sm_container_mod
-from service_manifest.modules.manifest.model import ServiceManifest
+from service_manifest.modules.manifest.model import LogConfig, Service, ServiceManifest, Target
 from service_orchestrator.modules.orchestrate.env_context import EnvContext
 from service_orchestrator.modules.orchestrate.errors import OrchestratorError
-from service_orchestrator.modules.orchestrate.orchestrator_service import OrchestratorService
-from tests.conftest import FakeLayoutHookRunner, FakeProcessReaper, FakeTmuxRepository
+from service_orchestrator.modules.orchestrate.orchestrator_service import OrchestratorService, _segments_to_prune
+from service_orchestrator.modules.orchestrate.status_report import logwriter_path
+from tests.conftest import (
+    FakeFollowClock,
+    FakeLayoutHookRunner,
+    FakeLogRepository,
+    FakeProcessReaper,
+    FakeTmuxRepository,
+)
 from tests.fakes import FakeFilesystemReader
 
 # ---------------------------------------------------------------------------
@@ -84,6 +91,8 @@ def _make_service(
     tmux: FakeTmuxRepository | None = None,
     reaper: FakeProcessReaper | None = None,
     hook_runner: FakeLayoutHookRunner | None = None,
+    log_repo: FakeLogRepository | None = None,
+    clock: FakeFollowClock | None = None,
 ) -> OrchestratorService:
     if tmux is None:
         tmux = FakeTmuxRepository()
@@ -91,10 +100,14 @@ def _make_service(
         reaper = FakeProcessReaper()
     if hook_runner is None:
         hook_runner = FakeLayoutHookRunner()
+    if log_repo is None:
+        log_repo = FakeLogRepository()
     return OrchestratorService(
         tmux=tmux,
         reaper=reaper,
         hook_runner=hook_runner,
+        log_repo=log_repo,
+        clock=clock,
     )
 
 
@@ -149,11 +162,12 @@ def test_up_sends_one_send_keys_per_service() -> None:
 
 
 def test_up_send_keys_exact_launch_line_with_env_file() -> None:
-    """The exact launch line matches the bash winter_tmux_send_service pattern."""
+    """Captured services get the writer-wrapped launch line; log=False gets bare."""
     tmux = FakeTmuxRepository()
     hook = FakeLayoutHookRunner()
+    log_repo = FakeLogRepository()
     ctx = _make_ctx(env_file_path=_ENV_FILE)
-    svc = _make_service(tmux=tmux, hook_runner=hook)
+    svc = _make_service(tmux=tmux, hook_runner=hook, log_repo=log_repo)
 
     def _add_panes() -> None:
         tmux.seed_session("mp-alpha", {"0.0": 100, "0.1": 101})
@@ -162,23 +176,45 @@ def test_up_send_keys_exact_launch_line_with_env_file() -> None:
 
     svc.up(ctx)
 
-    # backend line
+    # Both services are captured (log=LogMode.FILE default, non-empty command).
+    writer = logwriter_path()
+    manifest = ctx.manifest
+    rotate_size = manifest.logs.rotate_size_bytes
+    max_rot = manifest.logs.max_rotations
+
+    # backend line — captured
     backend_line = next(line for _, t, line in tmux.sent if t == "0.0")
-    expected_backend = f"cd '{_WORKTREE}' && source '{_ENV_FILE}' && echo '=== backend ===' && npm run start:dev"
+    backend_logfile = log_repo.log_path(_WORKTREE, "backend")
+    expected_backend = (
+        f"cd '{_WORKTREE}' && source '{_ENV_FILE}' && echo '=== backend ===' && "
+        f"{{ npm run start:dev ; }} 2>&1 | "
+        f"python3 '{writer}' '{backend_logfile}' "
+        f"--rotate-size {rotate_size} --max-rotations {max_rot}"
+    )
     assert backend_line == expected_backend
 
-    # frontend line
+    # frontend line — captured
     frontend_line = next(line for _, t, line in tmux.sent if t == "0.1")
-    expected_frontend = f"cd '{_WORKTREE}' && source '{_ENV_FILE}' && echo '=== frontend ===' && npm run dev"
+    frontend_logfile = log_repo.log_path(_WORKTREE, "frontend")
+    expected_frontend = (
+        f"cd '{_WORKTREE}' && source '{_ENV_FILE}' && echo '=== frontend ===' && "
+        f"{{ npm run dev ; }} 2>&1 | "
+        f"python3 '{writer}' '{frontend_logfile}' "
+        f"--rotate-size {rotate_size} --max-rotations {max_rot}"
+    )
     assert frontend_line == expected_frontend
+
+    # ensure_log_dir was called once
+    assert log_repo.ensure_log_dir_calls == [_WORKTREE]
 
 
 def test_up_send_keys_exact_launch_line_without_env_file() -> None:
-    """Without env_file_path, the source step is omitted."""
+    """Without env_file_path, the source step is omitted; captured service still wrapped."""
     tmux = FakeTmuxRepository()
     hook = FakeLayoutHookRunner()
+    log_repo = FakeLogRepository()
     ctx = _make_ctx(env_file_path=None)
-    svc = _make_service(tmux=tmux, hook_runner=hook)
+    svc = _make_service(tmux=tmux, hook_runner=hook, log_repo=log_repo)
 
     def _add_panes() -> None:
         tmux.seed_session("mp-alpha", {"0.0": 100, "0.1": 101})
@@ -187,8 +223,19 @@ def test_up_send_keys_exact_launch_line_without_env_file() -> None:
 
     svc.up(ctx)
 
+    writer = logwriter_path()
+    manifest = ctx.manifest
+    rotate_size = manifest.logs.rotate_size_bytes
+    max_rot = manifest.logs.max_rotations
+    backend_logfile = log_repo.log_path(_WORKTREE, "backend")
+
     backend_line = next(line for _, t, line in tmux.sent if t == "0.0")
-    expected = f"cd '{_WORKTREE}' && echo '=== backend ===' && npm run start:dev"
+    expected = (
+        f"cd '{_WORKTREE}' && echo '=== backend ===' && "
+        f"{{ npm run start:dev ; }} 2>&1 | "
+        f"python3 '{writer}' '{backend_logfile}' "
+        f"--rotate-size {rotate_size} --max-rotations {max_rot}"
+    )
     assert backend_line == expected
 
 
@@ -603,3 +650,399 @@ command = ""
     assert len(tmux.sent) == 1
     _, _, line = tmux.sent[0]
     assert line == f"cd '{_WORKTREE}' && echo '=== shell ==='"
+
+
+# ---------------------------------------------------------------------------
+# up — capture writer integration: captured, bare (empty-command), log=False
+# ---------------------------------------------------------------------------
+
+
+def test_up_captured_service_gets_writer_wrapped_line() -> None:
+    """Non-empty command with log=True is wrapped through the capture writer."""
+    toml = """\
+session_prefix = "mp"
+
+[[service]]
+name = "docs"
+target = "0.0"
+command = "npm run docs"
+
+[logs]
+rotate_size_bytes = 5242880
+max_rotations = 3
+"""
+    tmux = FakeTmuxRepository()
+    hook = FakeLayoutHookRunner()
+    log_repo = FakeLogRepository()
+    manifest = _make_manifest(toml)
+    ctx = _make_ctx(manifest=manifest, env_file_path=None)
+
+    _orig_new_session = tmux.new_session
+
+    def _new_session_with_pane(session: str, cwd: object, width: object, height: object) -> None:
+        _orig_new_session(session, cwd, width, height)  # type: ignore[arg-type]
+        tmux._sessions[session]["0.0"] = 100
+
+    tmux.new_session = _new_session_with_pane  # type: ignore[method-assign]
+
+    svc = _make_service(tmux=tmux, hook_runner=hook, log_repo=log_repo)
+    svc.up(ctx)
+
+    writer = logwriter_path()
+    logfile = log_repo.log_path(_WORKTREE, "docs")
+    expected = (
+        f"cd '{_WORKTREE}' && echo '=== docs ===' && "
+        f"{{ npm run docs ; }} 2>&1 | "
+        f"python3 '{writer}' '{logfile}' "
+        f"--rotate-size 5242880 --max-rotations 3"
+    )
+    _, _, line = tmux.sent[0]
+    assert line == expected
+    assert log_repo.ensure_log_dir_calls == [_WORKTREE]
+
+
+def test_up_pane_mode_service_gets_bare_line() -> None:
+    """Service with log='pane' skips capture wrapping; bare launch line is sent."""
+    toml = """\
+session_prefix = "mp"
+
+[[service]]
+name = "worker"
+target = "0.0"
+command = "python -m worker"
+log = "pane"
+"""
+    tmux = FakeTmuxRepository()
+    log_repo = FakeLogRepository()
+    manifest = _make_manifest(toml)
+    ctx = _make_ctx(manifest=manifest, env_file_path=None)
+
+    _orig_new_session = tmux.new_session
+
+    def _new_session_with_pane(session: str, cwd: object, width: object, height: object) -> None:
+        _orig_new_session(session, cwd, width, height)  # type: ignore[arg-type]
+        tmux._sessions[session]["0.0"] = 100
+
+    tmux.new_session = _new_session_with_pane  # type: ignore[method-assign]
+
+    svc = _make_service(tmux=tmux, log_repo=log_repo)
+    svc.up(ctx)
+
+    _, _, line = tmux.sent[0]
+    expected = f"cd '{_WORKTREE}' && echo '=== worker ===' && python -m worker"
+    assert line == expected
+    # ensure_log_dir is still called once regardless
+    assert log_repo.ensure_log_dir_calls == [_WORKTREE]
+
+
+def test_up_memory_mode_service_gets_bare_line() -> None:
+    """Service with log='memory' skips capture wrapping; bare launch line is sent."""
+    toml = """\
+session_prefix = "mp"
+
+[[service]]
+name = "worker"
+target = "0.0"
+command = "python -m worker"
+log = "memory"
+"""
+    tmux = FakeTmuxRepository()
+    log_repo = FakeLogRepository()
+    manifest = _make_manifest(toml)
+    ctx = _make_ctx(manifest=manifest, env_file_path=None)
+
+    _orig_new_session = tmux.new_session
+
+    def _new_session_with_pane(session: str, cwd: object, width: object, height: object) -> None:
+        _orig_new_session(session, cwd, width, height)  # type: ignore[arg-type]
+        tmux._sessions[session]["0.0"] = 100
+
+    tmux.new_session = _new_session_with_pane  # type: ignore[method-assign]
+
+    svc = _make_service(tmux=tmux, log_repo=log_repo)
+    svc.up(ctx)
+
+    _, _, line = tmux.sent[0]
+    expected = f"cd '{_WORKTREE}' && echo '=== worker ===' && python -m worker"
+    assert line == expected
+
+
+def test_up_file_mode_with_command_gets_writer_wrapped_line() -> None:
+    """log=FILE + non-empty command → writer-wrapped launch line."""
+    toml = """\
+session_prefix = "mp"
+
+[[service]]
+name = "api"
+target = "0.0"
+command = "python -m api"
+log = "file"
+"""
+    tmux = FakeTmuxRepository()
+    log_repo = FakeLogRepository()
+    manifest = _make_manifest(toml)
+    ctx = _make_ctx(manifest=manifest, env_file_path=None)
+
+    _orig_new_session = tmux.new_session
+
+    def _new_session_with_pane(session: str, cwd: object, width: object, height: object) -> None:
+        _orig_new_session(session, cwd, width, height)  # type: ignore[arg-type]
+        tmux._sessions[session]["0.0"] = 100
+
+    tmux.new_session = _new_session_with_pane  # type: ignore[method-assign]
+
+    svc = _make_service(tmux=tmux, log_repo=log_repo)
+    svc.up(ctx)
+
+    _, _, line = tmux.sent[0]
+    assert "python3" in line
+    assert "logwriter" in line
+
+
+def test_up_ensure_log_dir_called_once() -> None:
+    """ensure_log_dir is called exactly once per up() regardless of service count."""
+    tmux = FakeTmuxRepository()
+    hook = FakeLayoutHookRunner()
+    log_repo = FakeLogRepository()
+    ctx = _make_ctx()
+
+    def _add_panes() -> None:
+        tmux.seed_session("mp-alpha", {"0.0": 100, "0.1": 101})
+
+    hook._side_effect = _add_panes
+
+    svc = _make_service(tmux=tmux, hook_runner=hook, log_repo=log_repo)
+    svc.up(ctx)
+
+    assert len(log_repo.ensure_log_dir_calls) == 1
+    assert log_repo.ensure_log_dir_calls[0] == _WORKTREE
+
+
+# ---------------------------------------------------------------------------
+# Prune helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_prune_manifest(retention_seconds: int = 604800) -> ServiceManifest:
+    """Build a minimal single-service manifest for prune tests."""
+    return ServiceManifest(
+        session_prefix="mp",
+        env_file=".winter.env",
+        layout_hook=None,
+        services=(Service(name="docs", target=Target(window=0, pane=0), command="cmd"),),
+        status_urls=(),
+        logs=LogConfig(retention_seconds=retention_seconds),
+    )
+
+
+def _make_prune_ctx(retention_seconds: int = 604800) -> EnvContext:
+    return EnvContext(
+        env="alpha",
+        workspace_root=_WORKSPACE,
+        worktree_dir=_WORKTREE,
+        manifest=_make_prune_manifest(retention_seconds),
+        env_vars=None,
+        env_file_path=None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# _segments_to_prune — pure helper unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_segments_to_prune_returns_old_segments() -> None:
+    """Segments with mtime < cutoff are returned."""
+    log_repo = FakeLogRepository()
+    old_seg = Path("/logs/docs.log.1")
+    log_repo.seed_mtime(old_seg, 1000.0)
+    result = _segments_to_prune([old_seg], log_repo, cutoff=2000.0)
+    assert result == [old_seg]
+
+
+def test_segments_to_prune_keeps_recent_segments() -> None:
+    """Segments with mtime >= cutoff are not returned."""
+    log_repo = FakeLogRepository()
+    recent_seg = Path("/logs/docs.log.1")
+    log_repo.seed_mtime(recent_seg, 3000.0)
+    result = _segments_to_prune([recent_seg], log_repo, cutoff=2000.0)
+    assert result == []
+
+
+def test_segments_to_prune_mixed() -> None:
+    """Only segments older than cutoff are returned."""
+    log_repo = FakeLogRepository()
+    old_seg = Path("/logs/docs.log.2")
+    recent_seg = Path("/logs/docs.log.1")
+    log_repo.seed_mtime(old_seg, 500.0)
+    log_repo.seed_mtime(recent_seg, 3000.0)
+    result = _segments_to_prune([old_seg, recent_seg], log_repo, cutoff=2000.0)
+    assert result == [old_seg]
+
+
+# ---------------------------------------------------------------------------
+# prune() — session guard, deletion, active-file safety
+# ---------------------------------------------------------------------------
+
+
+def test_prune_deletes_old_rotated_segment_when_session_not_running() -> None:
+    """Old rotated segment is deleted when the session is not running.
+
+    now=700000, retention=604800 → cutoff=95200; segment mtime=1 < 95200 → deleted.
+    """
+    tmux = FakeTmuxRepository()  # no session seeded → has_session returns False
+    log_repo = FakeLogRepository()
+    clock = FakeFollowClock(current_time=700000.0)
+    seg = Path("/fake/workspace/alpha/.winter/logs/docs.log.1")
+    log_repo.seed_rotated_segments("docs", [seg])
+    log_repo.seed_mtime(seg, 1.0)  # very old: mtime=1 < cutoff=95200
+
+    ctx = _make_prune_ctx(retention_seconds=604800)
+    svc = OrchestratorService(tmux=tmux, reaper=FakeProcessReaper(), hook_runner=FakeLayoutHookRunner(), log_repo=log_repo, clock=clock)
+    svc.prune(ctx)
+
+    assert seg in log_repo.deleted
+
+
+def test_prune_skips_deletion_when_session_is_running() -> None:
+    """Prune does nothing when the env session is already running.
+
+    Even with an old segment (mtime=1) and now=700000 → cutoff=95200 (which
+    would normally trigger deletion), the has_session guard fires first.
+    """
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 100})  # session IS running
+    log_repo = FakeLogRepository()
+    clock = FakeFollowClock(current_time=700000.0)
+    seg = Path("/fake/workspace/alpha/.winter/logs/docs.log.1")
+    log_repo.seed_rotated_segments("docs", [seg])
+    log_repo.seed_mtime(seg, 1.0)  # old — would be deleted if session not running
+
+    ctx = _make_prune_ctx()
+    svc = OrchestratorService(tmux=tmux, reaper=FakeProcessReaper(), hook_runner=FakeLayoutHookRunner(), log_repo=log_repo, clock=clock)
+    svc.prune(ctx)
+
+    assert log_repo.deleted == []
+
+
+def test_prune_keeps_recent_segment() -> None:
+    """Segment within retention window is not deleted.
+
+    now=700000, retention=604800 → cutoff=95200; segment mtime=500000 > 95200 → kept.
+    """
+    tmux = FakeTmuxRepository()
+    log_repo = FakeLogRepository()
+    clock = FakeFollowClock(current_time=700000.0)
+    seg = Path("/fake/workspace/alpha/.winter/logs/docs.log.1")
+    log_repo.seed_rotated_segments("docs", [seg])
+    log_repo.seed_mtime(seg, 500000.0)  # within retention window
+
+    ctx = _make_prune_ctx(retention_seconds=604800)
+    svc = OrchestratorService(tmux=tmux, reaper=FakeProcessReaper(), hook_runner=FakeLayoutHookRunner(), log_repo=log_repo, clock=clock)
+    svc.prune(ctx)
+
+    assert log_repo.deleted == []
+
+
+def test_prune_active_log_never_deleted() -> None:
+    """The active <svc>.log is never returned by rotated_segments, so prune cannot delete it.
+
+    rotated_segments only returns .log.N files; the active .log is excluded by
+    design.  This test verifies the fake correctly excludes the active log and
+    that prune never touches it.
+    """
+    tmux = FakeTmuxRepository()
+    log_repo = FakeLogRepository()
+    clock = FakeFollowClock(current_time=10000.0)
+    # rotated_segments returns only rotated files (no active .log)
+    active_log = Path("/fake/workspace/alpha/.winter/logs/docs.log")
+    log_repo.seed_rotated_segments("docs", [])  # no rotated segs
+    log_repo.seed_mtime(active_log, 1.0)  # would be prunable if eligible
+
+    ctx = _make_prune_ctx()
+    svc = OrchestratorService(tmux=tmux, reaper=FakeProcessReaper(), hook_runner=FakeLayoutHookRunner(), log_repo=log_repo, clock=clock)
+    svc.prune(ctx)
+
+    assert active_log not in log_repo.deleted
+    assert log_repo.deleted == []
+
+
+# ---------------------------------------------------------------------------
+# prune-on-up: ordering and failure-safety
+# ---------------------------------------------------------------------------
+
+
+def test_up_calls_prune_before_new_session() -> None:
+    """prune() runs before new_session() in up().
+
+    We verify ordering by recording the sequence of calls:
+    - prune checks rotated_segments (called on log_repo)
+    - new_session is called on tmux
+    Any segment deletion must precede session creation.
+
+    now=700000, retention=604800 → cutoff=95200; segs mtime=1 < 95200 → deleted.
+    """
+    tmux = FakeTmuxRepository()
+    log_repo = FakeLogRepository()
+    clock = FakeFollowClock(current_time=700000.0)
+    # Seed old rotated segments for the manifest services (backend + frontend).
+    seg_backend = Path("/fake/workspace/alpha/.winter/logs/backend.log.1")
+    seg_frontend = Path("/fake/workspace/alpha/.winter/logs/frontend.log.1")
+    log_repo.seed_rotated_segments("backend", [seg_backend])
+    log_repo.seed_rotated_segments("frontend", [seg_frontend])
+    log_repo.seed_mtime(seg_backend, 1.0)
+    log_repo.seed_mtime(seg_frontend, 1.0)
+
+    call_order: list[str] = []
+    _orig_delete = log_repo.delete
+    _orig_new_session = tmux.new_session
+
+    def _tracked_delete(path: Path) -> None:
+        call_order.append(f"delete:{path.name}")
+        _orig_delete(path)
+
+    def _tracked_new_session(session: str, cwd: object, width: object, height: object) -> None:
+        call_order.append("new_session")
+        _orig_new_session(session, cwd, width, height)  # type: ignore[arg-type]
+        tmux._sessions[session]["0.0"] = 100
+        tmux._sessions[session]["0.1"] = 101
+
+    log_repo.delete = _tracked_delete  # type: ignore[method-assign]
+    tmux.new_session = _tracked_new_session  # type: ignore[method-assign]
+
+    hook = FakeLayoutHookRunner()
+    ctx = _make_ctx()
+    svc = _make_service(tmux=tmux, hook_runner=hook, log_repo=log_repo, clock=clock)
+    result = svc.up(ctx)
+
+    assert result == 0
+    # All deletes must come before new_session
+    new_session_idx = call_order.index("new_session")
+    for entry in call_order:
+        if entry.startswith("delete:"):
+            assert call_order.index(entry) < new_session_idx
+
+
+def test_up_prune_failure_does_not_block_up() -> None:
+    """A prune error is swallowed; up() still creates the session and returns 0."""
+
+    class _BrokenLogRepo(FakeLogRepository):
+        def rotated_segments(self, worktree_dir: Path, service: str) -> list[Path]:
+            raise RuntimeError("disk error")
+
+    tmux = FakeTmuxRepository()
+    log_repo = _BrokenLogRepo()
+    clock = FakeFollowClock(current_time=10000.0)
+    hook = FakeLayoutHookRunner()
+
+    def _add_panes() -> None:
+        tmux.seed_session("mp-alpha", {"0.0": 100, "0.1": 101})
+
+    hook._side_effect = _add_panes
+
+    ctx = _make_ctx()
+    svc = _make_service(tmux=tmux, hook_runner=hook, log_repo=log_repo, clock=clock)
+    result = svc.up(ctx)
+
+    assert result == 0
+    assert "mp-alpha" in tmux._sessions
