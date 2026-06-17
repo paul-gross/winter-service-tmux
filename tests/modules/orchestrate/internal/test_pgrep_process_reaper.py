@@ -4,7 +4,7 @@ All subprocess calls (pgrep) and os.kill calls are patched at the adapter's
 import site.  Tests assert:
   1. Exact argv passed to subprocess.run for pgrep -P.
   2. Recursive descendant collection order.
-  3. SIGTERM → sleep 1 → SIGKILL ordering for term_then_kill.
+  3. SIGTERM → sleep 1 → re-collect → SIGKILL ordering for reap_descendants.
 """
 
 from __future__ import annotations
@@ -135,62 +135,122 @@ def test_has_children_returns_false_when_no_children(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# term_then_kill
+# reap_descendants — re-collection after sleep catches grandchildren spawned
+# during the shutdown window
 # ---------------------------------------------------------------------------
 
 
-def test_term_then_kill_sends_sigterm_then_sigkill(monkeypatch):
-    monkeypatch.setattr(adapter_module, "subprocess", MagicMock())
+def test_reap_descendants_re_collects_after_sleep_and_kills_new_grandchild(monkeypatch):
+    """A grandchild forked between the first collection and the sleep must be
+    SIGKILLed.
+
+    Setup:
+      root pane PID = 10
+      Before sleep:  descendants(10) = [100]   (child 100 exists)
+      After sleep:   descendants(10) = [101]   (100 died; new grandchild 101 appeared)
+
+    The old term_then_kill-on-a-snapshot approach would SIGKILL only {100} and
+    miss 101.  reap_descendants re-collects after the sleep, so 101 is SIGKILLed.
+    """
+    # Two successive pgrep trees: first call returns [100], second returns [101].
+    call_count = {"n": 0}
+
+    def fake_run(args, **kwargs):
+        pid_arg = args[2]
+        if pid_arg == "10":
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                # First descendants() call (before TERM): child 100 present.
+                mock = _pgrep_result(returncode=0, stdout="100\n")
+            else:
+                # Second descendants() call (after sleep): grandchild 101 appeared.
+                mock = _pgrep_result(returncode=0, stdout="101\n")
+            return mock
+        elif pid_arg in ("100", "101"):
+            # Both children are leaves.
+            return _pgrep_result(returncode=1, stdout="")
+        return _pgrep_result(returncode=1, stdout="")
+
+    fake_subprocess = MagicMock()
+    fake_subprocess.run.side_effect = fake_run
+    monkeypatch.setattr(adapter_module, "subprocess", fake_subprocess)
 
     killed: list[tuple[int, int]] = []
     fake_os = MagicMock()
     fake_os.kill.side_effect = lambda pid, sig: killed.append((pid, sig))
     monkeypatch.setattr(adapter_module, "os", fake_os)
 
-    sleep_calls: list[float] = []
     fake_time = MagicMock()
+    sleep_calls: list[float] = []
     fake_time.sleep.side_effect = lambda t: sleep_calls.append(t)
     monkeypatch.setattr(adapter_module, "time", fake_time)
 
     reaper = PgrepProcessReaper()
-    reaper.term_then_kill([101, 102])
+    reaper.reap_descendants([10])
 
-    term_calls = [(pid, sig) for pid, sig in killed if sig == signal.SIGTERM]
-    kill_calls = [(pid, sig) for pid, sig in killed if sig == signal.SIGKILL]
+    # TERM phase must have signalled PID 100 (first-pass child).
+    term_pids = {pid for pid, sig in killed if sig == signal.SIGTERM}
+    assert 100 in term_pids
 
-    assert len(term_calls) == 2
-    assert {pid for pid, _ in term_calls} == {101, 102}
-
+    # Sleep must have occurred once.
     assert len(sleep_calls) == 1
-    assert sleep_calls[0] == 1
 
-    assert len(kill_calls) == 2
-    assert {pid for pid, _ in kill_calls} == {101, 102}
-
-    # TERM must all come before KILL
-    term_indices = [i for i, (_, sig) in enumerate(killed) if sig == signal.SIGTERM]
-    kill_indices = [i for i, (_, sig) in enumerate(killed) if sig == signal.SIGKILL]
-    assert max(term_indices) < min(kill_indices)
+    # KILL phase must have signalled PID 101 (re-collected grandchild).
+    kill_pids = {pid for pid, sig in killed if sig == signal.SIGKILL}
+    assert 101 in kill_pids, (
+        "grandchild 101 forked during shutdown window was not SIGKILLed — "
+        "re-collection after sleep is required"
+    )
 
 
-def test_term_then_kill_is_noop_for_empty_list(monkeypatch):
-    monkeypatch.setattr(adapter_module, "subprocess", MagicMock())
-
-    reaper = PgrepProcessReaper()
-    # should not raise and should not call anything
-    reaper.term_then_kill([])
-
-
-def test_term_then_kill_suppresses_process_lookup_error(monkeypatch):
-    monkeypatch.setattr(adapter_module, "subprocess", MagicMock())
+def test_reap_descendants_noop_when_no_root_pids(monkeypatch):
+    """reap_descendants([]) must not call pgrep, sleep, or kill."""
+    fake_subprocess = MagicMock()
+    monkeypatch.setattr(adapter_module, "subprocess", fake_subprocess)
 
     fake_os = MagicMock()
-    fake_os.kill.side_effect = ProcessLookupError("no such process")
     monkeypatch.setattr(adapter_module, "os", fake_os)
 
     fake_time = MagicMock()
     monkeypatch.setattr(adapter_module, "time", fake_time)
 
     reaper = PgrepProcessReaper()
-    # should not raise even when all PIDs are gone
-    reaper.term_then_kill([999])
+    reaper.reap_descendants([])
+
+    fake_subprocess.run.assert_not_called()
+    fake_os.kill.assert_not_called()
+    fake_time.sleep.assert_not_called()
+
+
+def test_reap_descendants_term_before_sleep_before_kill(monkeypatch):
+    """Ordering: all SIGTERMs → sleep → all SIGKILLs."""
+    call_count = {"n": 0}
+
+    def fake_run(args, **kwargs):
+        pid_arg = args[2]
+        if pid_arg == "10":
+            call_count["n"] += 1
+            return _pgrep_result(returncode=0, stdout="100\n")
+        return _pgrep_result(returncode=1, stdout="")
+
+    fake_subprocess = MagicMock()
+    fake_subprocess.run.side_effect = fake_run
+    monkeypatch.setattr(adapter_module, "subprocess", fake_subprocess)
+
+    events: list[tuple[str, object]] = []
+    fake_os = MagicMock()
+    fake_os.kill.side_effect = lambda pid, sig: events.append(("kill", int(sig)))
+    monkeypatch.setattr(adapter_module, "os", fake_os)
+
+    fake_time = MagicMock()
+    fake_time.sleep.side_effect = lambda t: events.append(("sleep", t))
+    monkeypatch.setattr(adapter_module, "time", fake_time)
+
+    reaper = PgrepProcessReaper()
+    reaper.reap_descendants([10])
+
+    term_idx = next(i for i, (kind, val) in enumerate(events) if kind == "kill" and val == signal.SIGTERM)
+    sleep_idx = next(i for i, (kind, _) in enumerate(events) if kind == "sleep")
+    kill_idx = next(i for i, (kind, val) in enumerate(events) if kind == "kill" and val == signal.SIGKILL)
+
+    assert term_idx < sleep_idx < kill_idx

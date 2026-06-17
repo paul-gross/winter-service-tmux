@@ -106,17 +106,21 @@ class LocalLogRepository:
         if not chunk:
             return [], offset
 
-        # Split on newlines; only emit complete lines (drop trailing partial).
-        text = chunk.decode("utf-8", errors="replace")
-        # Find the last newline — everything after it is a partial line.
-        last_nl = text.rfind("\n")
+        # Track the offset in the byte domain: find the last newline byte in
+        # the raw chunk, advance by that many bytes, then decode only the
+        # complete-bytes slice.  The decoded string never feeds back into
+        # offset arithmetic — re-encoding would corrupt the offset because
+        # U+FFFD (the replacement char for invalid bytes) encodes to 3 bytes
+        # while the original invalid byte was 1.
+        last_nl = chunk.rfind(b"\n")
         if last_nl == -1:
             # No complete line yet.
             return [], offset
 
-        complete = text[: last_nl + 1]
-        consumed = len(complete.encode("utf-8", errors="replace"))
-        lines = [line.rstrip("\n") for line in complete.splitlines() if line.rstrip("\n")]
+        complete_bytes = chunk[: last_nl + 1]
+        consumed = len(complete_bytes)
+        text = complete_bytes.decode("utf-8", errors="replace")
+        lines = [line.rstrip("\n") for line in text.splitlines() if line.rstrip("\n")]
         return lines, offset + consumed
 
 

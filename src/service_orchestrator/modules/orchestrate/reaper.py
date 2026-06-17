@@ -25,11 +25,11 @@ class IProcessReaper(Protocol):
         """Return ``True`` when *pid* has at least one direct child process."""
         ...
 
-    def term_then_kill(self, pids: list[int]) -> None:
-        """Send SIGTERM to all *pids*, sleep 1 s, then SIGKILL survivors.
+    def reap_descendants(self, root_pids: list[int]) -> None:
+        """SIGTERM all descendants of *root_pids*, sleep 1 s, re-collect, then SIGKILL.
 
-        Mirrors the bash TERM/sleep/KILL pattern in ``workflow/down`` and
-        ``workflow/restart``.  Errors from individual kill calls are suppressed
-        (some PIDs may already have exited).
+        Re-collecting after the sleep catches grandchildren forked during the
+        shutdown window (between the initial snapshot and their parent's death).
+        *root_pids* are the pane shell PIDs; they are never signalled themselves.
         """
         ...

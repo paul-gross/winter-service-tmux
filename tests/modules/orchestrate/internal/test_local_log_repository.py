@@ -151,3 +151,79 @@ def test_rotated_old_pruned_recent_kept(tmp_path: Path) -> None:
     assert not old_seg.exists()
     assert recent_seg.exists()
     assert active.exists()
+
+
+# ---------------------------------------------------------------------------
+# read_new_lines — byte-offset integrity under invalid/multibyte bytes
+# ---------------------------------------------------------------------------
+
+
+def test_read_new_lines_no_offset_drift_with_invalid_bytes(tmp_path: Path) -> None:
+    """Offset arithmetic stays in the byte domain even when the log contains
+    invalid / non-UTF-8 bytes.
+
+    The logwriter decodes with errors="replace", which turns each invalid byte
+    into U+FFFD (3 bytes when re-encoded).  The old (buggy) code re-encoded the
+    decoded text to compute ``consumed``, so one invalid byte caused a +2
+    over-count per bad byte, shifting the offset forward and making the next
+    follow tick skip or duplicate lines.
+
+    This test plants a log file in two flush cycles:
+      - Tick 1 chunk: b"first\\xff\\n" — 8 raw bytes (\\xff is the invalid byte)
+      - Tick 2 chunk: b"second\\n"    — 7 raw bytes
+
+    After tick 1 the offset must advance by exactly 8 (bytes of the raw chunk
+    up to and including the last \\n).  Tick 2 must then return ["second"],
+    proving no lines were skipped or duplicated.
+    """
+    log_dir = _setup_log_dir(tmp_path)
+    log_file = log_dir / "svc.log"
+
+    # Write the first chunk with an embedded invalid byte.
+    chunk1 = b"first\xff\n"
+    log_file.write_bytes(chunk1)
+
+    repo = LocalLogRepository()
+
+    lines1, new_offset = repo.read_new_lines(log_file, 0)
+    # Must return exactly one line; U+FFFD is the replacement for \xff.
+    assert lines1 == ["first�"]
+    # Offset must equal the raw byte count of chunk1 (8 bytes), not a re-encoded length.
+    assert new_offset == len(chunk1)
+
+    # Append a second chunk with only valid UTF-8.
+    chunk2 = b"second\n"
+    log_file.write_bytes(chunk1 + chunk2)
+
+    lines2, final_offset = repo.read_new_lines(log_file, new_offset)
+    # Second tick must return only the second line — no skip, no duplicate.
+    assert lines2 == ["second"]
+    assert final_offset == len(chunk1) + len(chunk2)
+
+
+def test_read_new_lines_no_offset_drift_with_multibyte_utf8(tmp_path: Path) -> None:
+    """Multi-byte UTF-8 characters (e.g. emoji, CJK) must not corrupt the offset.
+
+    A 4-byte emoji (U+1F600) decodes to one character but re-encoding it still
+    produces 4 bytes — so it does not trigger the drift bug itself.  However,
+    this test confirms correct behaviour with multi-byte sequences generally.
+    """
+    log_dir = _setup_log_dir(tmp_path)
+    log_file = log_dir / "svc.log"
+
+    emoji = "\U0001F600"  # 4 bytes in UTF-8
+    chunk1 = f"{emoji}\n".encode()
+    log_file.write_bytes(chunk1)
+
+    repo = LocalLogRepository()
+
+    lines1, offset1 = repo.read_new_lines(log_file, 0)
+    assert lines1 == [emoji]
+    assert offset1 == len(chunk1)  # 5 bytes: 4 for emoji + 1 for \n
+
+    chunk2 = b"next\n"
+    log_file.write_bytes(chunk1 + chunk2)
+
+    lines2, offset2 = repo.read_new_lines(log_file, offset1)
+    assert lines2 == ["next"]
+    assert offset2 == len(chunk1) + len(chunk2)

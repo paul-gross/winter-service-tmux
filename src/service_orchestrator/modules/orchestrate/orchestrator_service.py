@@ -181,12 +181,8 @@ class OrchestratorService:
             return 0
 
         pane_infos = self._tmux.list_panes(ctx.session)
-        all_pids: list[int] = []
-        for pane in pane_infos:
-            all_pids.extend(self._reaper.descendants(pane.pid))
-
-        if all_pids:
-            self._reaper.term_then_kill(all_pids)
+        pane_pids = [pane.pid for pane in pane_infos]
+        self._reaper.reap_descendants(pane_pids)
 
         self._tmux.kill_session(ctx.session)
         print(f"Stopped services for '{ctx.env}' (session: {ctx.session})")
@@ -270,9 +266,7 @@ class OrchestratorService:
             )
 
         pane_pid = pane_map[target]
-        child_pids = self._reaper.descendants(pane_pid)
-        if child_pids:
-            self._reaper.term_then_kill(child_pids)
+        self._reaper.reap_descendants([pane_pid])
 
         line = build_launch_line(
             ctx.worktree_dir,

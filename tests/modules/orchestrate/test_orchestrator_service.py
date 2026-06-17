@@ -6,6 +6,7 @@ are made; all I/O is mediated through the fakes defined in tests/conftest.py.
 
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 
 import pytest
@@ -186,9 +187,10 @@ def test_up_send_keys_exact_launch_line_with_env_file() -> None:
     backend_line = next(line for _, t, line in tmux.sent if t == "0.0")
     backend_logfile = log_repo.log_path(_WORKTREE, "backend")
     expected_backend = (
-        f"cd '{_WORKTREE}' && source '{_ENV_FILE}' && echo '=== backend ===' && "
+        f"cd {shlex.quote(str(_WORKTREE))} && source {shlex.quote(str(_ENV_FILE))}"
+        f" && echo {shlex.quote('=== backend ===')} && "
         f"{{ npm run start:dev ; }} 2>&1 | "
-        f"python3 '{writer}' '{backend_logfile}' "
+        f"python3 {shlex.quote(str(writer))} {shlex.quote(str(backend_logfile))} "
         f"--rotate-size {rotate_size} --max-rotations {max_rot}"
     )
     assert backend_line == expected_backend
@@ -197,9 +199,10 @@ def test_up_send_keys_exact_launch_line_with_env_file() -> None:
     frontend_line = next(line for _, t, line in tmux.sent if t == "0.1")
     frontend_logfile = log_repo.log_path(_WORKTREE, "frontend")
     expected_frontend = (
-        f"cd '{_WORKTREE}' && source '{_ENV_FILE}' && echo '=== frontend ===' && "
+        f"cd {shlex.quote(str(_WORKTREE))} && source {shlex.quote(str(_ENV_FILE))}"
+        f" && echo {shlex.quote('=== frontend ===')} && "
         f"{{ npm run dev ; }} 2>&1 | "
-        f"python3 '{writer}' '{frontend_logfile}' "
+        f"python3 {shlex.quote(str(writer))} {shlex.quote(str(frontend_logfile))} "
         f"--rotate-size {rotate_size} --max-rotations {max_rot}"
     )
     assert frontend_line == expected_frontend
@@ -231,9 +234,9 @@ def test_up_send_keys_exact_launch_line_without_env_file() -> None:
 
     backend_line = next(line for _, t, line in tmux.sent if t == "0.0")
     expected = (
-        f"cd '{_WORKTREE}' && echo '=== backend ===' && "
+        f"cd {shlex.quote(str(_WORKTREE))} && echo {shlex.quote('=== backend ===')} && "
         f"{{ npm run start:dev ; }} 2>&1 | "
-        f"python3 '{writer}' '{backend_logfile}' "
+        f"python3 {shlex.quote(str(writer))} {shlex.quote(str(backend_logfile))} "
         f"--rotate-size {rotate_size} --max-rotations {max_rot}"
     )
     assert backend_line == expected
@@ -541,7 +544,10 @@ def test_restart_reaps_children_and_resends() -> None:
     session, target, line = tmux.sent[0]
     assert session == "mp-alpha"
     assert target == "0.0"
-    expected = f"cd '{_WORKTREE}' && source '{_ENV_FILE}' && echo '=== backend ===' && npm run start:dev"
+    expected = (
+        f"cd {shlex.quote(str(_WORKTREE))} && source {shlex.quote(str(_ENV_FILE))}"
+        f" && echo {shlex.quote('=== backend ===')} && npm run start:dev"
+    )
     assert line == expected
 
 
@@ -649,7 +655,7 @@ command = ""
 
     assert len(tmux.sent) == 1
     _, _, line = tmux.sent[0]
-    assert line == f"cd '{_WORKTREE}' && echo '=== shell ==='"
+    assert line == f"cd {shlex.quote(str(_WORKTREE))} && echo {shlex.quote('=== shell ===')} ".strip()
 
 
 # ---------------------------------------------------------------------------
@@ -691,9 +697,9 @@ max_rotations = 3
     writer = logwriter_path()
     logfile = log_repo.log_path(_WORKTREE, "docs")
     expected = (
-        f"cd '{_WORKTREE}' && echo '=== docs ===' && "
+        f"cd {shlex.quote(str(_WORKTREE))} && echo {shlex.quote('=== docs ===')} && "
         f"{{ npm run docs ; }} 2>&1 | "
-        f"python3 '{writer}' '{logfile}' "
+        f"python3 {shlex.quote(str(writer))} {shlex.quote(str(logfile))} "
         f"--rotate-size 5242880 --max-rotations 3"
     )
     _, _, line = tmux.sent[0]
@@ -729,7 +735,7 @@ log = "pane"
     svc.up(ctx)
 
     _, _, line = tmux.sent[0]
-    expected = f"cd '{_WORKTREE}' && echo '=== worker ===' && python -m worker"
+    expected = f"cd {shlex.quote(str(_WORKTREE))} && echo {shlex.quote('=== worker ===')} && python -m worker"
     assert line == expected
     # ensure_log_dir is still called once regardless
     assert log_repo.ensure_log_dir_calls == [_WORKTREE]
@@ -763,7 +769,7 @@ log = "memory"
     svc.up(ctx)
 
     _, _, line = tmux.sent[0]
-    expected = f"cd '{_WORKTREE}' && echo '=== worker ===' && python -m worker"
+    expected = f"cd {shlex.quote(str(_WORKTREE))} && echo {shlex.quote('=== worker ===')} && python -m worker"
     assert line == expected
 
 

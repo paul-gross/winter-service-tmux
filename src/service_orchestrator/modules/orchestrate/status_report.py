@@ -16,6 +16,7 @@ for the status display.
 from __future__ import annotations
 
 import os
+import shlex
 from pathlib import Path
 
 
@@ -70,11 +71,12 @@ def build_launch_line(
     the entire command even when it contains ``&&`` or inner pipes.  The writer
     echoes every raw line to stdout so the pane stays live.
     """
-    prefix = f"cd '{worktree_dir}'"
+    prefix = f"cd {shlex.quote(str(worktree_dir))}"
     if env_file_path is not None:
-        prefix = f"{prefix} && source '{env_file_path}'"
+        prefix = f"{prefix} && source {shlex.quote(str(env_file_path))}"
 
-    line = f"{prefix} && echo '=== {name} ==='"
+    quoted_banner = shlex.quote(f"=== {name} ===")
+    line = f"{prefix} && echo {quoted_banner}"
     if command:
         capture = (
             logfile is not None
@@ -86,7 +88,7 @@ def build_launch_line(
             line = (
                 f"{line} && "
                 f"{{ {command} ; }} 2>&1 | "
-                f"python3 '{writer}' '{logfile}' "
+                f"python3 {shlex.quote(str(writer))} {shlex.quote(str(logfile))} "
                 f"--rotate-size {rotate_size_bytes} "
                 f"--max-rotations {max_rotations}"
             )

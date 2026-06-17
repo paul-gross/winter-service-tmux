@@ -63,29 +63,37 @@ class PgrepProcessReaper:
         )
         return result.returncode == 0 and bool(result.stdout.strip())
 
-    def term_then_kill(self, pids: list[int]) -> None:
-        """SIGTERM all *pids*, wait 1 s, then SIGKILL survivors.
+    def reap_descendants(self, root_pids: list[int]) -> None:
+        """SIGTERM all descendants of *root_pids*, sleep 1 s, re-collect, SIGKILL.
 
-        Mirrors the bash pattern in ``workflow/down``::
-
-            kill -TERM "${ALL_PIDS[@]}" 2>/dev/null || true
-            sleep 1
-            kill -9  "${ALL_PIDS[@]}" 2>/dev/null || true
-
-        Individual signal errors are suppressed — a PID may have already exited
-        between collection and the kill call.
+        Re-collecting after the sleep catches grandchildren forked during the
+        shutdown window (between the initial snapshot and their parent's death).
+        *root_pids* are the pane shell PIDs; they are never signalled themselves.
         """
-        if not pids:
+        if not root_pids:
             return
-        for pid in pids:
+
+        # Initial collection and TERM.
+        first_pass: list[int] = []
+        for root in root_pids:
+            first_pass.extend(self.descendants(root))
+
+        for pid in first_pass:
             try:
                 os.kill(pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
             except OSError:
                 pass
+
         time.sleep(1)
-        for pid in pids:
+
+        # Re-collect after the sleep to catch grandchildren forked during shutdown.
+        second_pass: list[int] = []
+        for root in root_pids:
+            second_pass.extend(self.descendants(root))
+
+        for pid in second_pass:
             try:
                 os.kill(pid, signal.SIGKILL)
             except ProcessLookupError:

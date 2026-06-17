@@ -118,7 +118,7 @@ class FakeProcessReaper:
 
     ``descendant_map`` seeds ``descendants(pid)`` → ``[child_pids]``.
     ``children_set`` seeds ``has_children(pid)`` → ``True/False``.
-    ``killed`` records every ``term_then_kill`` call's pid list.
+    ``killed`` records every ``reap_descendants`` call's collected pid list.
     """
 
     def __init__(
@@ -136,8 +136,12 @@ class FakeProcessReaper:
     def has_children(self, pid: int) -> bool:
         return pid in self._children
 
-    def term_then_kill(self, pids: list[int]) -> None:
-        self.killed.append(list(pids))
+    def reap_descendants(self, root_pids: list[int]) -> None:
+        pids: list[int] = []
+        for root in root_pids:
+            pids.extend(self._descendants.get(root, []))
+        if pids:
+            self.killed.append(pids)
 
 
 def _conforms_fake_process_reaper(x: FakeProcessReaper) -> IProcessReaper:
