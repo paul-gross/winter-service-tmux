@@ -2,8 +2,11 @@
 
 from pathlib import Path
 
+import pytest
+
 from service_manifest.modules.manifest.env import interpolate, parse_env_text, referenced_vars
 from service_manifest.modules.manifest.env_reader import EnvFileReader
+from service_manifest.modules.manifest.errors import ManifestError
 from tests.fakes import FakeFilesystemReader, _conforms_fake_filesystem_reader
 
 # ---------------------------------------------------------------------------
@@ -118,6 +121,31 @@ def test_env_reader_parses_all_features() -> None:
     assert result["KEY"] == "val"
     assert result["EXPORTED"] == "exp_val"
     assert result["QUOTED"] == "quoted val"
+
+
+def test_env_reader_non_utf8_file_raises_manifest_error() -> None:
+    """A non-UTF-8 env file must surface as ManifestError, not a raw UnicodeDecodeError.
+
+    EnvFileReader.resolve now wraps UnicodeDecodeError from the filesystem reader
+    in a ManifestError so callers at the CLI boundary see a clean error message
+    instead of an unhandled exception.
+    """
+
+    class _BinaryFakeFilesystemReader(FakeFilesystemReader):
+        """Fake whose read_text raises UnicodeDecodeError for the env path."""
+
+        def read_text(self, path: Path) -> str:
+            if path == _ENV_PATH:
+                # Simulate what the real LocalFilesystemReader raises on non-UTF-8 content.
+                raise UnicodeDecodeError("utf-8", b"\xff\xfe", 0, 1, "invalid start byte")
+            return super().read_text(path)
+
+        def exists(self, path: Path) -> bool:
+            return path == _ENV_PATH
+
+    reader = EnvFileReader(_BinaryFakeFilesystemReader())
+    with pytest.raises(ManifestError, match="non-UTF-8"):
+        reader.resolve(_ENV_PATH)
 
 
 # ---------------------------------------------------------------------------

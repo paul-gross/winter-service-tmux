@@ -119,7 +119,13 @@ class _FakeContainer:
                 self.down_calls.append(ctx)
                 return self._service_rc
 
-            def status(inner_self, ctx: EnvContext, services: tuple[str, ...] = ()) -> int:
+            def status(
+                inner_self,
+                ctx: EnvContext,
+                services: tuple[str, ...] = (),
+                *,
+                json_output: bool = False,
+            ) -> int:
                 self.status_calls.append((ctx, services))
                 return self._service_rc
 

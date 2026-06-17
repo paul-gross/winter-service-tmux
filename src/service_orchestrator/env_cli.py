@@ -20,11 +20,13 @@ Workspace-root / env-name resolution order:
 Door-local arg shapes (NOT part of the winter contract):
 
 - ``up [local] [-a|--attach] [<name>]``
-- ``down [local|<name>]``
+- ``down [local] [<name>]``
 - ``status [--all] [<pattern>...]``
 - ``restart <pattern>...``
 
-``local`` mode builds an env-less ``EnvContext`` (no env file sourced).
+``local`` mode builds an env-less ``EnvContext`` (no env file sourced);
+``up local`` and ``down local`` are symmetric — both use the inferred env
+name with ``skip_env_file=True``.
 ``-a``/``--attach`` execs ``tmux attach-session`` after ``up``.
 ``status --all`` loops every ``<prefix>-`` session.
 ``down`` falls back to env-suffix session matching when the manifest is
@@ -199,14 +201,19 @@ def _handle_down(
     workspace_root: Path,
     container: Container,
 ) -> int:
+    local = False
     for arg in argv:
         if arg == "local":
-            env = "local"
+            local = True
         elif not arg.startswith("-"):
             env = arg
 
     try:
-        ctx = container.env_context_builder.build(env, workspace_root=workspace_root)
+        ctx = container.env_context_builder.build(
+            env,
+            workspace_root=workspace_root,
+            skip_env_file=local,
+        )
     except ManifestError as exc:
         # Manifest unreadable → fall back to env-suffix session kill.
         print(
@@ -233,6 +240,7 @@ def _handle_status(
 ) -> int:
     show_all = False
     patterns: list[str] = []
+    json_output = os.environ.get("WINTER_STATUS_JSON") == "1"
     for arg in argv:
         if arg in ("--all", "all"):
             show_all = True
@@ -260,7 +268,7 @@ def _handle_status(
     if not patterns:
         # No patterns — show all services in this env.
         try:
-            return container.orchestrator.status(ctx)
+            return container.orchestrator.status(ctx, json_output=json_output)
         except OrchestratorError as exc:
             print(f"status: env '{env}': {exc}", file=sys.stderr)
             return 1
@@ -282,7 +290,9 @@ def _handle_status(
                 matched.append(name)
 
     try:
-        return container.orchestrator.status(ctx, services=tuple(matched))
+        return container.orchestrator.status(
+            ctx, services=tuple(matched), json_output=json_output
+        )
     except OrchestratorError as exc:
         print(f"status: env '{env}': {exc}", file=sys.stderr)
         return 1

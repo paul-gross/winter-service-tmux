@@ -230,6 +230,7 @@ def main(argv: list[str]) -> int:
     # ------------------------------------------------------------------
     if action == "status":
         patterns = rest
+        json_output = os.environ.get("WINTER_STATUS_JSON") == "1"
 
         if not patterns:
             # 0 patterns → status all running envs
@@ -265,7 +266,7 @@ def main(argv: list[str]) -> int:
                     rc = 1
                     continue
                 try:
-                    result = container.orchestrator.status(ctx)
+                    result = container.orchestrator.status(ctx, json_output=json_output)
                     if result != 0:
                         rc = result
                 except OrchestratorError as exc:
@@ -305,7 +306,9 @@ def main(argv: list[str]) -> int:
                 rc = 1
                 continue
             try:
-                result = container.orchestrator.status(ctx, services=tuple(svc_names))
+                result = container.orchestrator.status(
+                    ctx, services=tuple(svc_names), json_output=json_output
+                )
                 if result != 0:
                     rc = result
             except OrchestratorError as exc:

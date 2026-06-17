@@ -905,7 +905,7 @@ def test_prune_deletes_old_rotated_segment_when_session_not_running() -> None:
 
     ctx = _make_prune_ctx(retention_seconds=604800)
     svc = OrchestratorService(tmux=tmux, reaper=FakeProcessReaper(), hook_runner=FakeLayoutHookRunner(), log_repo=log_repo, clock=clock)
-    svc.prune(ctx)
+    svc._prune(ctx)
 
     assert seg in log_repo.deleted
 
@@ -926,7 +926,7 @@ def test_prune_skips_deletion_when_session_is_running() -> None:
 
     ctx = _make_prune_ctx()
     svc = OrchestratorService(tmux=tmux, reaper=FakeProcessReaper(), hook_runner=FakeLayoutHookRunner(), log_repo=log_repo, clock=clock)
-    svc.prune(ctx)
+    svc._prune(ctx)
 
     assert log_repo.deleted == []
 
@@ -945,7 +945,7 @@ def test_prune_keeps_recent_segment() -> None:
 
     ctx = _make_prune_ctx(retention_seconds=604800)
     svc = OrchestratorService(tmux=tmux, reaper=FakeProcessReaper(), hook_runner=FakeLayoutHookRunner(), log_repo=log_repo, clock=clock)
-    svc.prune(ctx)
+    svc._prune(ctx)
 
     assert log_repo.deleted == []
 
@@ -967,7 +967,7 @@ def test_prune_active_log_never_deleted() -> None:
 
     ctx = _make_prune_ctx()
     svc = OrchestratorService(tmux=tmux, reaper=FakeProcessReaper(), hook_runner=FakeLayoutHookRunner(), log_repo=log_repo, clock=clock)
-    svc.prune(ctx)
+    svc._prune(ctx)
 
     assert active_log not in log_repo.deleted
     assert log_repo.deleted == []
@@ -1052,3 +1052,130 @@ def test_up_prune_failure_does_not_block_up() -> None:
 
     assert result == 0
     assert "mp-alpha" in tmux._sessions
+
+
+# ---------------------------------------------------------------------------
+# _segments_to_prune — vanished segment mid-prune does not abort the pass
+# ---------------------------------------------------------------------------
+
+
+def test_segments_to_prune_skips_vanished_segment() -> None:
+    """A segment that disappears between listing and mtime read is silently skipped.
+
+    The race window: rotated_segments returns a path, but by the time mtime()
+    is called the file has been removed.  _segments_to_prune must catch the
+    resulting FileNotFoundError and continue with remaining segments.
+    """
+
+    class _RacingLogRepository(FakeLogRepository):
+        """Raises FileNotFoundError for one specific path to simulate the race."""
+
+        def __init__(self, vanished: Path) -> None:
+            super().__init__()
+            self._vanished = vanished
+
+        def mtime(self, path: Path) -> float:
+            if path == self._vanished:
+                raise FileNotFoundError(f"simulated race: {path} vanished")
+            return super().mtime(path)
+
+    vanished_seg = Path("/logs/docs.log.2")
+    surviving_seg = Path("/logs/docs.log.1")
+
+    repo = _RacingLogRepository(vanished=vanished_seg)
+    repo.seed_mtime(surviving_seg, 1.0)  # old enough to prune
+
+    # _segments_to_prune must skip the vanished segment and still return the
+    # surviving old segment — the pass must not abort.
+    result = _segments_to_prune([vanished_seg, surviving_seg], repo, cutoff=2000.0)
+
+    assert vanished_seg not in result
+    assert surviving_seg in result
+
+
+# ---------------------------------------------------------------------------
+# status --json — structured per-service verdict
+# ---------------------------------------------------------------------------
+
+
+def test_status_json_session_not_running(capsys: pytest.CaptureFixture[str]) -> None:
+    """When no session exists, JSON output has running=false and empty services."""
+    import json
+
+    tmux = FakeTmuxRepository()
+    reaper = FakeProcessReaper()
+    ctx = _make_ctx()
+    svc = _make_service(tmux=tmux, reaper=reaper)
+
+    result = svc.status(ctx, json_output=True)
+
+    assert result == 0
+    captured = capsys.readouterr()
+    doc = json.loads(captured.out)
+    assert doc["env"] == "alpha"
+    assert doc["session"] == "mp-alpha"
+    assert doc["running"] is False
+    assert doc["services"] == []
+
+
+def test_status_json_running_and_stopped_verdicts(capsys: pytest.CaptureFixture[str]) -> None:
+    """JSON output includes per-service verdicts: 'running' when pane has children,
+    'stopped' when it does not, 'missing' when the pane is absent."""
+    import json
+
+    tmux = FakeTmuxRepository()
+    # backend (0.0, pid=10) has children → running; frontend (0.1, pid=20) does not → stopped
+    tmux.seed_session("mp-alpha", {"0.0": 10, "0.1": 20})
+    reaper = FakeProcessReaper(children_set={10})  # only pid 10 has children
+    ctx = _make_ctx()
+    svc = _make_service(tmux=tmux, reaper=reaper)
+
+    result = svc.status(ctx, json_output=True)
+
+    assert result == 0
+    captured = capsys.readouterr()
+    doc = json.loads(captured.out)
+    assert doc["running"] is True
+    verdicts = {s["name"]: s["verdict"] for s in doc["services"]}
+    assert verdicts["backend"] == "running"
+    assert verdicts["frontend"] == "stopped"
+
+
+def test_status_json_missing_pane_verdict(capsys: pytest.CaptureFixture[str]) -> None:
+    """A pane absent from the session reports verdict='missing' in JSON output."""
+    import json
+
+    tmux = FakeTmuxRepository()
+    # Only pane 0.0 present; manifest declares both 0.0 (backend) and 0.1 (frontend)
+    tmux.seed_session("mp-alpha", {"0.0": 10})
+    reaper = FakeProcessReaper()
+    ctx = _make_ctx()
+    svc = _make_service(tmux=tmux, reaper=reaper)
+
+    result = svc.status(ctx, json_output=True)
+
+    assert result == 0
+    captured = capsys.readouterr()
+    doc = json.loads(captured.out)
+    verdicts = {s["name"]: s["verdict"] for s in doc["services"]}
+    assert verdicts["frontend"] == "missing"
+
+
+def test_status_json_does_not_emit_human_text(capsys: pytest.CaptureFixture[str]) -> None:
+    """json_output=True must not emit the human-readable header or service lines."""
+    import json
+
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 10, "0.1": 20})
+    reaper = FakeProcessReaper()
+    ctx = _make_ctx()
+    svc = _make_service(tmux=tmux, reaper=reaper)
+
+    svc.status(ctx, json_output=True)
+
+    captured = capsys.readouterr()
+    # Must be parseable as exactly one JSON object — no stray human-readable text.
+    lines = [ln for ln in captured.out.splitlines() if ln.strip()]
+    assert len(lines) == 1
+    doc = json.loads(lines[0])
+    assert "env" in doc

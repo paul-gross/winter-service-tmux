@@ -170,7 +170,7 @@ class ManifestReader:
                     if label is not None:
                         label_to_idx[label] = len(merged_urls) - 1
 
-            result.setdefault("status", {})["url"] = merged_urls
+            result["status"] = {**committed.get("status", {}), "url": merged_urls}
 
         return result
 

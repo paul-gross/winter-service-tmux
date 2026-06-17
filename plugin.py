@@ -44,6 +44,8 @@ def tmux_session_badge(env_status, env_path) -> None:
             ["tmux", "has-session", "-t", session],
             capture_output=True,
             timeout=2,
+            text=True,
+            check=False,
         )
         running = result.returncode == 0
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):

@@ -19,7 +19,7 @@ class LocalFilesystemReader:
 
     @staticmethod
     def read_text(path: Path) -> str:
-        return path.read_text(encoding="utf-8")
+        return path.read_text(encoding="utf-8", errors="strict")
 
 
 def _conforms_local_filesystem_reader(x: LocalFilesystemReader) -> IFilesystemReader:

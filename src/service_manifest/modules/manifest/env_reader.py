@@ -14,6 +14,7 @@ from pathlib import Path
 
 from service_manifest.core.filesystem import IFilesystemReader
 from service_manifest.modules.manifest.env import parse_env_text
+from service_manifest.modules.manifest.errors import ManifestError
 
 
 class EnvFileReader:
@@ -36,4 +37,10 @@ class EnvFileReader:
         """
         if env_file_path is None or not self._fs.exists(env_file_path):
             return None
-        return parse_env_text(self._fs.read_text(env_file_path))
+        try:
+            text = self._fs.read_text(env_file_path)
+        except UnicodeDecodeError as exc:
+            raise ManifestError(
+                f"env file '{env_file_path}' contains non-UTF-8 bytes: {exc}"
+            ) from exc
+        return parse_env_text(text)

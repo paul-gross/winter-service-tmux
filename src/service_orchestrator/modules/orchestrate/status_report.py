@@ -97,6 +97,36 @@ def build_launch_line(
     return line
 
 
+def build_status_json(
+    env: str,
+    session: str,
+    *,
+    session_running: bool,
+    services: list[dict[str, str]],
+) -> dict:  # type: ignore[type-arg]
+    """Build the structured JSON status document for one env.
+
+    Returns a plain dict suitable for ``json.dumps``.  Shape::
+
+        {
+          "env": "<env>",
+          "session": "<session>",
+          "running": <bool>,
+          "services": [{"name": "<svc>", "verdict": "running|stopped|missing"}, ...]
+        }
+
+    *services* is a list of ``{"name": ..., "verdict": ...}`` dicts assembled
+    by the caller (``OrchestratorService.status``).  When the session is not
+    running the list is empty.
+    """
+    return {
+        "env": env,
+        "session": session,
+        "running": session_running,
+        "services": services,
+    }
+
+
 def last_non_blank_line(text: str) -> str:
     """Return the last non-blank line from *text*, or an empty string.
 

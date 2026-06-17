@@ -1,23 +1,23 @@
-# winter-service-tmux
+# ❄️ winter-service-tmux
 
 A [winter](https://github.com/paul-gross/winter) extension that adds tmux-based service orchestration to a workspace. Each feature environment gets `./up`, `./down`, `./status`, and `./restart` scripts that run the project's services in a per-env tmux session, so multiple envs can run their own instances of the app side-by-side without port conflicts.
 
 📚 **Documentation:** <https://paul-gross.github.io/winter-docs/>
 
-## Features
+## ✨ Features
 
 - **Per-env service sessions** — every feature environment gets its own tmux session running the project's services. Humans attach to watch logs in real time while agents drive the lifecycle.
 - **Conflict-free parallel runs** — sessions are namespaced per env (`<prefix>-<env>`), so alpha and beta can both run the full app stack at once without colliding.
 - **One-command lifecycle** — `./up`, `./down`, `./status`, and `./restart` land in every feature environment on `winter ws init`. Same commands across every project, every env.
 - **Selective restart** — `./restart <pattern>...` reaps each matched service's pane and re-runs its declared command, leaving the rest of the session running. One or more `<service>` glob patterns (e.g. `backend`, `work*`) are matched against declared service names scoped to the invoking env. No `kill`/`pkill`, no tearing down healthy services. Service commands are declared once in `[[service]]` entries in `setup-tmux.toml` and shared by both `./up` and `./restart`, so the two never drift. `./status` accepts the same `<pattern>...` service filtering to narrow which services are shown (e.g. `./status back*`).
 - **Persistent log capture** — every commanded service's stdout/stderr is piped through a capture writer and written to `<env>/.winter/logs/<service>.log` (timestamped, size-rotated). Logs survive `down` and teardown; read them with `winter service logs <pattern>... [-f] [-n N] [--since TS] [--until TS] [-t] …` where patterns are `<env>/<service>` segment-globs (e.g. `alpha/backend`, `'*/backend'`, `alpha`).
-- **Agent-driven service control** — the `wst-app-runner` agent starts and stops services, reads logs, and reports health back to the calling agent or session lead.
+- **Agent-driven service control** — the `app-runner` agent starts and stops services, reads logs, and reports health back to the calling agent or session lead.
 - **Declarative TOML manifest** — a single `workspace:/ai/project/setup-tmux.toml` declares the panes, commands, session prefix, and status URLs; the orchestrator is generic and the project owns the layout. An optional gitignored `setup-tmux.local.toml` overlays per-machine overrides on top.
 - **Python orchestrator** — a stdlib-only Python package (`src/service_orchestrator/`) implements the full `up`/`down`/`status`/`restart` lifecycle, consuming the TOML manifest via the `service_manifest` reader. No bash runtime dependency for service management.
 - **`orchestrate_services` entrypoint** — exposes the orchestrator to winter's `winter service <action> <env>` dispatch. Register the extension in `.winter/config.toml` with `service_orchestrator = "winter-service-tmux"`.
 - **Built-in `winter doctor` probe** — checks tmux is installed, `session_prefix` is declared in the manifest, no foreign tmux sessions collide with the configured prefix, and the manifest validates cleanly. Surfaces these results under `[wst]` in `winter doctor`'s output.
 
-## Installation & Setup
+## 🚀 Installation & Setup
 
 Agentic setup is hooked into `/ws-setup`.
 
@@ -39,3 +39,7 @@ Agentic setup is hooked into `/ws-setup`.
 3. Commit `setup-tmux.toml` and `layout-hook.sh` to source — they're the project's service config and belong in version control. Keep any `setup-tmux.local.toml` overlay gitignored.
 
 See [`index.md`](./index.md) for what this extension contributes and how it plugs into a workspace.
+
+## License
+
+MIT.

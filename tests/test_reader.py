@@ -762,3 +762,53 @@ log = "file"
 """
     manifest = _read({_COMMITTED_PATH: committed, _LOCAL_PATH: local})
     assert manifest.services[0].log == LogMode.FILE
+
+
+# ---------------------------------------------------------------------------
+# Overlay merge does NOT mutate the committed dict (AC: shallow-copy aliasing)
+# ---------------------------------------------------------------------------
+
+
+def test_overlay_merge_does_not_mutate_committed_status_url() -> None:
+    """Merging a local overlay into a committed doc with [[status.url]] must not
+    mutate the committed dict's nested 'status' table.
+
+    The prior bug: ``result = dict(committed)`` is shallow, so
+    ``result.setdefault('status', {})['url'] = merged_urls`` would write back
+    into committed's original 'status' dict via the aliased reference.  The fix
+    builds a fresh dict: ``result['status'] = {**committed.get('status', {}),
+    'url': merged_urls}``.
+    """
+    from service_manifest.modules.manifest.reader import ManifestReader
+
+    committed_toml = """\
+session_prefix = "mp"
+
+[[status.url]]
+label = "Backend"
+url = "http://localhost:3000"
+"""
+    overlay_toml = """\
+[[status.url]]
+label = "Backend"
+url = "http://localhost:4100"
+"""
+    abs_committed = _ROOT / _COMMITTED_PATH
+    abs_local = _ROOT / _LOCAL_PATH
+    fake_fs = FakeFilesystemReader({abs_committed: committed_toml, abs_local: overlay_toml})
+    reader = ManifestReader(fake_fs)
+
+    # Parse the committed dict manually so we can inspect it after merge.
+    import tomllib
+
+    committed_doc = tomllib.loads(committed_toml)
+    original_url = committed_doc["status"]["url"][0]["url"]
+    assert original_url == "http://localhost:3000"
+
+    # Invoke reader.read() — internally calls _merge(committed, local).
+    reader.read(_ROOT)
+
+    # The committed_doc must be unchanged — no aliased mutation.
+    assert committed_doc["status"]["url"][0]["url"] == "http://localhost:3000", (
+        "overlay merge mutated the committed dict's nested 'status' table"
+    )

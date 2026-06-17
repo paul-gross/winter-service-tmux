@@ -8,6 +8,7 @@ delegated to the injected Protocol seams.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 
@@ -21,6 +22,7 @@ from service_orchestrator.modules.orchestrate.log_repository import ILogReposito
 from service_orchestrator.modules.orchestrate.reaper import IProcessReaper
 from service_orchestrator.modules.orchestrate.status_report import (
     build_launch_line,
+    build_status_json,
     last_non_blank_line,
     truncate_status_line,
 )
@@ -40,11 +42,19 @@ def _segments_to_prune(
     Pure function: takes a list of paths, the log repo (for mtime), and a
     cutoff timestamp; returns the paths to delete.  Testable without any I/O
     by injecting a fake log repo.
+
+    A segment that vanishes between ``rotated_segments`` and the mtime read
+    (race window) is silently skipped — the file is already gone so there is
+    nothing to prune.
     """
     result = []
     for path in segments:
-        if log_repo.mtime(path) < cutoff:
-            result.append(path)
+        try:
+            if log_repo.mtime(path) < cutoff:
+                result.append(path)
+        except FileNotFoundError:
+            # File removed between listing and stat — already gone, skip it.
+            pass
     return result
 
 
@@ -88,7 +98,7 @@ class OrchestratorService:
         # Prune old rotated log segments opportunistically before starting.
         # Errors are swallowed so a prune failure never blocks up().
         try:
-            self.prune(ctx)
+            self._prune(ctx)
         except Exception as exc:
             print(f"Warning: prune failed (ignored): {exc}", file=sys.stderr, flush=True)
 
@@ -188,7 +198,9 @@ class OrchestratorService:
         print(f"Stopped services for '{ctx.env}' (session: {ctx.session})")
         return 0
 
-    def status(self, ctx: EnvContext, services: tuple[str, ...] = ()) -> int:
+    def status(
+        self, ctx: EnvContext, services: tuple[str, ...] = (), *, json_output: bool = False
+    ) -> int:
         """Print service status for *ctx.env*.
 
         Renders the manifest's declarative status URLs as a header (with
@@ -199,9 +211,55 @@ class OrchestratorService:
             ctx: The resolved environment context.
             services: Optional tuple of service names to show.  Empty tuple
                 (the default) shows all services declared in the manifest.
+            json_output: Emit a JSON verdict object instead of human-readable
+                text (see below).
+
+        When *json_output* is ``True``, emits a single JSON object to stdout
+        instead of human-readable text::
+
+            {
+              "env": "alpha",
+              "session": "mp-alpha",
+              "running": true,
+              "services": [
+                {"name": "backend", "verdict": "running"},
+                {"name": "frontend", "verdict": "stopped"},
+                {"name": "shell", "verdict": "missing"}
+              ]
+            }
+
+        ``verdict`` is one of ``"running"``, ``"stopped"``, or ``"missing"``.
+        ``running`` at the top level is ``true`` iff the tmux session exists.
+        The *services* filter applies to both output modes.
         """
         if not self._tmux.has_session(ctx.session):
-            print(f"No {ctx.session} session running.")
+            if json_output:
+                doc = build_status_json(ctx.env, ctx.session, session_running=False, services=[])
+                print(json.dumps(doc, ensure_ascii=False))
+            else:
+                print(f"No {ctx.session} session running.")
+            return 0
+
+        pane_infos = self._tmux.list_panes(ctx.session)
+        pane_map: dict[str, int] = {p.target: p.pid for p in pane_infos}
+
+        in_scope = ctx.manifest.services
+        if services:
+            requested = set(services)
+            in_scope = tuple(s for s in in_scope if s.name in requested)
+
+        if json_output:
+            svc_verdicts: list[dict[str, str]] = []
+            for svc in in_scope:
+                target = f"{svc.target.window}.{svc.target.pane}"
+                if target not in pane_map:
+                    verdict = "missing"
+                else:
+                    pane_pid = pane_map[target]
+                    verdict = "running" if self._reaper.has_children(pane_pid) else "stopped"
+                svc_verdicts.append({"name": svc.name, "verdict": verdict})
+            doc = build_status_json(ctx.env, ctx.session, session_running=True, services=svc_verdicts)
+            print(json.dumps(doc, ensure_ascii=False))
             return 0
 
         print(f"=== {ctx.env} ===")
@@ -211,14 +269,6 @@ class OrchestratorService:
             for status_url in ctx.manifest.status_urls:
                 rendered_url, _ = interpolate(status_url.url, env_vars)
                 print(f"  {status_url.label}: {rendered_url}")
-
-        pane_infos = self._tmux.list_panes(ctx.session)
-        pane_map: dict[str, int] = {p.target: p.pid for p in pane_infos}
-
-        in_scope = ctx.manifest.services
-        if services:
-            requested = set(services)
-            in_scope = tuple(s for s in in_scope if s.name in requested)
 
         for svc in in_scope:
             target = f"{svc.target.window}.{svc.target.pane}"
@@ -278,8 +328,11 @@ class OrchestratorService:
         print(f"Restarted '{service_name}' in {ctx.session}:{target}")
         return 0
 
-    def prune(self, ctx: EnvContext) -> None:
+    def _prune(self, ctx: EnvContext) -> None:
         """Remove rotated log segments older than the retention window.
+
+        Internal method — called opportunistically by ``up`` before starting
+        services.  Not part of the public OrchestratorService interface.
 
         Only operates when the session is NOT running (``tmux.has_session``
         returns ``False``).  Deletes segments where

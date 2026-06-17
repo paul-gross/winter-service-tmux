@@ -266,7 +266,7 @@ def test_status_no_patterns_calls_status_all_services(
     rc = main(["status"])
 
     assert rc == 0
-    container.orchestrator.status.assert_called_once_with(ctx)
+    container.orchestrator.status.assert_called_once_with(ctx, json_output=False)
 
 
 # ---------------------------------------------------------------------------
@@ -348,7 +348,9 @@ def test_status_single_literal_service(
     rc = main(["status", "backend"])
 
     assert rc == 0
-    container.orchestrator.status.assert_called_once_with(ctx, services=("backend",))
+    container.orchestrator.status.assert_called_once_with(
+        ctx, services=("backend",), json_output=False
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -375,7 +377,7 @@ def test_status_glob_pattern_matches_subset(
 
     assert rc == 0
     container.orchestrator.status.assert_called_once_with(
-        ctx, services=("backend", "backend-worker")
+        ctx, services=("backend", "backend-worker"), json_output=False
     )
 
 

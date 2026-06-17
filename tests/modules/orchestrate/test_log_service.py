@@ -11,6 +11,8 @@ import io
 import json
 from pathlib import Path
 
+import pytest
+
 from service_manifest.modules.manifest.model import LogMode, Service, ServiceManifest, Target
 from service_orchestrator.modules.orchestrate.env_context import EnvContext
 from service_orchestrator.modules.orchestrate.log_query import LogQuery
@@ -778,6 +780,35 @@ def test_memory_mode_emits_nothing() -> None:
     sink.seek(0)
     events = [json.loads(line) for line in sink if line.strip()]
     assert events == []
+
+
+def test_memory_mode_emits_one_line_stderr_diagnostic(capsys: pytest.CaptureFixture[str]) -> None:
+    """MEMORY-mode service emits exactly one diagnostic line to stderr explaining
+    why there is no output, so callers see a clear message instead of silence.
+    """
+    svc_mem = Service(name="worker", target=Target(window=0, pane=0), command="cmd", log=LogMode.MEMORY)
+    manifest = ServiceManifest(
+        session_prefix="mp",
+        env_file=None,
+        layout_hook=None,
+        services=(svc_mem,),
+        status_urls=(),
+    )
+    fake_repo = FakeLogRepository()
+    tmux = FakeTmuxRepository()
+    ctx = _make_ctx(manifest)
+    sink = io.StringIO()
+    svc = _make_svc(fake_repo, sink, tmux=tmux)
+
+    rc = svc.logs(ctx, _make_query())
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    # Exactly one stderr line mentioning the service name and "memory"
+    stderr_lines = [ln for ln in captured.err.splitlines() if ln.strip()]
+    assert len(stderr_lines) == 1
+    assert "worker" in stderr_lines[0]
+    assert "memory" in stderr_lines[0].lower()
 
 
 # ---------------------------------------------------------------------------
