@@ -14,24 +14,26 @@ A [winter](https://github.com/paul-gross/winter) extension that adds tmux-based 
 - **Agent-driven service control** — the `app-runner` agent starts and stops services, reads logs, and reports health back to the calling agent or session lead.
 - **Declarative TOML manifest** — a single `workspace:/ai/project/setup-tmux.toml` declares the panes, commands, session prefix, and status URLs; the orchestrator is generic and the project owns the layout. An optional gitignored `setup-tmux.local.toml` overlays per-machine overrides on top.
 - **Python orchestrator** — a stdlib-only Python package (`src/service_orchestrator/`) implements the full `up`/`down`/`status`/`restart` lifecycle, consuming the TOML manifest via the `service_manifest` reader. No bash runtime dependency for service management.
-- **`orchestrate_services` entrypoint** — exposes the orchestrator to winter's `winter service <action> <env>` dispatch. Register the extension in `.winter/config.toml` with `service_orchestrator = "winter-service-tmux"`.
+- **Capability-registry integration** — exposes the orchestrator to winter's `winter service <action> <env>` dispatch via the `service` capability slot. Bind it in `.winter/config.toml` with `[capabilities] service = "winter-service-tmux"` and declare the entrypoint in this extension's `winter-ext.toml` with `[provides] service = "workflow/orchestrate"`. The legacy keys `service_orchestrator` (config) and `orchestrate_services` (manifest) are still accepted as deprecated aliases.
 - **Built-in `winter doctor` probe** — checks tmux is installed, `session_prefix` is declared in the manifest, no foreign tmux sessions collide with the configured prefix, and the manifest validates cleanly. Surfaces these results under `[wst]` in `winter doctor`'s output.
 
 ## 🚀 Installation & Setup
 
 Agentic setup is hooked into `/ws-setup`.
 
-1. Add to the workspace's `.winter/config.toml`. `service_orchestrator` is a **root-level** key — place it at the top of the file, before any `[[standalone_repository]]` tables, so TOML binds it correctly:
+1. Add to the workspace's `.winter/config.toml`. Use the `[capabilities]` table to bind the `service` slot to this extension, and add a `[[standalone_repository]]` entry to install it:
 
    ```toml
-   # top-level key — must appear before any [[table]] headers
-   service_orchestrator = "winter-service-tmux"
+   [capabilities]
+   service = "winter-service-tmux"
 
    [[standalone_repository]]
    name = "winter-service-tmux"
    url = "git@github.com:paul-gross/winter-service-tmux.git"
    path = ".winter/ext/service-tmux"
    ```
+
+   The legacy root-level key `service_orchestrator = "winter-service-tmux"` is still accepted as a deprecated alias and is automatically folded into `capabilities.service` at config load, but `[capabilities]` is the supported form for new workspaces.
 
    See `workflow/setup-tmux.toml.example` and `workflow/setup-tmux.local.toml.example` for the full manifest schema.
 
