@@ -1,6 +1,6 @@
 # Winter service orchestration via tmux
 
-Tmux-based service orchestration for winter workspaces. Runs project services (backend, frontend, workers, etc.) in a per-env tmux session via `./up`/`./down`/`./status` scripts (plus `./restart <service>` to bounce one service), so multiple envs can run their own instances of the app side-by-side without port conflicts.
+Tmux-based service orchestration for winter workspaces. Runs project services (backend, frontend, workers, etc.) in a per-env tmux session via `./up`/`./down`/`./status` scripts (plus `./restart <pattern>...` to bounce one or more services), so multiple envs can run their own instances of the app side-by-side without port conflicts.
 
 ## Feature environment setup steps
 
@@ -24,17 +24,18 @@ Once installed, the workspace conventions are:
 
 - **Never start services as background processes** (no `nohup`, no `&`). Always go through `./up` so they end up in the tmux session.
 - **Never kill services directly** (no `kill`, `pkill`, `tmux kill-session`). Always use `./down` so child processes get reaped cleanly.
-- **To recover a single wedged or crashed service, use `./restart <service>`** — the sanctioned alternative to a manual `kill`/`pkill` or a full `./down && ./up`. It reaps just that service's pane and re-runs its declared command, leaving every other pane in the session running. The argument is a *declared service name*, not an env or worktree (it's env-scoped like `./up`/`./down`/`./status`).
-- **`./status` reports the env it's run from.** `alpha/status` (or `./status` from inside `alpha/`) lists only the `<SESSION_PREFIX>-alpha` session's services; pass `--all` (`./status --all`) for the cross-env view of every running env. There is no `<worktree-name>` argument — scope comes from *which* env's `./status` you invoke, the same way `./up`/`./down` default to their own env.
+- **To recover wedged or crashed services, use `./restart <pattern>...`** — the sanctioned alternative to a manual `kill`/`pkill` or a full `./down && ./up`. It reaps each matched service's pane and re-runs its declared command, leaving every other pane in the session running. One or more `<service>` glob patterns are required; they are matched against declared service names scoped to the invoking env (e.g. `./restart backend`, `./restart 'work*'`). The orchestrator expands patterns against its own service catalog — winter forwards them verbatim without expansion.
+- **`./status` reports the env it's run from.** `alpha/status` (or `./status` from inside `alpha/`) lists only the `<SESSION_PREFIX>-alpha` session's services; pass `--all` (`./status --all`) for the cross-env view of every running env. Optional `<service>` glob patterns further narrow which services are shown (e.g. `./status back*`). Note: the env-root `./status` and `./restart` doors accept *service-only* glob tokens scoped to the invoking env — not the `<env>/<service>` form used by `winter service status`. Typing `./status alpha/backend` gives a no-match; use `./status backend` instead. Scope comes from *which* env's `./status` you invoke, the same way `./up`/`./down` default to their own env.
 - **Run the scripts from an env dir**, not the workspace root — `alpha/up`, or `cd alpha` first. The scripts are env-root symlinks; there is no `./up`/`./down`/`./status`/`./restart` at the workspace root.
 - **To read service output, use `winter service logs <env>`** (preferred) — output is captured to `<env>/.winter/logs/<service>.log` on `up` and persists across restarts, `down`, and teardown. Logs are timestamped and searchable. Examples:
 
   ```bash
   winter service logs alpha              # all services, full backlog
-  winter service logs alpha backend      # one service
-  winter service logs alpha -f           # follow (live tail, Ctrl-C to exit)
+  winter service logs alpha/backend      # one service
+  winter service logs alpha/backend -f   # follow (live tail, Ctrl-C to exit)
   winter service logs alpha -n 50        # last 50 events
   winter service logs alpha --since 2026-06-15T10:00:00Z   # time-bounded
+  winter service logs '*/backend'        # cross-env aggregation: backend in every running env
   ```
 
   The wire contract and rendering (plain lines vs. NDJSON) are winter's responsibility — see `workspace:/ai/winter-cli/usage/service.md`. There is no env-root `./logs` script; the interface is `winter service logs`.

@@ -64,20 +64,24 @@ def parse_line(raw: str) -> tuple[str | None, str]:
     return raw[:idx], raw[idx + 1 :]
 
 
-def build_event(ts: str | None, svc: str, msg: str) -> dict[str, str]:
+def build_event(ts: str | None, env: str, svc: str, msg: str) -> dict[str, str]:
     """Build an NDJSON event dict.
 
-    The ``ts`` key is omitted when *ts* is ``None`` (no per-line timestamp).
+    Field ordering matches the wire contract: ``ts`` (when present), ``env``,
+    ``svc``, ``msg``.  The ``ts`` key is omitted when *ts* is ``None`` (no
+    per-line timestamp).
     """
     event: dict[str, str] = {}
     if ts is not None:
         event["ts"] = ts
+    event["env"] = env
     event["svc"] = svc
     event["msg"] = msg
     return event
 
 
 def merge_sorted(
+    env: str,
     streams: list[tuple[str, list[tuple[str | None, str]]]],
 ) -> list[dict[str, str]]:
     """Merge per-service event streams into one stable time-sorted list.
@@ -92,7 +96,7 @@ def merge_sorted(
     all_events: list[dict[str, str]] = []
     for svc, pairs in streams:
         for ts, msg in pairs:
-            all_events.append(build_event(ts, svc, msg))
+            all_events.append(build_event(ts, env, svc, msg))
 
     all_events.sort(key=lambda e: e.get("ts", ""))
     return all_events
@@ -260,7 +264,7 @@ class LogService:
         # global tail trims the mixed-mode merged set; PANE events (no ts) sort
         # before FILE events and may consume tail slots, making the effective
         # backlog for FILE-mode services smaller than requested.
-        all_events = merge_sorted(streams)
+        all_events = merge_sorted(ctx.env, streams)
         all_events = apply_time_filter(all_events, query.since, query.until)
         file_events = apply_tail(all_events, query.tail)
 
@@ -322,7 +326,7 @@ class LogService:
                                     continue
                                 if query.until and ts > query.until:
                                     continue
-                            event = build_event(ts, svc.name, msg)
+                            event = build_event(ts, ctx.env, svc.name, msg)
                             self._sink.write(json.dumps(event, ensure_ascii=False) + "\n")
                             self._sink.flush()
 
@@ -340,7 +344,7 @@ class LogService:
                         new_lines_pane = all_lines[prev_count:]
                         pane_emitted_counts[svc.name] = len(all_lines)
                         for ln in new_lines_pane:
-                            event = build_event(None, svc.name, ln)
+                            event = build_event(None, ctx.env, svc.name, ln)
                             self._sink.write(json.dumps(event, ensure_ascii=False) + "\n")
                             self._sink.flush()
 

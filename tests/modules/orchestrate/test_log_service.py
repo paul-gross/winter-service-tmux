@@ -114,14 +114,18 @@ def test_parse_line_no_tab() -> None:
 
 
 def test_build_event_with_ts() -> None:
-    event = build_event("2026-06-15T10:00:01Z", "api", "started")
-    assert event == {"ts": "2026-06-15T10:00:01Z", "svc": "api", "msg": "started"}
+    event = build_event("2026-06-15T10:00:01Z", "alpha", "api", "started")
+    assert event == {"ts": "2026-06-15T10:00:01Z", "env": "alpha", "svc": "api", "msg": "started"}
+    # Field ordering: ts, env, svc, msg
+    assert list(event.keys()) == ["ts", "env", "svc", "msg"]
 
 
 def test_build_event_without_ts() -> None:
-    event = build_event(None, "api", "started")
-    assert event == {"svc": "api", "msg": "started"}
+    event = build_event(None, "alpha", "api", "started")
+    assert event == {"env": "alpha", "svc": "api", "msg": "started"}
     assert "ts" not in event
+    # Field ordering without ts: env, svc, msg
+    assert list(event.keys()) == ["env", "svc", "msg"]
 
 
 def test_merge_sorted_single_service() -> None:
@@ -134,10 +138,11 @@ def test_merge_sorted_single_service() -> None:
             ],
         )
     ]
-    events = merge_sorted(streams)
+    events = merge_sorted("alpha", streams)
     assert len(events) == 2
     assert events[0]["msg"] == "first"
     assert events[1]["msg"] == "third"
+    assert events[0]["env"] == "alpha"
 
 
 def test_merge_sorted_multi_service_by_ts() -> None:
@@ -156,9 +161,10 @@ def test_merge_sorted_multi_service_by_ts() -> None:
             ],
         ),
     ]
-    events = merge_sorted(streams)
+    events = merge_sorted("alpha", streams)
     assert [e["msg"] for e in events] == ["api-first", "worker-second", "api-third"]
     assert [e["svc"] for e in events] == ["api", "worker", "api"]
+    assert all(e["env"] == "alpha" for e in events)
 
 
 def test_merge_sorted_no_ts_sorts_first() -> None:
@@ -172,10 +178,11 @@ def test_merge_sorted_no_ts_sorts_first() -> None:
             ],
         )
     ]
-    events = merge_sorted(streams)
+    events = merge_sorted("alpha", streams)
     assert events[0]["msg"] == "no-ts-line"
     assert "ts" not in events[0]
     assert events[1]["msg"] == "has-ts"
+    assert events[0]["env"] == "alpha"
 
 
 def test_apply_tail_none_returns_all() -> None:
@@ -223,7 +230,11 @@ def test_single_service_backlog_emits_ndjson() -> None:
     assert events[0]["svc"] == "api"
     assert events[0]["ts"] == "2026-06-15T10:00:01.000000Z"
     assert events[0]["msg"] == "listening on :8080"
+    assert events[0]["env"] == "alpha"
+    # Field ordering: ts, env, svc, msg
+    assert list(events[0].keys()) == ["ts", "env", "svc", "msg"]
     assert events[1]["msg"] == "ready"
+    assert events[1]["env"] == "alpha"
 
 
 def test_multi_service_merge_sorted() -> None:
@@ -666,8 +677,12 @@ def test_pane_mode_backlog_emits_ndjson_without_ts() -> None:
     assert events[0]["svc"] == "shell"
     assert events[0]["msg"] == "line one"
     assert "ts" not in events[0]
+    assert events[0]["env"] == "alpha"
+    # Field ordering without ts: env, svc, msg
+    assert list(events[0].keys()) == ["env", "svc", "msg"]
     assert events[1]["msg"] == "line two"
     assert "ts" not in events[1]
+    assert events[1]["env"] == "alpha"
 
 
 def test_pane_mode_tail_limits_output() -> None:
@@ -1042,3 +1057,67 @@ def test_logs_tail_applies_after_time_filter() -> None:
     assert "included-3" in msgs
     assert "excluded" not in msgs
     assert "included-1" not in msgs
+
+
+# ---------------------------------------------------------------------------
+# Door-boundary NDJSON env field — serialized wire lines for file and pane mode
+# ---------------------------------------------------------------------------
+
+
+def test_ndjson_serialized_line_contains_env_file_mode() -> None:
+    """File-mode: each serialized NDJSON line on the wire contains the 'env' field."""
+    fake_repo = FakeLogRepository(
+        segments={"api": ["2026-06-15T10:00:00Z\thello\n"]}
+    )
+    manifest = _make_manifest("api")
+    ctx = _make_ctx(manifest)
+    sink = io.StringIO()
+    svc = _make_svc(fake_repo, sink)
+
+    rc = svc.logs(ctx, _make_query())
+
+    assert rc == 0
+    sink.seek(0)
+    raw_lines = [line for line in sink if line.strip()]
+    assert len(raw_lines) == 1
+    # Parse the raw serialized line to assert env field is present
+    parsed = json.loads(raw_lines[0])
+    assert "env" in parsed
+    assert parsed["env"] == "alpha"
+
+
+def test_ndjson_serialized_line_contains_env_pane_mode() -> None:
+    """Pane-mode: each serialized NDJSON line on the wire contains the 'env' field (no 'ts')."""
+    from service_manifest.modules.manifest.model import LogMode
+
+    tmux = FakeTmuxRepository(capture_text={"0.0": "pane-output\n"})
+    tmux.seed_session("mp-alpha", {"0.0": 10})
+    fake_repo = FakeLogRepository()
+    svc_pane = Service(
+        name="shell",
+        target=Target(window=0, pane=0),
+        command="",
+        log=LogMode.PANE,
+    )
+    manifest = ServiceManifest(
+        session_prefix="mp",
+        env_file=".winter.env",
+        layout_hook=None,
+        services=(svc_pane,),
+        status_urls=(),
+    )
+    ctx = _make_ctx(manifest)
+    sink = io.StringIO()
+    svc = _make_svc(fake_repo, sink, tmux=tmux)
+
+    rc = svc.logs(ctx, _make_query())
+
+    assert rc == 0
+    sink.seek(0)
+    raw_lines = [line for line in sink if line.strip()]
+    assert len(raw_lines) == 1
+    # Parse the raw serialized line to assert env field is present (no ts)
+    parsed = json.loads(raw_lines[0])
+    assert "env" in parsed
+    assert parsed["env"] == "alpha"
+    assert "ts" not in parsed

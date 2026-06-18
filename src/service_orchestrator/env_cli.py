@@ -21,8 +21,8 @@ Door-local arg shapes (NOT part of the winter contract):
 
 - ``up [local] [-a|--attach] [<name>]``
 - ``down [local|<name>]``
-- ``status [--all]``
-- ``restart <service>``
+- ``status [--all] [<pattern>...]``
+- ``restart <pattern>...``
 
 ``local`` mode builds an env-less ``EnvContext`` (no env file sourced).
 ``-a``/``--attach`` execs ``tmux attach-session`` after ``up``.
@@ -33,6 +33,7 @@ unreadable (so ``winter ws destroy`` never gets stuck).
 
 from __future__ import annotations
 
+import fnmatch
 import os
 import sys
 from pathlib import Path
@@ -40,6 +41,7 @@ from pathlib import Path
 from service_manifest.modules.manifest.errors import ManifestError
 from service_orchestrator.container import Container
 from service_orchestrator.core.internal.env_workspace_locator import EnvWorkspaceLocator
+from service_orchestrator.modules.orchestrate.env_enumerator import running_envs
 from service_orchestrator.modules.orchestrate.errors import OrchestratorError
 from service_orchestrator.modules.orchestrate.tmux_repository import ITmuxRepository
 
@@ -230,17 +232,20 @@ def _handle_status(
     container: Container,
 ) -> int:
     show_all = False
+    patterns: list[str] = []
     for arg in argv:
         if arg in ("--all", "all"):
             show_all = True
         else:
+            patterns.append(arg)
+
+    if show_all:
+        if patterns:
             print(
-                "usage: status [--all]\n  (no argument) report this env's services; --all reports every env",
+                "status: --all takes no service patterns",
                 file=sys.stderr,
             )
             return 2
-
-    if show_all:
         return _handle_status_all(env, workspace_root, container)
 
     try:
@@ -252,8 +257,32 @@ def _handle_status(
         print(f"status: env '{env}': {exc}", file=sys.stderr)
         return 1
 
+    if not patterns:
+        # No patterns — show all services in this env.
+        try:
+            return container.orchestrator.status(ctx)
+        except OrchestratorError as exc:
+            print(f"status: env '{env}': {exc}", file=sys.stderr)
+            return 1
+
+    # Expand each pattern against this env's services.
+    all_names = [svc.name for svc in ctx.manifest.services]
+    matched: list[str] = []
+    for pat in patterns:
+        hits = [name for name in all_names if fnmatch.fnmatchcase(name, pat)]
+        if not hits:
+            print(
+                f"status: pattern '{pat}' matches no declared services; "
+                f"declared: {', '.join(all_names) or '(none)'}",
+                file=sys.stderr,
+            )
+            return 1
+        for name in hits:
+            if name not in matched:
+                matched.append(name)
+
     try:
-        return container.orchestrator.status(ctx)
+        return container.orchestrator.status(ctx, services=tuple(matched))
     except OrchestratorError as exc:
         print(f"status: env '{env}': {exc}", file=sys.stderr)
         return 1
@@ -277,19 +306,16 @@ def _handle_status_all(
         return 1
 
     try:
-        all_sessions = container.tmux.list_sessions()
+        env_names = running_envs(container.tmux, prefix)
     except OrchestratorError as exc:
         print(f"status --all: {exc}", file=sys.stderr)
         return 1
-
-    matching = [s for s in all_sessions if s.startswith(f"{prefix}-")]
-    if not matching:
+    if not env_names:
         print(f"No {prefix}-* sessions running.")
         return 0
 
     rc = 0
-    for session in matching:
-        env_name = session[len(prefix) + 1 :]
+    for env_name in env_names:
         try:
             env_ctx = container.env_context_builder.build(env_name, workspace_root=workspace_root)
             r = container.orchestrator.status(env_ctx)
@@ -314,13 +340,11 @@ def _handle_restart(
         except (ManifestError, OSError, OrchestratorError):
             declared = "(manifest unreadable)"
         if not argv:
-            print("usage: restart <service>", file=sys.stderr)
+            print("usage: restart <pattern>...", file=sys.stderr)
         else:
-            print(f"restart: takes a service name, not a flag: '{argv[0]}'", file=sys.stderr)
+            print(f"restart: takes a service pattern, not a flag: '{argv[0]}'", file=sys.stderr)
         print(f"declared services: {declared}", file=sys.stderr)
         return 1
-
-    service_name = argv[0]
 
     try:
         ctx = container.env_context_builder.build(env, workspace_root=workspace_root)
@@ -331,11 +355,31 @@ def _handle_restart(
         print(f"restart: env '{env}': {exc}", file=sys.stderr)
         return 1
 
-    try:
-        return container.orchestrator.restart(ctx, service_name)
-    except OrchestratorError as exc:
-        print(f"restart: env '{env}': {exc}", file=sys.stderr)
-        return 1
+    all_names = [svc.name for svc in ctx.manifest.services]
+    matched: list[str] = []
+    for pat in argv:
+        hits = [name for name in all_names if fnmatch.fnmatchcase(name, pat)]
+        if not hits:
+            print(
+                f"restart: pattern '{pat}' matches no declared services; "
+                f"declared: {', '.join(all_names) or '(none)'}",
+                file=sys.stderr,
+            )
+            return 1
+        for name in hits:
+            if name not in matched:
+                matched.append(name)
+
+    rc = 0
+    for name in matched:
+        try:
+            r = container.orchestrator.restart(ctx, name)
+            if r != 0:
+                rc = r
+        except OrchestratorError as exc:
+            print(f"restart: env '{env}': service '{name}': {exc}", file=sys.stderr)
+            rc = 1
+    return rc
 
 
 # ---------------------------------------------------------------------------

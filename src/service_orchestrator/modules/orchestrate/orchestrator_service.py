@@ -192,12 +192,17 @@ class OrchestratorService:
         print(f"Stopped services for '{ctx.env}' (session: {ctx.session})")
         return 0
 
-    def status(self, ctx: EnvContext) -> int:
+    def status(self, ctx: EnvContext, services: tuple[str, ...] = ()) -> int:
         """Print service status for *ctx.env*.
 
         Renders the manifest's declarative status URLs as a header (with
         ``${VAR}`` placeholders interpolated against ``ctx.env_vars``), then
         per-service running/stopped/missing lines.
+
+        Args:
+            ctx: The resolved environment context.
+            services: Optional tuple of service names to show.  Empty tuple
+                (the default) shows all services declared in the manifest.
         """
         if not self._tmux.has_session(ctx.session):
             print(f"No {ctx.session} session running.")
@@ -214,7 +219,12 @@ class OrchestratorService:
         pane_infos = self._tmux.list_panes(ctx.session)
         pane_map: dict[str, int] = {p.target: p.pid for p in pane_infos}
 
-        for svc in ctx.manifest.services:
+        in_scope = ctx.manifest.services
+        if services:
+            requested = set(services)
+            in_scope = tuple(s for s in in_scope if s.name in requested)
+
+        for svc in in_scope:
             target = f"{svc.target.window}.{svc.target.pane}"
             if target not in pane_map:
                 print(f"  {svc.name}:".ljust(16) + "missing")

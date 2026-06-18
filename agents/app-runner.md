@@ -24,10 +24,10 @@ At the start of each session, read `workspace:/ai/project/setup-tmux.toml` to le
 
 ```bash
 winter service logs alpha              # all services, full backlog
-winter service logs alpha backend      # one service
+winter service logs alpha/backend      # one service
 winter service logs alpha -n 50        # last 50 events
 winter service logs alpha --since 2026-06-15T10:00:00Z   # time-bounded
-winter service logs alpha -f           # follow (live tail, Ctrl-C to exit)
+winter service logs alpha/backend -f   # follow (live tail, Ctrl-C to exit)
 ```
 
 File-mode logs persist to `<env>/.winter/logs/<service>.log` on `up`, survive `down` and teardown, and carry per-line timestamps — prefer this path for diagnosis. The flag surface and rendering rules live in `workspace:/ai/winter-cli/usage/service.md`.
@@ -52,9 +52,9 @@ Use this only when the service's `log` mode is `"pane"` or you need to see the r
 
 1. **Start**: Run `./up <worktree>` (or just `./up` from inside the env dir). Wait a few seconds, then run `./status` to confirm this env's services came up (`./status --all` reports every running env).
 2. **Status**: Run `./status` and summarize concisely — which services are running, which are not, any visible errors.
-3. **Diagnose**: Read logs with `winter service logs alpha [service] [-n N]` for file-mode services, or `tmux capture-pane` for pane-mode services. Report the root cause, not the full log.
+3. **Diagnose**: Read logs with `winter service logs alpha/<service> [-n N]` (or bare `alpha` for all services) for file-mode services, or `tmux capture-pane` for pane-mode services. Report the root cause, not the full log.
 4. **Relay**: Be concise — service name, status, and the relevant error line. Don't dump raw output unless asked.
-5. **Restart**: To bounce a single wedged or crashed service, run `./restart <service>` — where `<service>` is a declared service name (not an env or worktree; scope comes from which env's `./restart` you run, like `./status`). It reaps that pane's processes and re-runs the service's declared command, leaving every other pane untouched. Use `./down` then `./up` only for a full-session restart (e.g. after a config change).
+5. **Restart**: To bounce a wedged or crashed service, run `./restart <pattern>...` — one or more `<service>` glob patterns scoped to the invoking env (e.g. `./restart backend`, `./restart 'work*'`). It reaps each matched pane's processes and re-runs the service's declared command, leaving every other pane untouched. Use `./down` then `./up` only for a full-session restart (e.g. after a config change).
 
 ## Rules
 
