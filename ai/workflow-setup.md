@@ -200,7 +200,44 @@ chmod +x ./ai/project/layout-hook.sh
 
 Confirm: "`layout-hook.sh` written and executable at `workspace:/ai/project/layout-hook.sh`."
 
-### 10. Validate
+### 10. Workspace singleton services (optional)
+
+**Explain first:** "If your workspace needs shared infrastructure that should run once for the whole workspace — a database, a message broker, a container registry — you can mark a `[[service]]` entry with `scope = "workspace"` alongside the per-env ones (`scope` defaults to `"project"`). These run in a separate `<prefix>-workspace` tmux session at the workspace root, started via `winter service up workspace`. `winter service up <env>` ensures the workspace session is running first — so workspace singletons are guaranteed to be up when any env spins up via `winter service up`. Note: the env-root `./up` symlink does NOT auto-start the workspace session; if you use `alpha/up`, run `winter service up workspace` separately first."
+
+Ask **one** question:
+
+**"Does your workspace need any shared singleton services (e.g. a shared database or broker that all feature envs should share)? If yes, name them."**
+
+- "no" / "none": skip this step and continue.
+- otherwise: for each workspace service, ask in turn:
+  1. **"What's the start command for `<service>`?"** — this is typically a blocking foreground command (e.g. `postgres -D /usr/local/var/postgres`, `rabbitmq-server`, `docker run -p 5432:5432 postgres:16`). The orchestrator kills the session to shut it down, so the command must run in the foreground.
+  2. **"Which pane should it occupy?"** (e.g. `0.0`, `0.1`) — workspace pane targets are independent of env targets; the same address may appear in both without conflict.
+
+After all workspace services are described, summarise back and ask **"Anything to add or change?"** before continuing.
+
+**Write the workspace section.** Append to `workspace:/ai/project/setup-tmux.toml`:
+
+```toml
+workspace_layout_hook = "ai/project/workspace-layout-hook.sh"
+
+[[service]]
+name    = "<name>"
+target  = "<window>.<pane>"
+command = "<blocking-foreground-command>"
+scope   = "workspace"
+```
+
+Then write `workspace:/ai/project/workspace-layout-hook.sh`, following the same contract as `layout-hook.sh` (layout only; see `winter-service-tmux:/workflow/layout-hook.sh.example`), but the orchestrator will supply `WINTER_ENV=workspace` and `WINTER_TMUX_WORKTREE_DIR=<workspace-root>` instead of per-env values (`WINTER_ENV_INDEX` and `WINTER_PORT_BASE` are **not** set for the workspace hook). Mark it executable:
+
+```bash
+chmod +x ./ai/project/workspace-layout-hook.sh
+```
+
+**Note on shutdown:** workspace services are shut down by `winter service down workspace`, which reaps the tmux session and kills each pane's process tree. This is best-effort — a service that forks to the background or detaches from the pane's process group may survive. Run commands in the foreground so the session reap reaches them.
+
+Confirm: "Workspace singletons added to `setup-tmux.toml`; `workspace-layout-hook.sh` written."
+
+### 11. Validate
 
 **Explain first:** "Before testing live, validate the manifest — the validator catches schema errors, duplicate targets, and missing-service issues before they reach a running tmux session."
 
@@ -215,7 +252,7 @@ If the validator reports errors, fix them in `setup-tmux.toml` (or `layout-hook.
 
 Confirm: "Manifest validates cleanly."
 
-### 11. Smoke test (optional)
+### 12. Smoke test (optional)
 
 **Explain first:** "Before declaring done, you can verify the full lifecycle in a real worktree."
 
@@ -234,6 +271,8 @@ Summarise everything that happened in a single message:
 - `env_file` (value or "unset")
 - Services declared (names and targets)
 - `layout-hook.sh`: `workspace:/ai/project/layout-hook.sh` (written / unchanged)
+- Workspace services declared (names and targets, or "none")
+- `workspace-layout-hook.sh`: `workspace:/ai/project/workspace-layout-hook.sh` (written / skipped / unchanged)
 - Validation: passed / errors (if errors, what to fix)
 - Smoke test: ran / skipped / failed (if failed, what to fix)
 - Any manual steps still pending

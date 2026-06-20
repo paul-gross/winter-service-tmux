@@ -17,7 +17,6 @@ from typing import IO
 import service_manifest.container as sm_container_mod
 from service_orchestrator.core.internal.env_workspace_locator import EnvWorkspaceLocator
 from service_orchestrator.core.workspace_locator import IWorkspaceLocator
-from service_orchestrator.modules.orchestrate.env_context_builder import EnvContextBuilder
 from service_orchestrator.modules.orchestrate.follow_clock import IFollowClock
 from service_orchestrator.modules.orchestrate.internal.cli_tmux_repository import CliTmuxRepository
 from service_orchestrator.modules.orchestrate.internal.local_log_repository import LocalLogRepository
@@ -32,6 +31,7 @@ from service_orchestrator.modules.orchestrate.log_repository import ILogReposito
 from service_orchestrator.modules.orchestrate.log_service import LogService
 from service_orchestrator.modules.orchestrate.orchestrator_service import OrchestratorService
 from service_orchestrator.modules.orchestrate.reaper import IProcessReaper
+from service_orchestrator.modules.orchestrate.session_context_builder import SessionContextBuilder
 from service_orchestrator.modules.orchestrate.tmux_repository import ITmuxRepository
 
 
@@ -82,7 +82,7 @@ class Container:
             sink=log_sink,
         )
 
-        self.env_context_builder = EnvContextBuilder(
+        self.session_context_builder = SessionContextBuilder(
             locator=self.locator,
             manifest_reader=self.manifest_reader,
             env_reader=self.env_reader,

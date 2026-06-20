@@ -1,7 +1,7 @@
 """Core orchestrator service — ``up``, ``down``, ``status``, ``restart``.
 
 All four actions share a single ``OrchestratorService`` instance.  Both CLI
-doors (``cli.py`` and ``env_cli.py``, Phase 3) build an ``EnvContext`` and
+doors (``cli.py`` and ``env_cli.py``, Phase 3) build an ``SessionContext`` and
 delegate here.  No subprocess calls live in this file — everything is
 delegated to the injected Protocol seams.
 """
@@ -14,12 +14,12 @@ import sys
 
 from service_manifest.modules.manifest.env import interpolate
 from service_manifest.modules.manifest.model import LogMode
-from service_orchestrator.modules.orchestrate.env_context import EnvContext
 from service_orchestrator.modules.orchestrate.errors import OrchestratorError
 from service_orchestrator.modules.orchestrate.follow_clock import IFollowClock
 from service_orchestrator.modules.orchestrate.layout_hook_runner import ILayoutHookRunner
 from service_orchestrator.modules.orchestrate.log_repository import ILogRepository
 from service_orchestrator.modules.orchestrate.reaper import IProcessReaper
+from service_orchestrator.modules.orchestrate.session_context import SessionContext
 from service_orchestrator.modules.orchestrate.status_report import (
     build_launch_line,
     build_status_json,
@@ -82,7 +82,7 @@ class OrchestratorService:
     # Public actions
     # ------------------------------------------------------------------
 
-    def up(self, ctx: EnvContext) -> int:
+    def up(self, ctx: SessionContext) -> int:
         """Start services for *ctx.env*.
 
         Idempotent: if the session already exists, prints a message and
@@ -110,8 +110,8 @@ class OrchestratorService:
         )
 
         hook_ok = True
-        if ctx.manifest.layout_hook is not None:
-            hook_path = ctx.workspace_root / ctx.manifest.layout_hook
+        if ctx.layout_hook is not None:
+            hook_path = ctx.workspace_root / ctx.layout_hook
             hook_env = self._build_hook_env(ctx)
             try:
                 self._hook_runner.run(hook_path, hook_env, ctx.worktree_dir)
@@ -142,7 +142,7 @@ class OrchestratorService:
         existing_targets = {p.target for p in pane_infos}
         missing_targets = [
             f"{svc.name}@{svc.target.window}.{svc.target.pane}"
-            for svc in ctx.manifest.services
+            for svc in ctx.services
             if f"{svc.target.window}.{svc.target.pane}" not in existing_targets
         ]
         if missing_targets:
@@ -154,7 +154,7 @@ class OrchestratorService:
         # Ensure the log directory exists before starting any captured services.
         self._log_repo.ensure_log_dir(ctx.worktree_dir)
 
-        for svc in ctx.manifest.services:
+        for svc in ctx.services:
             target = f"{svc.target.window}.{svc.target.pane}"
             # A service is captured iff it has a non-empty command AND log=FILE.
             captured = bool(svc.command) and svc.log == LogMode.FILE
@@ -166,8 +166,8 @@ class OrchestratorService:
                     svc.name,
                     svc.command,
                     logfile=logfile,
-                    rotate_size_bytes=ctx.manifest.logs.rotate_size_bytes,
-                    max_rotations=ctx.manifest.logs.max_rotations,
+                    rotate_size_bytes=ctx.logs.rotate_size_bytes,
+                    max_rotations=ctx.logs.max_rotations,
                 )
             else:
                 line = build_launch_line(
@@ -181,7 +181,7 @@ class OrchestratorService:
         print(f"Started services in tmux session '{ctx.session}'")
         return 0 if hook_ok else 1
 
-    def down(self, ctx: EnvContext) -> int:
+    def down(self, ctx: SessionContext) -> int:
         """Stop all services and kill the tmux session for *ctx.env*.
 
         No-op (returns 0) when the session is not running.
@@ -198,7 +198,7 @@ class OrchestratorService:
         print(f"Stopped services for '{ctx.env}' (session: {ctx.session})")
         return 0
 
-    def status(self, ctx: EnvContext, services: tuple[str, ...] = (), *, json_output: bool = False) -> int:
+    def status(self, ctx: SessionContext, services: tuple[str, ...] = (), *, json_output: bool = False) -> int:
         """Print service status for *ctx.env*.
 
         Renders the manifest's declarative status URLs as a header (with
@@ -241,7 +241,7 @@ class OrchestratorService:
         pane_infos = self._tmux.list_panes(ctx.session)
         pane_map: dict[str, int] = {p.target: p.pid for p in pane_infos}
 
-        in_scope = ctx.manifest.services
+        in_scope = ctx.services
         if services:
             requested = set(services)
             in_scope = tuple(s for s in in_scope if s.name in requested)
@@ -262,9 +262,9 @@ class OrchestratorService:
 
         print(f"=== {ctx.env} ===")
 
-        if ctx.manifest.status_urls:
+        if ctx.status_urls:
             env_vars = ctx.env_vars or {}
-            for status_url in ctx.manifest.status_urls:
+            for status_url in ctx.status_urls:
                 rendered_url, _ = interpolate(status_url.url, env_vars)
                 print(f"  {status_url.label}: {rendered_url}")
 
@@ -286,7 +286,7 @@ class OrchestratorService:
         print()
         return 0
 
-    def restart(self, ctx: EnvContext, service_name: str) -> int:
+    def restart(self, ctx: SessionContext, service_name: str) -> int:
         """Restart a single named service in the running session.
 
         Raises ``OrchestratorError`` when *service_name* is not declared in
@@ -294,13 +294,13 @@ class OrchestratorService:
         """
         # Resolve the service from the manifest.
         service = None
-        for svc in ctx.manifest.services:
+        for svc in ctx.services:
             if svc.name == service_name:
                 service = svc
                 break
 
         if service is None:
-            declared = ", ".join(s.name for s in ctx.manifest.services)
+            declared = ", ".join(s.name for s in ctx.services)
             raise OrchestratorError(f"unknown service '{service_name}'; declared services: {declared}")
 
         target = f"{service.target.window}.{service.target.pane}"
@@ -326,7 +326,7 @@ class OrchestratorService:
         print(f"Restarted '{service_name}' in {ctx.session}:{target}")
         return 0
 
-    def _prune(self, ctx: EnvContext) -> None:
+    def _prune(self, ctx: SessionContext) -> None:
         """Remove rotated log segments older than the retention window.
 
         Internal method — called opportunistically by ``up`` before starting
@@ -344,8 +344,8 @@ class OrchestratorService:
             return
         if self._tmux.has_session(ctx.session):
             return
-        cutoff = self._clock.now() - ctx.manifest.logs.retention_seconds
-        for svc in ctx.manifest.services:
+        cutoff = self._clock.now() - ctx.logs.retention_seconds
+        for svc in ctx.services:
             segments = self._log_repo.rotated_segments(ctx.worktree_dir, svc.name)
             to_delete = _segments_to_prune(segments, self._log_repo, cutoff)
             for path in to_delete:
@@ -356,7 +356,7 @@ class OrchestratorService:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _build_hook_env(ctx: EnvContext) -> dict[str, str]:
+    def _build_hook_env(ctx: SessionContext) -> dict[str, str]:
         """Build the environment dict passed to the layout hook.
 
         Provides the WINTER_TMUX_* contract documented in

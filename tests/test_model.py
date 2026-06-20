@@ -199,3 +199,36 @@ def test_service_manifest_equality() -> None:
         )
 
     assert make() == make()
+
+
+# ---------------------------------------------------------------------------
+# workspace_services / workspace_layout_hook defaults
+# ---------------------------------------------------------------------------
+
+
+def test_service_manifest_workspace_fields_default() -> None:
+    """New workspace fields default to () and None without breaking existing construction."""
+    manifest = ServiceManifest(
+        session_prefix="mp",
+        env_file=None,
+        layout_hook="ai/project/layout-hook.sh",
+        services=(Service(name="backend", target=Target(0, 0), command="cmd"),),
+        status_urls=(StatusUrl(label="BE", url="http://localhost:4020"),),
+    )
+    assert manifest.workspace_services == ()
+    assert manifest.workspace_layout_hook is None
+
+
+def test_service_manifest_workspace_fields_explicit() -> None:
+    ws_svc = Service(name="docker", target=Target(0, 0), command="docker compose up")
+    manifest = ServiceManifest(
+        session_prefix="mp",
+        env_file=None,
+        layout_hook=None,
+        services=(),
+        status_urls=(),
+        workspace_services=(ws_svc,),
+        workspace_layout_hook="ai/project/workspace-layout-hook.sh",
+    )
+    assert manifest.workspace_services == (ws_svc,)
+    assert manifest.workspace_layout_hook == "ai/project/workspace-layout-hook.sh"

@@ -36,7 +36,8 @@ from service_orchestrator.env_cli import (
     _resolve_from_argv0,
     main,
 )
-from service_orchestrator.modules.orchestrate.env_context import EnvContext
+from service_orchestrator.modules.orchestrate.session_context import SessionContext
+from service_orchestrator.modules.orchestrate.session_context_builder import WORKSPACE_TARGET
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -49,6 +50,7 @@ _MANIFEST = ServiceManifest(
     layout_hook=None,
     services=(Service(name="backend", target=Target(window=0, pane=0), command="cmd"),),
     status_urls=(),
+    workspace_services=(Service(name="ws-svc", target=Target(window=0, pane=0), command="ws-cmd"),),
 )
 _MANIFEST_MULTI = ServiceManifest(
     session_prefix="mp",
@@ -63,28 +65,53 @@ _MANIFEST_MULTI = ServiceManifest(
 )
 
 
-def _make_ctx(env: str = "alpha", manifest: ServiceManifest = _MANIFEST) -> EnvContext:
-    return EnvContext(
+def _make_ctx(env: str = "alpha", manifest: ServiceManifest = _MANIFEST) -> SessionContext:
+    return SessionContext(
         env=env,
         workspace_root=_WORKSPACE,
         worktree_dir=_WORKSPACE / env,
-        manifest=manifest,
+        session_prefix=manifest.session_prefix,
+        services=manifest.services,
+        layout_hook=manifest.layout_hook,
+        status_urls=manifest.status_urls,
+        logs=manifest.logs,
         env_vars={"BACKEND_PORT": "4100"},
         env_file_path=_WORKSPACE / env / ".winter.env",
     )
 
 
+def _make_workspace_ctx() -> SessionContext:
+    # The workspace session selects the manifest's workspace_* fields (no status URLs).
+    return SessionContext(
+        env=WORKSPACE_TARGET,
+        workspace_root=_WORKSPACE,
+        worktree_dir=_WORKSPACE,  # NOT _WORKSPACE/workspace
+        session_prefix=_MANIFEST.session_prefix,
+        services=_MANIFEST.workspace_services,
+        layout_hook=_MANIFEST.workspace_layout_hook,
+        status_urls=(),
+        logs=_MANIFEST.logs,
+        env_vars=None,
+        env_file_path=None,
+    )
+
+
 def _make_mock_container(
-    ctx: EnvContext,
+    ctx: SessionContext,
     *,
     service_rc: int = 0,
     build_side_effect: Exception | None = None,
+    workspace_ctx: SessionContext | None = None,
 ) -> MagicMock:
     mock_builder = MagicMock()
     if build_side_effect is not None:
         mock_builder.build.side_effect = build_side_effect
     else:
         mock_builder.build.return_value = ctx
+
+    # Configure build_workspace return value (returns workspace ctx or a default).
+    _ws_ctx = workspace_ctx if workspace_ctx is not None else _make_workspace_ctx()
+    mock_builder.build_workspace.return_value = _ws_ctx
 
     mock_orchestrator = MagicMock()
     mock_orchestrator.up.return_value = service_rc
@@ -96,7 +123,7 @@ def _make_mock_container(
     mock_tmux.list_sessions.return_value = []
 
     mock_container = MagicMock()
-    mock_container.env_context_builder = mock_builder
+    mock_container.session_context_builder = mock_builder
     mock_container.orchestrator = mock_orchestrator
     mock_container.tmux = mock_tmux
     return mock_container
@@ -238,7 +265,7 @@ def test_up_local_mode_calls_skip_env_file(
     rc = main(["up", "local"])
 
     assert rc == 0
-    call_kwargs = container.env_context_builder.build.call_args
+    call_kwargs = container.session_context_builder.build.call_args
     assert call_kwargs is not None
     assert call_kwargs.kwargs.get("skip_env_file") is True
 
@@ -290,7 +317,7 @@ def test_status_all_loops_sessions(
     container = _make_mock_container(ctx_alpha, service_rc=0)
     container.tmux.list_sessions.return_value = ["mp-alpha", "mp-beta", "other-session"]
     # builder.build always returns a ctx for any env
-    container.env_context_builder.build.return_value = ctx_alpha
+    container.session_context_builder.build.return_value = ctx_alpha
 
     _patch_container_and_argv0(monkeypatch, container, str(script))
 
@@ -773,3 +800,112 @@ def test_main_unknown_action_returns_2(
     rc = main(["badaction"])
 
     assert rc == 2
+
+
+# ---------------------------------------------------------------------------
+# workspace target — env_cli door (AC 5)
+# ---------------------------------------------------------------------------
+
+
+def test_down_workspace_routes_through_build_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """down workspace → build_workspace called (NOT build('workspace',...)); orchestrator.down called."""
+    ws = tmp_path
+    env_dir = ws / "alpha"
+    env_dir.mkdir(parents=True)
+    script = env_dir / "down"
+    script.write_text("#!/bin/sh\n")
+
+    ws_ctx = _make_workspace_ctx()
+    ctx = _make_ctx("alpha")
+    container = _make_mock_container(ctx, workspace_ctx=ws_ctx)
+    _patch_container_and_argv0(monkeypatch, container, str(script))
+
+    rc = main(["down", "workspace"])
+
+    assert rc == 0
+    container.session_context_builder.build_workspace.assert_called_once()
+    container.session_context_builder.build.assert_not_called()
+    container.orchestrator.down.assert_called_once_with(ws_ctx)
+
+
+def test_up_workspace_routes_through_build_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """up workspace → build_workspace called; orchestrator.up called."""
+    ws = tmp_path
+    env_dir = ws / "alpha"
+    env_dir.mkdir(parents=True)
+    script = env_dir / "up"
+    script.write_text("#!/bin/sh\n")
+
+    ws_ctx = _make_workspace_ctx()
+    ctx = _make_ctx("alpha")
+    container = _make_mock_container(ctx, workspace_ctx=ws_ctx)
+    _patch_container_and_argv0(monkeypatch, container, str(script))
+
+    rc = main(["up", "workspace"])
+
+    assert rc == 0
+    container.session_context_builder.build_workspace.assert_called_once()
+    container.session_context_builder.build.assert_not_called()
+    container.orchestrator.up.assert_called_once_with(ws_ctx)
+
+
+# ---------------------------------------------------------------------------
+# status --all includes workspace session (Risk #1 for env_cli door)
+# ---------------------------------------------------------------------------
+
+
+def test_status_all_includes_workspace_session(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """CRITICAL: status --all when mp-alpha AND mp-workspace running.
+
+    - workspace session appears exactly once, built via build_workspace
+    - env session built via build (normal path)
+    - no phantom ws_root/workspace context created
+    """
+    ws = tmp_path
+    env_dir = ws / "alpha"
+    env_dir.mkdir(parents=True)
+    script = env_dir / "status"
+    script.write_text("#!/bin/sh\n")
+
+    ws_ctx = _make_workspace_ctx()
+    ctx_alpha = _make_ctx("alpha")
+    container = _make_mock_container(ctx_alpha, workspace_ctx=ws_ctx)
+    # running sessions: alpha env + workspace singleton
+    container.tmux.list_sessions.return_value = ["mp-alpha", "mp-workspace"]
+    # build returns alpha ctx for env calls
+    container.session_context_builder.build.return_value = ctx_alpha
+    _patch_container_and_argv0(monkeypatch, container, str(script))
+
+    rc = main(["status", "--all"])
+
+    assert rc == 0
+    # status called twice — once for alpha, once for workspace
+    assert container.orchestrator.status.call_count == 2
+
+    called_ctxs = [call.args[0] for call in container.orchestrator.status.call_args_list]
+    envs_called = {ctx.env for ctx in called_ctxs}
+    assert "alpha" in envs_called
+    assert WORKSPACE_TARGET in envs_called
+
+    # workspace session ctx has worktree_dir == ws_root (NOT ws_root/workspace)
+    ws_called_ctx = next(c for c in called_ctxs if c.env == WORKSPACE_TARGET)
+    assert ws_called_ctx.worktree_dir == _WORKSPACE, (
+        f"workspace ctx worktree_dir={ws_called_ctx.worktree_dir!r}; must equal ws_root={_WORKSPACE!r}"
+    )
+
+    # build_workspace was called for the workspace session
+    container.session_context_builder.build_workspace.assert_called()
+
+    # build("workspace", ...) must NOT have been called (Risk #1 guard)
+    for call in container.session_context_builder.build.call_args_list:
+        env_arg = call.args[0] if call.args else None
+        assert env_arg != WORKSPACE_TARGET, "build('workspace', ...) was called — this is the Risk #1 bug"

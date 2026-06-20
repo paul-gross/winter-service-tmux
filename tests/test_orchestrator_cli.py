@@ -27,8 +27,9 @@ import pytest
 from service_manifest.modules.manifest.errors import ManifestError
 from service_manifest.modules.manifest.model import Service, ServiceManifest, Target
 from service_orchestrator.cli import main
-from service_orchestrator.modules.orchestrate.env_context import EnvContext
 from service_orchestrator.modules.orchestrate.log_query import LogQuery
+from service_orchestrator.modules.orchestrate.session_context import SessionContext
+from service_orchestrator.modules.orchestrate.session_context_builder import WORKSPACE_TARGET
 
 # ---------------------------------------------------------------------------
 # Helpers / shared fixtures
@@ -46,15 +47,40 @@ _MANIFEST = ServiceManifest(
         Service(name="worker", target=Target(window=0, pane=1), command="cmd"),
     ),
     status_urls=(),
+    workspace_services=(
+        Service(name="ws-backend", target=Target(window=0, pane=0), command="ws-cmd"),
+        Service(name="ws-worker", target=Target(window=0, pane=1), command="ws-cmd"),
+    ),
 )
 
 
-def _make_ctx(env: str = "alpha") -> EnvContext:
-    return EnvContext(
+def _make_ctx(env: str = "alpha") -> SessionContext:
+    return SessionContext(
         env=env,
         workspace_root=_WORKSPACE,
         worktree_dir=_WORKSPACE / env,
-        manifest=_MANIFEST,
+        session_prefix=_MANIFEST.session_prefix,
+        services=_MANIFEST.services,
+        layout_hook=_MANIFEST.layout_hook,
+        status_urls=_MANIFEST.status_urls,
+        logs=_MANIFEST.logs,
+        env_vars=None,
+        env_file_path=None,
+    )
+
+
+def _make_workspace_ctx() -> SessionContext:
+    """Build the expected workspace SessionContext (worktree_dir == workspace_root,
+    services = workspace_services, no status URLs)."""
+    return SessionContext(
+        env=WORKSPACE_TARGET,
+        workspace_root=_WORKSPACE,
+        worktree_dir=_WORKSPACE,  # NOT _WORKSPACE/workspace
+        session_prefix=_MANIFEST.session_prefix,
+        services=_MANIFEST.workspace_services,
+        layout_hook=_MANIFEST.workspace_layout_hook,
+        status_urls=(),
+        logs=_MANIFEST.logs,
         env_vars=None,
         env_file_path=None,
     )
@@ -64,13 +90,13 @@ class _FakeContainer:
     """Minimal fake Container with controllable tmux, builder, orchestrator, log_service.
 
     ``tmux.list_sessions()`` returns the list in ``sessions``.
-    ``env_context_builder.build(env, ...)`` returns ``_make_ctx(env)`` unless
+    ``session_context_builder.build(env, ...)`` returns ``_make_ctx(env)`` unless
     ``build_raises`` is set, in which case it raises that exception.
     All action methods (up/down/status/restart/logs) record their calls and
     return ``service_rc`` / ``log_rc``.
     """
 
-    env_context_builder: Any  # allow reassignment with different builder types
+    session_context_builder: Any  # allow reassignment with different builder types
 
     def __init__(
         self,
@@ -85,12 +111,13 @@ class _FakeContainer:
         self._build_raises = build_raises
 
         # Records
-        self.status_calls: list[tuple[EnvContext, tuple[str, ...]]] = []
-        self.restart_calls: list[tuple[EnvContext, str]] = []
-        self.logs_calls: list[tuple[EnvContext, LogQuery]] = []
-        self.up_calls: list[EnvContext] = []
-        self.down_calls: list[EnvContext] = []
+        self.status_calls: list[tuple[SessionContext, tuple[str, ...]]] = []
+        self.restart_calls: list[tuple[SessionContext, str]] = []
+        self.logs_calls: list[tuple[SessionContext, LogQuery]] = []
+        self.up_calls: list[SessionContext] = []
+        self.down_calls: list[SessionContext] = []
         self.build_calls: list[str] = []
+        self.build_workspace_calls: list[Path | None] = []
 
         # tmux seam
         class _FakeTmux:
@@ -101,27 +128,33 @@ class _FakeContainer:
 
         # builder seam
         class _FakeBuilder:
-            def build(inner_self, env: str, *, workspace_root=None) -> EnvContext:
+            def build(inner_self, env: str, *, workspace_root=None) -> SessionContext:
                 self.build_calls.append(env)
                 if self._build_raises is not None:
                     raise self._build_raises
                 return _make_ctx(env)
 
-        self.env_context_builder = _FakeBuilder()
+            def build_workspace(inner_self, *, workspace_root=None) -> SessionContext:
+                self.build_workspace_calls.append(workspace_root)
+                if self._build_raises is not None:
+                    raise self._build_raises
+                return _make_workspace_ctx()
+
+        self.session_context_builder = _FakeBuilder()
 
         # orchestrator seam
         class _FakeOrchestrator:
-            def up(inner_self, ctx: EnvContext) -> int:
+            def up(inner_self, ctx: SessionContext) -> int:
                 self.up_calls.append(ctx)
                 return self._service_rc
 
-            def down(inner_self, ctx: EnvContext) -> int:
+            def down(inner_self, ctx: SessionContext) -> int:
                 self.down_calls.append(ctx)
                 return self._service_rc
 
             def status(
                 inner_self,
-                ctx: EnvContext,
+                ctx: SessionContext,
                 services: tuple[str, ...] = (),
                 *,
                 json_output: bool = False,
@@ -129,7 +162,7 @@ class _FakeContainer:
                 self.status_calls.append((ctx, services))
                 return self._service_rc
 
-            def restart(inner_self, ctx: EnvContext, service_name: str) -> int:
+            def restart(inner_self, ctx: SessionContext, service_name: str) -> int:
                 self.restart_calls.append((ctx, service_name))
                 return self._service_rc
 
@@ -139,7 +172,7 @@ class _FakeContainer:
 
         # log_service seam
         class _FakeLogService:
-            def logs(inner_self, ctx: EnvContext, query: LogQuery) -> int:
+            def logs(inner_self, ctx: SessionContext, query: LogQuery) -> int:
                 self.logs_calls.append((ctx, query))
                 return self._log_rc
 
@@ -583,12 +616,12 @@ def test_main_uses_winter_workspace_dir_for_up(
     build_kwargs: list[dict] = []
 
     class _RecordingBuilder:
-        def build(self, env: str, *, workspace_root=None) -> EnvContext:
+        def build(self, env: str, *, workspace_root=None) -> SessionContext:
             build_kwargs.append({"env": env, "workspace_root": workspace_root})
             return _make_ctx(env)
 
     fake = _FakeContainer()
-    fake.env_context_builder = _RecordingBuilder()
+    fake.session_context_builder = _RecordingBuilder()
     _install(monkeypatch, fake)
 
     main(["up", "alpha"])
@@ -604,12 +637,12 @@ def test_main_no_winter_workspace_dir_passes_none_for_up(
     build_kwargs: list[dict] = []
 
     class _RecordingBuilder:
-        def build(self, env: str, *, workspace_root=None) -> EnvContext:
+        def build(self, env: str, *, workspace_root=None) -> SessionContext:
             build_kwargs.append({"env": env, "workspace_root": workspace_root})
             return _make_ctx(env)
 
     fake = _FakeContainer()
-    fake.env_context_builder = _RecordingBuilder()
+    fake.session_context_builder = _RecordingBuilder()
     _install(monkeypatch, fake)
 
     main(["up", "alpha"])
@@ -773,3 +806,250 @@ def test_main_logs_no_follow_multi_env_calls_logs_per_env(
     envs_called = {ctx.env for ctx, _ in fake.logs_calls}
     assert "alpha" in envs_called
     assert "beta" in envs_called
+
+
+# ---------------------------------------------------------------------------
+# workspace token — up / down (cli door)
+# ---------------------------------------------------------------------------
+
+
+def test_main_up_workspace_builds_workspace_ctx(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """up workspace → build_workspace called (NOT build('workspace',...)); orchestrator.up called."""
+    fake = _install(monkeypatch, _FakeContainer(sessions=["mp-workspace"]))
+    rc = main(["up", "workspace"])
+    assert rc == 0
+    # build_workspace was called, not build("workspace")
+    assert len(fake.build_workspace_calls) == 1
+    assert "workspace" not in fake.build_calls
+    # orchestrator.up was called with the workspace ctx
+    assert len(fake.up_calls) == 1
+    assert fake.up_calls[0].env == WORKSPACE_TARGET
+    assert fake.up_calls[0].worktree_dir == _WORKSPACE  # NOT _WORKSPACE/"workspace"
+
+
+def test_main_down_workspace_builds_workspace_ctx(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """down workspace → build_workspace called; orchestrator.down called."""
+    fake = _install(monkeypatch, _FakeContainer(sessions=["mp-workspace"]))
+    rc = main(["down", "workspace"])
+    assert rc == 0
+    assert len(fake.build_workspace_calls) == 1
+    assert "workspace" not in fake.build_calls
+    assert len(fake.down_calls) == 1
+    assert fake.down_calls[0].env == WORKSPACE_TARGET
+    assert fake.down_calls[0].worktree_dir == _WORKSPACE
+
+
+# ---------------------------------------------------------------------------
+# workspace token — status with patterns (intercept before engine)
+# ---------------------------------------------------------------------------
+
+
+def test_main_status_workspace_bare_token_routes_to_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """status workspace → workspace ctx built; all ws services passed."""
+    fake = _install(monkeypatch, _FakeContainer(sessions=["mp-workspace"]))
+    rc = main(["status", "workspace"])
+    assert rc == 0
+    assert len(fake.build_workspace_calls) >= 1
+    assert "workspace" not in fake.build_calls
+    assert len(fake.status_calls) == 1
+    ctx, svcs = fake.status_calls[0]
+    assert ctx.env == WORKSPACE_TARGET
+    # "workspace" bare token → all workspace services
+    ws_names = tuple(s.name for s in _MANIFEST.workspace_services)
+    assert svcs == ws_names
+
+
+def test_main_status_workspace_svc_glob_expands_against_workspace_services(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """status workspace/ws-* → matches both ws-backend and ws-worker."""
+    fake = _install(monkeypatch, _FakeContainer(sessions=["mp-workspace"]))
+    rc = main(["status", "workspace/ws-*"])
+    assert rc == 0
+    assert len(fake.status_calls) == 1
+    ctx, svcs = fake.status_calls[0]
+    assert ctx.env == WORKSPACE_TARGET
+    assert "ws-backend" in svcs
+    assert "ws-worker" in svcs
+    # env services must NOT appear
+    assert "backend" not in svcs
+    assert "worker" not in svcs
+
+
+def test_main_status_workspace_specific_svc(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """status workspace/ws-backend → only ws-backend."""
+    fake = _install(monkeypatch, _FakeContainer(sessions=["mp-workspace"]))
+    rc = main(["status", "workspace/ws-backend"])
+    assert rc == 0
+    assert len(fake.status_calls) == 1
+    _, svcs = fake.status_calls[0]
+    assert svcs == ("ws-backend",)
+
+
+# ---------------------------------------------------------------------------
+# workspace token — restart
+# ---------------------------------------------------------------------------
+
+
+def test_main_restart_workspace_bare_token_restarts_all_workspace_services(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """restart workspace → restarts all workspace services."""
+    fake = _install(monkeypatch, _FakeContainer(sessions=["mp-workspace"]))
+    rc = main(["restart", "workspace"])
+    assert rc == 0
+    assert len(fake.build_workspace_calls) >= 1
+    assert "workspace" not in fake.build_calls
+    restarted = [svc for _, svc in fake.restart_calls]
+    ws_names = [s.name for s in _MANIFEST.workspace_services]
+    for name in ws_names:
+        assert name in restarted
+
+
+def test_main_restart_workspace_glob_expands_against_workspace_services(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """restart workspace/ws-* → restarts ws-backend and ws-worker."""
+    fake = _install(monkeypatch, _FakeContainer(sessions=["mp-workspace"]))
+    rc = main(["restart", "workspace/ws-*"])
+    assert rc == 0
+    restarted = [svc for _, svc in fake.restart_calls]
+    assert "ws-backend" in restarted
+    assert "ws-worker" in restarted
+    assert "backend" not in restarted
+
+
+# ---------------------------------------------------------------------------
+# CRITICAL TEST (Risk #1): status with 0 patterns when BOTH env AND workspace sessions run
+# ---------------------------------------------------------------------------
+
+
+def test_main_status_zero_patterns_mixed_env_and_workspace_sessions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE CRITICAL RISK #1 TEST.
+
+    When both mp-alpha (env) and mp-workspace (workspace singleton) are running:
+    - status with 0 patterns must include BOTH sessions
+    - the workspace session must be built via build_workspace (worktree_dir=ws_root)
+    - the env session must be built via build (worktree_dir=ws_root/alpha)
+    - NO phantom ws_root/workspace context must be created
+    """
+    fake = _install(
+        monkeypatch,
+        _FakeContainer(sessions=["mp-alpha", "mp-workspace"]),
+    )
+    rc = main(["status"])
+    assert rc == 0
+
+    # Exactly two status calls — one for alpha, one for workspace
+    assert len(fake.status_calls) == 2
+    envs_called = {ctx.env for ctx, _ in fake.status_calls}
+    assert "alpha" in envs_called
+    assert WORKSPACE_TARGET in envs_called
+
+    # Verify workspace ctx has worktree_dir == ws_root (NOT ws_root/workspace)
+    ws_ctx = next(ctx for ctx, _ in fake.status_calls if ctx.env == WORKSPACE_TARGET)
+    assert ws_ctx.worktree_dir == _WORKSPACE, (
+        f"workspace ctx has wrong worktree_dir: {ws_ctx.worktree_dir!r}; "
+        f"expected {_WORKSPACE!r} (must be ws_root, not ws_root/workspace)"
+    )
+
+    # build_workspace was called (for workspace session)
+    assert len(fake.build_workspace_calls) >= 1
+
+    # "workspace" must NOT appear in build_calls (no env-scoped build for workspace)
+    assert "workspace" not in fake.build_calls, (
+        "build('workspace', ...) was called — this is the Risk #1 bug: "
+        "workspace session must be routed through build_workspace, not build"
+    )
+
+    # Env session ctx has worktree_dir == ws_root/alpha
+    alpha_ctx = next(ctx for ctx, _ in fake.status_calls if ctx.env == "alpha")
+    assert alpha_ctx.worktree_dir == _WORKSPACE / "alpha"
+
+
+# ---------------------------------------------------------------------------
+# REGRESSION: seed-selection bug — workspace FIRST in session list
+# ---------------------------------------------------------------------------
+
+
+def test_status_cross_env_glob_with_workspace_first_seeds_from_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for _read_manifest_context seed-selection bug.
+
+    When list_sessions() returns ["mp-workspace", "mp-alpha"] (workspace FIRST),
+    a cross-env all-glob pattern like "*/backend" must expand against the ENV
+    (alpha) service catalog — not the workspace service catalog.
+
+    Before the fix: the fallback loop picked the first session's env ("workspace")
+    as the seed and called build_workspace(); the workspace manifest's services
+    (ws-backend, ws-worker) were used as the catalog — so "backend" matched zero
+    services and the call returned non-zero.
+
+    After the fix: the loop skips the workspace session and uses "alpha" as the
+    seed; the env manifest's services (backend, worker) are used — "*/backend"
+    matches backend in alpha and the call succeeds.
+    """
+    fake = _install(
+        monkeypatch,
+        # workspace session listed FIRST — triggers the bug on un-patched code
+        _FakeContainer(sessions=["mp-workspace", "mp-alpha"]),
+    )
+    rc = main(["status", "*/backend"])
+    assert rc == 0, (
+        "status '*/backend' should succeed when workspace is first in session list; "
+        "got non-zero — seed was likely the workspace catalog (only ws-backend/ws-worker), "
+        "so 'backend' matched nothing"
+    )
+    # The env (alpha) must have been called with "backend" from its catalog
+    env_calls = [(ctx.env, svcs) for ctx, svcs in fake.status_calls if ctx.env != WORKSPACE_TARGET]
+    assert len(env_calls) >= 1, "Expected at least one status call for the env (alpha)"
+    assert any("backend" in svcs for _, svcs in env_calls), (
+        "Expected 'backend' in the services passed to status for the env session"
+    )
+    # Workspace services must NOT appear as matched services (wrong catalog)
+    all_svcs = [svc for _, svcs in fake.status_calls for svc in svcs]
+    assert "ws-backend" not in all_svcs, (
+        "ws-backend appeared in matched services — seed was wrongly the workspace catalog"
+    )
+
+
+# ---------------------------------------------------------------------------
+# REGRESSION: orchestrator up <env> does NOT touch the workspace session
+# ---------------------------------------------------------------------------
+
+
+def test_up_normal_env_does_not_create_workspace_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pin the 'winter-cli owns the ensure, the orchestrator does not' seam.
+
+    An orchestrator-side 'up alpha' (a normal env, NOT workspace) must issue
+    NO workspace-session creation.  build_workspace must NOT be called, and
+    the only up call must be for the env (alpha), not the workspace.
+
+    This pins the seam: workspace-session ensure is winter-cli's responsibility
+    (winter#65); the orchestrator does not auto-start workspace.
+    """
+    fake = _install(monkeypatch, _FakeContainer(service_rc=0))
+    rc = main(["up", "alpha"])
+    assert rc == 0
+    # orchestrator.up called exactly once, for alpha
+    assert len(fake.up_calls) == 1
+    assert fake.up_calls[0].env == "alpha"
+    # build_workspace must NOT have been called — orchestrator does not ensure workspace
+    assert len(fake.build_workspace_calls) == 0, (
+        "build_workspace was called during 'up alpha' — "
+        "the orchestrator must not auto-ensure the workspace session; "
+        "that is winter-cli's responsibility (winter#65)"
+    )

@@ -37,11 +37,15 @@ from pathlib import Path
 
 from service_manifest.modules.manifest.errors import ManifestError
 from service_orchestrator.container import Container
-from service_orchestrator.modules.orchestrate.env_context import EnvContext
 from service_orchestrator.modules.orchestrate.env_enumerator import running_envs
 from service_orchestrator.modules.orchestrate.errors import OrchestratorError
 from service_orchestrator.modules.orchestrate.log_query import LogQuery
 from service_orchestrator.modules.orchestrate.pattern_match import matches_any_pattern
+from service_orchestrator.modules.orchestrate.session_context import SessionContext
+from service_orchestrator.modules.orchestrate.session_context_builder import (
+    WORKSPACE_TARGET,
+    build_for_target,
+)
 
 _ACTIONS = ("up", "down", "status", "restart", "logs")
 
@@ -149,25 +153,170 @@ def _read_manifest_context(
             candidate_env = seg
             break
 
-    # Fall back to any running session
+    # Fall back to any running session.
+    # Prefer a non-workspace seed: if the workspace session is listed first but
+    # at least one env session also exists, skip the workspace entry and seed
+    # from an env session instead.  Only fall back to workspace if it is the
+    # sole session, mirroring the same guard in the 0-pattern status path.
     if candidate_env is None:
         sessions = container.tmux.list_sessions()
+        candidate_env = None
         for sess in sessions:
-            if "-" in sess:
-                candidate_env = sess.split("-", 1)[1]
+            if "-" not in sess:
+                continue
+            env_name = sess.split("-", 1)[1]
+            if env_name != WORKSPACE_TARGET:
+                candidate_env = env_name
                 break
+        # Only use workspace as the seed when it is the only session available.
+        if candidate_env is None:
+            for sess in sessions:
+                if "-" in sess:
+                    candidate_env = sess.split("-", 1)[1]
+                    break
 
     if candidate_env is None:
         return None
 
     try:
-        ctx = container.env_context_builder.build(candidate_env, workspace_root=workspace_root)
+        ctx = build_for_target(container.session_context_builder, candidate_env, workspace_root=workspace_root)
         return (
-            ctx.manifest.session_prefix,
-            [svc.name for svc in ctx.manifest.services],
+            ctx.session_prefix,
+            [svc.name for svc in ctx.services],
         )
     except (ManifestError, OSError, OrchestratorError):
         return None
+
+
+def _split_workspace_patterns(
+    patterns: list[str],
+) -> tuple[list[str], list[str]]:
+    """Partition *patterns* into workspace patterns and non-workspace patterns.
+
+    A pattern is a workspace pattern when its env segment is EXACTLY
+    ``WORKSPACE_TARGET`` (``"workspace"``).  Glob env-segments like ``work*``
+    are NOT workspace patterns — they travel through the normal engine (where
+    they will simply never match an env because the workspace session is
+    intercepted at the enumeration layer).
+
+    Returns:
+        ``(workspace_pats, env_pats)`` — both are fresh lists.
+    """
+    workspace_pats: list[str] = []
+    env_pats: list[str] = []
+    for pat in patterns:
+        env_seg = pat if "/" not in pat else pat.split("/", 1)[0]
+        if env_seg == WORKSPACE_TARGET:
+            workspace_pats.append(pat)
+        else:
+            env_pats.append(pat)
+    return workspace_pats, env_pats
+
+
+def _handle_workspace_status_patterns(
+    workspace_pats: list[str],
+    workspace_root: Path | None,
+    container: Container,
+    json_output: bool,
+    current_rc: int,
+    action: str,
+) -> int:
+    """Handle status for workspace-scoped patterns.
+
+    Builds the workspace context once, expands svc-globs against
+    ``ctx.services`` (the workspace session's services, scope-selected by the
+    builder), and calls ``orchestrator.status`` with the matched service
+    subset.  Returns the aggregate rc.
+    """
+    try:
+        ctx = build_for_target(container.session_context_builder, WORKSPACE_TARGET, workspace_root=workspace_root)
+    except (ManifestError, OSError, OrchestratorError) as exc:
+        print(f"orchestrate: {action}: workspace: {exc}", file=sys.stderr)
+        return 1
+
+    all_ws_names = [svc.name for svc in ctx.services]
+    matched: list[str] = []
+    dead: list[str] = []
+    for pat in workspace_pats:
+        svc_glob = pat.split("/", 1)[1] if "/" in pat else "*"
+        hits = [n for n in all_ws_names if fnmatch.fnmatchcase(n, svc_glob)]
+        if not hits:
+            dead.append(pat)
+        for n in hits:
+            if n not in matched:
+                matched.append(n)
+
+    if dead:
+        for pat in dead:
+            print(
+                f"orchestrate: {action}: pattern '{pat}' matched no services",
+                file=sys.stderr,
+            )
+        return 1
+
+    rc = current_rc
+    try:
+        result = container.orchestrator.status(
+            ctx,
+            services=tuple(matched) if matched else (),
+            json_output=json_output,
+        )
+        if result != 0:
+            rc = result
+    except OrchestratorError as exc:
+        print(f"orchestrate: {action}: workspace: {exc}", file=sys.stderr)
+        rc = 1
+    return rc
+
+
+def _handle_workspace_restart_patterns(
+    workspace_pats: list[str],
+    workspace_root: Path | None,
+    container: Container,
+    current_rc: int,
+) -> int:
+    """Handle restart for workspace-scoped patterns.
+
+    Builds the workspace context once, expands svc-globs against
+    ``ctx.services`` (the workspace session's services, scope-selected by the
+    builder), and calls ``orchestrator.restart`` for each matched service.
+    """
+    try:
+        ctx = build_for_target(container.session_context_builder, WORKSPACE_TARGET, workspace_root=workspace_root)
+    except (ManifestError, OSError, OrchestratorError) as exc:
+        print(f"orchestrate: restart: workspace: {exc}", file=sys.stderr)
+        return 1
+
+    all_ws_names = [svc.name for svc in ctx.services]
+    matched: list[str] = []
+    dead: list[str] = []
+    for pat in workspace_pats:
+        svc_glob = pat.split("/", 1)[1] if "/" in pat else "*"
+        hits = [n for n in all_ws_names if fnmatch.fnmatchcase(n, svc_glob)]
+        if not hits:
+            dead.append(pat)
+        for n in hits:
+            if n not in matched:
+                matched.append(n)
+
+    if dead:
+        for pat in dead:
+            print(
+                f"orchestrate: restart: pattern '{pat}' matched no services",
+                file=sys.stderr,
+            )
+        return 1
+
+    rc = current_rc
+    for svc_name in matched:
+        try:
+            result = container.orchestrator.restart(ctx, svc_name)
+            if result != 0:
+                rc = result
+        except OrchestratorError as exc:
+            print(f"orchestrate: restart: workspace: {exc}", file=sys.stderr)
+            rc = 1
+    return rc
 
 
 def main(argv: list[str]) -> int:
@@ -210,7 +359,7 @@ def main(argv: list[str]) -> int:
             return 2
         env = rest[0]
         try:
-            ctx = container.env_context_builder.build(env, workspace_root=workspace_root)
+            ctx = build_for_target(container.session_context_builder, env, workspace_root=workspace_root)
         except ManifestError as exc:
             print(f"orchestrate: env '{env}': manifest error: {exc}", file=sys.stderr)
             return 1
@@ -240,22 +389,39 @@ def main(argv: list[str]) -> int:
                 print("No running sessions.")
                 return 0
 
-            # Derive prefix from the first session to enumerate envs
+            # Derive prefix from the first session to enumerate envs.
+            # The seed must not be "workspace" — find a non-workspace session to
+            # read the manifest prefix, then running_envs() will include "workspace"
+            # naturally if the workspace session is running.
             candidate_session = sessions[0]
             candidate_env_name = candidate_session.split("-", 1)[1] if "-" in candidate_session else candidate_session
+            # Prefer a non-workspace seed for prefix resolution (workspace ctx
+            # carries the same prefix, but a regular env seed is more robust when
+            # workspace_services is empty).
+            if candidate_env_name == WORKSPACE_TARGET and len(sessions) > 1:
+                alt = sessions[1]
+                candidate_env_name = alt.split("-", 1)[1] if "-" in alt else alt
             try:
-                seed_ctx = container.env_context_builder.build(candidate_env_name, workspace_root=workspace_root)
+                seed_ctx = build_for_target(
+                    container.session_context_builder,
+                    candidate_env_name,
+                    workspace_root=workspace_root,
+                )
             except (ManifestError, OSError, OrchestratorError) as exc:
                 print(f"orchestrate: could not read manifest: {exc}", file=sys.stderr)
                 return 1
 
-            prefix = seed_ctx.manifest.session_prefix
+            prefix = seed_ctx.session_prefix
             envs = running_envs(container.tmux, prefix)
 
             rc = 0
             for env in envs:
                 try:
-                    ctx = container.env_context_builder.build(env, workspace_root=workspace_root)
+                    # Risk #1: running_envs() returns the literal "workspace" for
+                    # the <prefix>-workspace session.  Route it through build_for_target
+                    # so it NEVER goes through env-scoped build() (which would set
+                    # worktree_dir = ws_root/workspace).
+                    ctx = build_for_target(container.session_context_builder, env, workspace_root=workspace_root)
                 except (ManifestError, OSError, OrchestratorError) as exc:
                     print(f"orchestrate: env '{env}': {exc}", file=sys.stderr)
                     rc = 1
@@ -269,42 +435,54 @@ def main(argv: list[str]) -> int:
                     rc = 1
             return rc
 
-        # N patterns → expand to (env, service) pairs
-        manifest_info = _read_manifest_context(container, workspace_root, patterns)
-        if manifest_info is None:
-            for pat in patterns:
-                print(
-                    f"orchestrate: status: pattern '{pat}' matched no services",
-                    file=sys.stderr,
-                )
-            return 1
-
-        prefix, services_list = manifest_info
-        env_services, dead_patterns = _expand_patterns(container, patterns, workspace_root, services_list, prefix)
-
-        if dead_patterns:
-            for pat in dead_patterns:
-                print(
-                    f"orchestrate: status: pattern '{pat}' matched no services",
-                    file=sys.stderr,
-                )
-            return 1
+        # N patterns → expand to (env, service) pairs.
+        # Intercept workspace patterns (env_seg == WORKSPACE_TARGET exactly) BEFORE
+        # the general pattern engine so "workspace" is never glob-matched as an env.
+        workspace_pats, env_pats = _split_workspace_patterns(patterns)
 
         rc = 0
-        for env, svc_names in env_services.items():
-            try:
-                ctx = container.env_context_builder.build(env, workspace_root=workspace_root)
-            except (ManifestError, OSError, OrchestratorError) as exc:
-                print(f"orchestrate: env '{env}': {exc}", file=sys.stderr)
-                rc = 1
-                continue
-            try:
-                result = container.orchestrator.status(ctx, services=tuple(svc_names), json_output=json_output)
-                if result != 0:
-                    rc = result
-            except OrchestratorError as exc:
-                print(f"orchestrate: env '{env}': {exc}", file=sys.stderr)
-                rc = 1
+
+        if workspace_pats:
+            rc = _handle_workspace_status_patterns(workspace_pats, workspace_root, container, json_output, rc, "status")
+            if rc != 0 and not env_pats:
+                return rc
+
+        if env_pats:
+            manifest_info = _read_manifest_context(container, workspace_root, env_pats)
+            if manifest_info is None:
+                for pat in env_pats:
+                    print(
+                        f"orchestrate: status: pattern '{pat}' matched no services",
+                        file=sys.stderr,
+                    )
+                return 1
+
+            prefix, services_list = manifest_info
+            env_services, dead_patterns = _expand_patterns(container, env_pats, workspace_root, services_list, prefix)
+
+            if dead_patterns:
+                for pat in dead_patterns:
+                    print(
+                        f"orchestrate: status: pattern '{pat}' matched no services",
+                        file=sys.stderr,
+                    )
+                return 1
+
+            for env, svc_names in env_services.items():
+                try:
+                    ctx = build_for_target(container.session_context_builder, env, workspace_root=workspace_root)
+                except (ManifestError, OSError, OrchestratorError) as exc:
+                    print(f"orchestrate: env '{env}': {exc}", file=sys.stderr)
+                    rc = 1
+                    continue
+                try:
+                    result = container.orchestrator.status(ctx, services=tuple(svc_names), json_output=json_output)
+                    if result != 0:
+                        rc = result
+                except OrchestratorError as exc:
+                    print(f"orchestrate: env '{env}': {exc}", file=sys.stderr)
+                    rc = 1
+
         return rc
 
     # ------------------------------------------------------------------
@@ -319,42 +497,53 @@ def main(argv: list[str]) -> int:
             return 1
 
         patterns = rest
-        manifest_info = _read_manifest_context(container, workspace_root, patterns)
-        if manifest_info is None:
-            for pat in patterns:
-                print(
-                    f"orchestrate: restart: pattern '{pat}' matched no services",
-                    file=sys.stderr,
-                )
-            return 1
-
-        prefix, services_list = manifest_info
-        env_services, dead_patterns = _expand_patterns(container, patterns, workspace_root, services_list, prefix)
-
-        if dead_patterns:
-            for pat in dead_patterns:
-                print(
-                    f"orchestrate: restart: pattern '{pat}' matched no services",
-                    file=sys.stderr,
-                )
-            return 1
+        # Intercept workspace patterns before the general pattern engine.
+        workspace_pats, env_pats = _split_workspace_patterns(patterns)
 
         rc = 0
-        for env, svc_names in env_services.items():
-            try:
-                ctx = container.env_context_builder.build(env, workspace_root=workspace_root)
-            except (ManifestError, OSError, OrchestratorError) as exc:
-                print(f"orchestrate: env '{env}': {exc}", file=sys.stderr)
-                rc = 1
-                continue
-            for svc_name in svc_names:
+
+        if workspace_pats:
+            rc = _handle_workspace_restart_patterns(workspace_pats, workspace_root, container, rc)
+            if rc != 0 and not env_pats:
+                return rc
+
+        if env_pats:
+            manifest_info = _read_manifest_context(container, workspace_root, env_pats)
+            if manifest_info is None:
+                for pat in env_pats:
+                    print(
+                        f"orchestrate: restart: pattern '{pat}' matched no services",
+                        file=sys.stderr,
+                    )
+                return 1
+
+            prefix, services_list = manifest_info
+            env_services, dead_patterns = _expand_patterns(container, env_pats, workspace_root, services_list, prefix)
+
+            if dead_patterns:
+                for pat in dead_patterns:
+                    print(
+                        f"orchestrate: restart: pattern '{pat}' matched no services",
+                        file=sys.stderr,
+                    )
+                return 1
+
+            for env, svc_names in env_services.items():
                 try:
-                    result = container.orchestrator.restart(ctx, svc_name)
-                    if result != 0:
-                        rc = result
-                except OrchestratorError as exc:
+                    ctx = build_for_target(container.session_context_builder, env, workspace_root=workspace_root)
+                except (ManifestError, OSError, OrchestratorError) as exc:
                     print(f"orchestrate: env '{env}': {exc}", file=sys.stderr)
                     rc = 1
+                    continue
+                for svc_name in svc_names:
+                    try:
+                        result = container.orchestrator.restart(ctx, svc_name)
+                        if result != 0:
+                            rc = result
+                    except OrchestratorError as exc:
+                        print(f"orchestrate: env '{env}': {exc}", file=sys.stderr)
+                        rc = 1
+
         return rc
 
     # ------------------------------------------------------------------
@@ -398,10 +587,10 @@ def main(argv: list[str]) -> int:
         rc = 0
 
         if follow:
-            pairs: list[tuple[EnvContext, LogQuery]] = []
+            pairs: list[tuple[SessionContext, LogQuery]] = []
             for env, svc_names in env_services.items():
                 try:
-                    ctx = container.env_context_builder.build(env, workspace_root=workspace_root)
+                    ctx = build_for_target(container.session_context_builder, env, workspace_root=workspace_root)
                 except (ManifestError, OSError, OrchestratorError) as exc:
                     print(f"orchestrate: env '{env}': {exc}", file=sys.stderr)
                     rc = 1
@@ -430,7 +619,7 @@ def main(argv: list[str]) -> int:
 
         for env, svc_names in env_services.items():
             try:
-                ctx = container.env_context_builder.build(env, workspace_root=workspace_root)
+                ctx = build_for_target(container.session_context_builder, env, workspace_root=workspace_root)
             except (ManifestError, OSError, OrchestratorError) as exc:
                 print(f"orchestrate: env '{env}': {exc}", file=sys.stderr)
                 rc = 1

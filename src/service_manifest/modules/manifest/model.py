@@ -115,6 +115,10 @@ class ServiceManifest:
         status_urls: All declared status URLs, in declaration order.
         logs: Log-capture configuration.  Always present (defaulted); consumers
             need no null-guard.
+        workspace_services: Services scoped to the shared ``<prefix>-workspace``
+            singleton session, in declaration order.  Empty when none declared.
+        workspace_layout_hook: Optional bash layout hook for the workspace
+            session, relative to the workspace root.  ``None`` when not declared.
     """
 
     session_prefix: str
@@ -123,3 +127,5 @@ class ServiceManifest:
     services: tuple[Service, ...]
     status_urls: tuple[StatusUrl, ...]
     logs: LogConfig = field(default_factory=LogConfig)
+    workspace_services: tuple[Service, ...] = ()
+    workspace_layout_hook: str | None = None

@@ -14,7 +14,6 @@ from pathlib import Path
 import pytest
 
 from service_manifest.modules.manifest.model import LogMode, Service, ServiceManifest, Target
-from service_orchestrator.modules.orchestrate.env_context import EnvContext
 from service_orchestrator.modules.orchestrate.log_query import LogQuery
 from service_orchestrator.modules.orchestrate.log_service import (
     LogService,
@@ -24,6 +23,7 @@ from service_orchestrator.modules.orchestrate.log_service import (
     merge_sorted,
     parse_line,
 )
+from service_orchestrator.modules.orchestrate.session_context import SessionContext
 from tests.conftest import FakeFollowClock, FakeLogRepository, FakeTmuxRepository
 
 # ---------------------------------------------------------------------------
@@ -47,12 +47,16 @@ def _make_manifest(*service_names: str) -> ServiceManifest:
     )
 
 
-def _make_ctx(manifest: ServiceManifest) -> EnvContext:
-    return EnvContext(
+def _make_ctx(manifest: ServiceManifest) -> SessionContext:
+    return SessionContext(
         env="alpha",
         workspace_root=_WORKSPACE,
         worktree_dir=_WORKTREE,
-        manifest=manifest,
+        session_prefix=manifest.session_prefix,
+        services=manifest.services,
+        layout_hook=manifest.layout_hook,
+        status_urls=manifest.status_urls,
+        logs=manifest.logs,
         env_vars=None,
         env_file_path=None,
     )
@@ -88,7 +92,7 @@ def _make_svc(
     )
 
 
-def _run(service: LogService, ctx: EnvContext, query: LogQuery) -> tuple[list[dict], int]:
+def _run(service: LogService, ctx: SessionContext, query: LogQuery) -> tuple[list[dict], int]:
     """Run LogService.logs and return ``(parsed_events, rc)``."""
     sink = io.StringIO()
     service._sink = sink
@@ -872,14 +876,18 @@ def _make_dual_repo(alpha_repo: FakeLogRepository, beta_repo: FakeLogRepository)
     return DualFakeRepo()
 
 
-def _make_ctx_env(env: str, manifest: ServiceManifest) -> EnvContext:
-    """Build an EnvContext for *env* with a worktree at /fake/workspace/<env>."""
+def _make_ctx_env(env: str, manifest: ServiceManifest) -> SessionContext:
+    """Build an SessionContext for *env* with a worktree at /fake/workspace/<env>."""
     worktree = Path("/fake/workspace") / env
-    return EnvContext(
+    return SessionContext(
         env=env,
         workspace_root=Path("/fake/workspace"),
         worktree_dir=worktree,
-        manifest=manifest,
+        session_prefix=manifest.session_prefix,
+        services=manifest.services,
+        layout_hook=manifest.layout_hook,
+        status_urls=manifest.status_urls,
+        logs=manifest.logs,
         env_vars=None,
         env_file_path=None,
     )
@@ -887,7 +895,7 @@ def _make_ctx_env(env: str, manifest: ServiceManifest) -> EnvContext:
 
 def _run_follow(
     service: LogService,
-    streams: list[tuple[EnvContext, LogQuery]],
+    streams: list[tuple[SessionContext, LogQuery]],
 ) -> tuple[list[dict], int]:
     """Call follow_streams and return ``(parsed_events, rc)``."""
     sink = io.StringIO()

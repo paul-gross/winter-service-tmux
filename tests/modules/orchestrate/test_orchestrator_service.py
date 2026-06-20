@@ -13,9 +13,9 @@ import pytest
 
 import service_manifest.container as sm_container_mod
 from service_manifest.modules.manifest.model import LogConfig, Service, ServiceManifest, Target
-from service_orchestrator.modules.orchestrate.env_context import EnvContext
 from service_orchestrator.modules.orchestrate.errors import OrchestratorError
 from service_orchestrator.modules.orchestrate.orchestrator_service import OrchestratorService, _segments_to_prune
+from service_orchestrator.modules.orchestrate.session_context import SessionContext
 from service_orchestrator.modules.orchestrate.status_report import logwriter_path
 from tests.conftest import (
     FakeFollowClock,
@@ -75,14 +75,18 @@ def _make_ctx(
     manifest: ServiceManifest | None = None,
     env_vars: dict[str, str] | None = None,
     env_file_path: Path | None = _ENV_FILE,
-) -> EnvContext:
+) -> SessionContext:
     if manifest is None:
         manifest = _make_manifest()
-    return EnvContext(
+    return SessionContext(
         env="alpha",
         workspace_root=_WORKSPACE,
         worktree_dir=_WORKTREE,
-        manifest=manifest,
+        session_prefix=manifest.session_prefix,
+        services=manifest.services,
+        layout_hook=manifest.layout_hook,
+        status_urls=manifest.status_urls,
+        logs=manifest.logs,
         env_vars=env_vars,
         env_file_path=env_file_path,
     )
@@ -179,9 +183,9 @@ def test_up_send_keys_exact_launch_line_with_env_file() -> None:
 
     # Both services are captured (log=LogMode.FILE default, non-empty command).
     writer = logwriter_path()
-    manifest = ctx.manifest
-    rotate_size = manifest.logs.rotate_size_bytes
-    max_rot = manifest.logs.max_rotations
+    logs = ctx.logs
+    rotate_size = logs.rotate_size_bytes
+    max_rot = logs.max_rotations
 
     # backend line — captured
     backend_line = next(line for _, t, line in tmux.sent if t == "0.0")
@@ -227,9 +231,9 @@ def test_up_send_keys_exact_launch_line_without_env_file() -> None:
     svc.up(ctx)
 
     writer = logwriter_path()
-    manifest = ctx.manifest
-    rotate_size = manifest.logs.rotate_size_bytes
-    max_rot = manifest.logs.max_rotations
+    logs = ctx.logs
+    rotate_size = logs.rotate_size_bytes
+    max_rot = logs.max_rotations
     backend_logfile = log_repo.log_path(_WORKTREE, "backend")
 
     backend_line = next(line for _, t, line in tmux.sent if t == "0.0")
@@ -841,12 +845,17 @@ def _make_prune_manifest(retention_seconds: int = 604800) -> ServiceManifest:
     )
 
 
-def _make_prune_ctx(retention_seconds: int = 604800) -> EnvContext:
-    return EnvContext(
+def _make_prune_ctx(retention_seconds: int = 604800) -> SessionContext:
+    manifest = _make_prune_manifest(retention_seconds)
+    return SessionContext(
         env="alpha",
         workspace_root=_WORKSPACE,
         worktree_dir=_WORKTREE,
-        manifest=_make_prune_manifest(retention_seconds),
+        session_prefix=manifest.session_prefix,
+        services=manifest.services,
+        layout_hook=manifest.layout_hook,
+        status_urls=manifest.status_urls,
+        logs=manifest.logs,
         env_vars=None,
         env_file_path=None,
     )

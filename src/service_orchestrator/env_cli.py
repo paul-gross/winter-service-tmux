@@ -24,7 +24,7 @@ Door-local arg shapes (NOT part of the winter contract):
 - ``status [--all] [<pattern>...]``
 - ``restart <pattern>...``
 
-``local`` mode builds an env-less ``EnvContext`` (no env file sourced);
+``local`` mode builds an env-less ``SessionContext`` (no env file sourced);
 ``up local`` and ``down local`` are symmetric — both use the inferred env
 name with ``skip_env_file=True``.
 ``-a``/``--attach`` execs ``tmux attach-session`` after ``up``.
@@ -45,6 +45,10 @@ from service_orchestrator.container import Container
 from service_orchestrator.core.internal.env_workspace_locator import EnvWorkspaceLocator
 from service_orchestrator.modules.orchestrate.env_enumerator import running_envs
 from service_orchestrator.modules.orchestrate.errors import OrchestratorError
+from service_orchestrator.modules.orchestrate.session_context_builder import (
+    WORKSPACE_TARGET,
+    build_for_target,
+)
 from service_orchestrator.modules.orchestrate.tmux_repository import ITmuxRepository
 
 _ACTIONS = ("up", "down", "status", "restart")
@@ -171,11 +175,16 @@ def _handle_up(
             env = arg  # explicit env name override
 
     try:
-        ctx = container.env_context_builder.build(
-            env,
-            workspace_root=workspace_root,
-            skip_env_file=local,
-        )
+        if env == WORKSPACE_TARGET:
+            ctx = container.session_context_builder.build_workspace(
+                workspace_root=workspace_root,
+            )
+        else:
+            ctx = container.session_context_builder.build(
+                env,
+                workspace_root=workspace_root,
+                skip_env_file=local,
+            )
     except ManifestError as exc:
         print(f"up: env '{env}': manifest error: {exc}", file=sys.stderr)
         return 1
@@ -209,11 +218,16 @@ def _handle_down(
             env = arg
 
     try:
-        ctx = container.env_context_builder.build(
-            env,
-            workspace_root=workspace_root,
-            skip_env_file=local,
-        )
+        if env == WORKSPACE_TARGET:
+            ctx = container.session_context_builder.build_workspace(
+                workspace_root=workspace_root,
+            )
+        else:
+            ctx = container.session_context_builder.build(
+                env,
+                workspace_root=workspace_root,
+                skip_env_file=local,
+            )
     except ManifestError as exc:
         # Manifest unreadable → fall back to env-suffix session kill.
         print(
@@ -257,7 +271,7 @@ def _handle_status(
         return _handle_status_all(env, workspace_root, container)
 
     try:
-        ctx = container.env_context_builder.build(env, workspace_root=workspace_root)
+        ctx = build_for_target(container.session_context_builder, env, workspace_root=workspace_root)
     except ManifestError as exc:
         print(f"status: env '{env}': manifest error: {exc}", file=sys.stderr)
         return 1
@@ -274,7 +288,7 @@ def _handle_status(
             return 1
 
     # Expand each pattern against this env's services.
-    all_names = [svc.name for svc in ctx.manifest.services]
+    all_names = [svc.name for svc in ctx.services]
     matched: list[str] = []
     for pat in patterns:
         hits = [name for name in all_names if fnmatch.fnmatchcase(name, pat)]
@@ -306,8 +320,8 @@ def _handle_status_all(
     matching ``<prefix>-`` and reports each.
     """
     try:
-        ctx = container.env_context_builder.build(env, workspace_root=workspace_root)
-        prefix = ctx.manifest.session_prefix
+        seed_ctx = build_for_target(container.session_context_builder, env, workspace_root=workspace_root)
+        prefix = seed_ctx.session_prefix
     except (ManifestError, OSError) as exc:
         print(f"status --all: cannot read manifest: {exc}", file=sys.stderr)
         return 1
@@ -324,7 +338,11 @@ def _handle_status_all(
     rc = 0
     for env_name in env_names:
         try:
-            env_ctx = container.env_context_builder.build(env_name, workspace_root=workspace_root)
+            # Risk #1: running_envs() returns the literal "workspace" for the
+            # <prefix>-workspace session.  Route through build_for_target so it
+            # never goes through env-scoped build() (which would set
+            # worktree_dir = ws_root/workspace instead of ws_root itself).
+            env_ctx = build_for_target(container.session_context_builder, env_name, workspace_root=workspace_root)
             r = container.orchestrator.status(env_ctx)
             if r != 0:
                 rc = r
@@ -342,8 +360,8 @@ def _handle_restart(
 ) -> int:
     if not argv or argv[0].startswith("-"):
         try:
-            ctx = container.env_context_builder.build(env, workspace_root=workspace_root)
-            declared = ", ".join(s.name for s in ctx.manifest.services)
+            ctx = build_for_target(container.session_context_builder, env, workspace_root=workspace_root)
+            declared = ", ".join(s.name for s in ctx.services)
         except (ManifestError, OSError, OrchestratorError):
             declared = "(manifest unreadable)"
         if not argv:
@@ -354,7 +372,7 @@ def _handle_restart(
         return 1
 
     try:
-        ctx = container.env_context_builder.build(env, workspace_root=workspace_root)
+        ctx = build_for_target(container.session_context_builder, env, workspace_root=workspace_root)
     except ManifestError as exc:
         print(f"restart: env '{env}': manifest error: {exc}", file=sys.stderr)
         return 1
@@ -362,7 +380,7 @@ def _handle_restart(
         print(f"restart: env '{env}': {exc}", file=sys.stderr)
         return 1
 
-    all_names = [svc.name for svc in ctx.manifest.services]
+    all_names = [svc.name for svc in ctx.services]
     matched: list[str] = []
     for pat in argv:
         hits = [name for name in all_names if fnmatch.fnmatchcase(name, pat)]

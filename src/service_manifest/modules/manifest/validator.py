@@ -17,7 +17,7 @@ DATA (the caller decides fatality), not control flow.  See
 from __future__ import annotations
 
 from service_manifest.modules.manifest.env import interpolate
-from service_manifest.modules.manifest.model import ServiceManifest
+from service_manifest.modules.manifest.model import Service, ServiceManifest
 
 
 class ManifestValidator:
@@ -52,10 +52,17 @@ class ManifestValidator:
         Checks performed:
         - ``session_prefix`` is present and non-empty (defensive — reader
           already requires it, but validate defensively here too).
-        - Every service ``name`` is non-empty.
-        - No duplicate service names.
-        - No duplicate ``target`` values across services.
-        - All targets have non-negative ``window`` and ``pane`` values.
+        - Every service ``name`` is non-empty (both env services and workspace
+          services).
+        - No duplicate service names (checked GLOBALLY across the merged set of
+          env + workspace services — the unified ``[[service]]`` config gives
+          both scopes one name namespace, so the same name in two scopes is a
+          violation).
+        - No duplicate ``target`` values across services (checked per-list —
+          an env service and a workspace service sharing target "0.0" is LEGAL
+          because they live in different tmux sessions).
+        - All targets have non-negative ``window`` and ``pane`` values (both
+          lists).
         - ``logs.rotate_size_bytes`` is positive (> 0).
         - ``logs.max_rotations`` is non-negative (>= 0).
         - ``logs.retention_seconds`` is non-negative (>= 0).
@@ -66,8 +73,10 @@ class ManifestValidator:
 
         self._check_session_prefix(manifest, violations)
         self._check_service_names(manifest, violations)
-        self._check_duplicate_targets(manifest, violations)
-        self._check_target_non_negative(manifest, violations)
+        self._check_duplicate_targets(manifest.services, "service", violations)
+        self._check_duplicate_targets(manifest.workspace_services, "workspace service", violations)
+        self._check_target_non_negative(manifest.services, "service", violations)
+        self._check_target_non_negative(manifest.workspace_services, "workspace service", violations)
         self._check_log_config(manifest, violations)
 
         if env is not None:
@@ -86,11 +95,23 @@ class ManifestValidator:
 
     @staticmethod
     def _check_service_names(manifest: ServiceManifest, violations: list[str]) -> None:
+        """Check service names across BOTH scopes as one namespace.
+
+        Empty/blank names are reported per-scope (the label distinguishes env
+        from workspace services).  Duplicate names are detected GLOBALLY across
+        the merged set — the unified ``[[service]]`` config means a name reused
+        between the project and workspace scopes is a collision, not two
+        independent namespaces.
+        """
         seen: set[str] = set()
-        for service in manifest.services:
+        scoped: tuple[tuple[Service, str], ...] = (
+            *((s, "service") for s in manifest.services),
+            *((s, "workspace service") for s in manifest.workspace_services),
+        )
+        for service, label in scoped:
             if not service.name or not service.name.strip():
                 violations.append(
-                    f"service with target '{service.target.window}.{service.target.pane}' has an empty or blank name"
+                    f"{label} with target '{service.target.window}.{service.target.pane}' has an empty or blank name"
                 )
                 continue
             if service.name in seen:
@@ -99,9 +120,9 @@ class ManifestValidator:
                 seen.add(service.name)
 
     @staticmethod
-    def _check_duplicate_targets(manifest: ServiceManifest, violations: list[str]) -> None:
+    def _check_duplicate_targets(services: tuple[Service, ...], label: str, violations: list[str]) -> None:
         target_to_names: dict[tuple[int, int], list[str]] = {}
-        for service in manifest.services:
+        for service in services:
             key = (service.target.window, service.target.pane)
             if key not in target_to_names:
                 target_to_names[key] = []
@@ -110,16 +131,16 @@ class ManifestValidator:
         for (window, pane), names in target_to_names.items():
             if len(names) > 1:
                 named = ", ".join(f"'{n}'" for n in names)
-                violations.append(f"duplicate target '{window}.{pane}' used by services: {named}")
+                violations.append(f"duplicate target '{window}.{pane}' used by {label}s: {named}")
 
     @staticmethod
-    def _check_target_non_negative(manifest: ServiceManifest, violations: list[str]) -> None:
-        for service in manifest.services:
+    def _check_target_non_negative(services: tuple[Service, ...], label: str, violations: list[str]) -> None:
+        for service in services:
             target = service.target
             if target.window < 0:
-                violations.append(f"service '{service.name}': target window {target.window} is negative")
+                violations.append(f"{label} '{service.name}': target window {target.window} is negative")
             if target.pane < 0:
-                violations.append(f"service '{service.name}': target pane {target.pane} is negative")
+                violations.append(f"{label} '{service.name}': target pane {target.pane} is negative")
 
     @staticmethod
     def _check_log_config(manifest: ServiceManifest, violations: list[str]) -> None:

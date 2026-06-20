@@ -21,6 +21,9 @@ _MANIFEST_DIR = Path("ai") / "project"
 _COMMITTED_NAME = "setup-tmux.toml"
 _LOCAL_NAME = "setup-tmux.local.toml"
 
+# Allowed values for a ``[[service]]`` entry's config-only ``scope`` discriminator.
+_VALID_SCOPES = ("project", "workspace")
+
 
 class ManifestReader:
     """Reads ``setup-tmux.toml`` (+ optional ``setup-tmux.local.toml`` overlay)
@@ -31,12 +34,14 @@ class ManifestReader:
     Overlay merge semantics (mirrors the bash committed→local overlay in
     ``winter-service-tmux.sh``):
 
-    * **Scalars** (``session_prefix``, ``env_file``, ``layout_hook``): the
-      overlay value replaces the committed value when present.
+    * **Scalars** (``session_prefix``, ``env_file``, ``layout_hook``,
+      ``workspace_layout_hook``): the overlay value replaces the committed
+      value when present.
     * **``[[service]]``**: merged keyed by ``name``.  An overlay service whose
       ``name`` matches an existing committed service *overrides* it in place
       (preserving position).  A new name is *appended* after all committed
-      services.
+      services.  An entry's ``scope`` (``"project"`` default, or ``"workspace"``)
+      travels inside the entry, so an override carries/sets its own scope.
     * **``[[status.url]]``**: merged keyed by ``label`` — same
       override-or-append rule as ``[[service]]``.
     """
@@ -94,14 +99,47 @@ class ManifestReader:
             raise ManifestError(f"malformed TOML in {path}: {exc}") from exc
 
     @staticmethod
+    def _merge_keyed(
+        committed_list: list[dict],  # type: ignore[type-arg]
+        overlay_list: list[dict],  # type: ignore[type-arg]
+        key: str,
+    ) -> list[dict]:  # type: ignore[type-arg]
+        """Merge *overlay_list* on top of *committed_list* keyed by *key*.
+
+        An overlay entry whose *key* matches an existing committed entry
+        *overrides* it in place (dict fields are merged so partial overrides
+        work).  An entry with a new *key* value is *appended* after all
+        committed entries.  Entries without *key* are always appended.
+        """
+        key_to_idx: dict[str, int] = {}
+        for i, entry in enumerate(committed_list):
+            if key in entry:
+                key_to_idx[entry[key]] = i
+
+        result: list[dict] = list(committed_list)  # type: ignore[type-arg]
+        for overlay_entry in overlay_list:
+            entry_key = overlay_entry.get(key)
+            if entry_key is not None and entry_key in key_to_idx:
+                idx = key_to_idx[entry_key]
+                result[idx] = {**result[idx], **overlay_entry}
+            else:
+                result.append(overlay_entry)
+                if entry_key is not None:
+                    key_to_idx[entry_key] = len(result) - 1
+
+        return result
+
+    @staticmethod
     def _merge(committed: dict, local: dict) -> dict:  # type: ignore[type-arg]
         """Merge *local* overlay on top of *committed* document.
 
         Scalar fields are replaced by the overlay value when present.
-        ``[[service]]`` and ``[[status.url]]`` use keyed override-or-append.
-        ``[logs]`` merges per-key — an overlay ``[logs]`` replaces only the keys
-        it sets, keeping committed values for the rest.
-        All other top-level keys are replaced wholesale by the overlay value.
+        ``[[service]]`` and ``[[status.url]]`` use keyed override-or-append
+        (the single ``[[service]]`` list carries per-entry ``scope``, so an
+        overlay override keeps/sets its own scope).  ``[logs]`` merges per-key — an overlay
+        ``[logs]`` replaces only the keys it sets, keeping committed values for
+        the rest.  All other top-level keys are replaced wholesale by the
+        overlay value.
         """
         if not local:
             return committed
@@ -109,7 +147,7 @@ class ManifestReader:
         result: dict = dict(committed)  # type: ignore[type-arg]
 
         # --- scalars ---
-        for key in ("session_prefix", "env_file", "layout_hook"):
+        for key in ("session_prefix", "env_file", "layout_hook", "workspace_layout_hook"):
             if key in local:
                 result[key] = local[key]
 
@@ -121,53 +159,19 @@ class ManifestReader:
 
         # --- [[service]]: keyed by "name", override-or-append ---
         if "service" in local:
-            committed_services: list[dict] = list(committed.get("service", []))  # type: ignore[type-arg]
-            overlay_services: list[dict] = local["service"]  # type: ignore[type-arg]
-
-            # Index committed services by name (preserve last-wins for duplicates
-            # in committed itself, consistent with bash arrays).
-            name_to_idx: dict[str, int] = {}
-            for i, svc in enumerate(committed_services):
-                if "name" in svc:
-                    name_to_idx[svc["name"]] = i
-
-            merged_services: list[dict] = list(committed_services)  # type: ignore[type-arg]
-            for overlay_svc in overlay_services:
-                name = overlay_svc.get("name")
-                if name is not None and name in name_to_idx:
-                    # Override in place — merge dict fields so partial overrides work.
-                    idx = name_to_idx[name]
-                    merged_services[idx] = {**merged_services[idx], **overlay_svc}
-                else:
-                    merged_services.append(overlay_svc)
-                    if name is not None:
-                        name_to_idx[name] = len(merged_services) - 1
-
-            result["service"] = merged_services
+            result["service"] = ManifestReader._merge_keyed(
+                list(committed.get("service", [])),
+                local["service"],
+                "name",
+            )
 
         # --- [[status.url]]: keyed by "label", override-or-append ---
         if "status" in local and "url" in local.get("status", {}):
-            committed_urls: list[dict] = list(  # type: ignore[type-arg]
-                committed.get("status", {}).get("url", [])
+            merged_urls = ManifestReader._merge_keyed(
+                list(committed.get("status", {}).get("url", [])),
+                local["status"]["url"],
+                "label",
             )
-            overlay_urls: list[dict] = local["status"]["url"]  # type: ignore[type-arg]
-
-            label_to_idx: dict[str, int] = {}
-            for i, u in enumerate(committed_urls):
-                if "label" in u:
-                    label_to_idx[u["label"]] = i
-
-            merged_urls: list[dict] = list(committed_urls)  # type: ignore[type-arg]
-            for overlay_url in overlay_urls:
-                label = overlay_url.get("label")
-                if label is not None and label in label_to_idx:
-                    idx = label_to_idx[label]
-                    merged_urls[idx] = {**merged_urls[idx], **overlay_url}
-                else:
-                    merged_urls.append(overlay_url)
-                    if label is not None:
-                        label_to_idx[label] = len(merged_urls) - 1
-
             result["status"] = {**committed.get("status", {}), "url": merged_urls}
 
         return result
@@ -195,24 +199,21 @@ class ManifestReader:
         return Target(window=window, pane=pane)
 
     @staticmethod
-    def _build(doc: dict) -> ServiceManifest:  # type: ignore[type-arg]
-        """Construct a ``ServiceManifest`` from the merged TOML document.
+    def _parse_services(
+        raw_services: list[dict],  # type: ignore[type-arg]
+    ) -> list[tuple[Service, str]]:
+        """Parse ``[[service]]`` entries into ``(Service, scope)`` pairs.
 
-        Raises ``ManifestError`` on missing required fields or unparseable values.
+        Each entry is parsed into a typed ``Service`` and its config-only
+        ``scope`` discriminator is validated alongside it (``"project"`` default,
+        or ``"workspace"``).  ``scope`` is returned NEXT TO the ``Service`` rather
+        than stored on it — the runtime model is scope-agnostic — so the caller
+        partitions the already-typed pairs (see ``_build``).
+
+        Raises ``ManifestError`` on a missing/invalid field or an unknown
+        ``scope``, naming the offending service.
         """
-        # --- required scalar ---
-        if "session_prefix" not in doc:
-            raise ManifestError("manifest is missing required field 'session_prefix'")
-        session_prefix = doc["session_prefix"]
-        if not isinstance(session_prefix, str) or not session_prefix:
-            raise ManifestError("'session_prefix' must be a non-empty string")
-
-        env_file: str | None = doc.get("env_file") or None
-        layout_hook: str | None = doc.get("layout_hook") or None
-
-        # --- [[service]] ---
-        raw_services: list[dict] = doc.get("service", [])  # type: ignore[type-arg]
-        services: list[Service] = []
+        parsed: list[tuple[Service, str]] = []
         for i, raw in enumerate(raw_services):
             name = raw.get("name")
             if not name:
@@ -245,7 +246,36 @@ class ManifestReader:
                     f"allowed values are {', '.join(repr(v) for v in _allowed)}"
                 )
             log_mode = LogMode(log_raw)
-            services.append(Service(name=name, target=target, command=command, log=log_mode))
+            scope = raw.get("scope", "project")
+            if scope not in _VALID_SCOPES:
+                raise ManifestError(
+                    f"service '{name}': invalid scope {scope!r}; "
+                    f"allowed values are {', '.join(repr(s) for s in _VALID_SCOPES)}"
+                )
+            parsed.append((Service(name=name, target=target, command=command, log=log_mode), scope))
+        return parsed
+
+    @staticmethod
+    def _build(doc: dict) -> ServiceManifest:  # type: ignore[type-arg]
+        """Construct a ``ServiceManifest`` from the merged TOML document.
+
+        Raises ``ManifestError`` on missing required fields or unparseable values.
+        """
+        # --- required scalar ---
+        if "session_prefix" not in doc:
+            raise ManifestError("manifest is missing required field 'session_prefix'")
+        session_prefix = doc["session_prefix"]
+        if not isinstance(session_prefix, str) or not session_prefix:
+            raise ManifestError("'session_prefix' must be a non-empty string")
+
+        env_file: str | None = doc.get("env_file") or None
+        layout_hook: str | None = doc.get("layout_hook") or None
+        workspace_layout_hook: str | None = doc.get("workspace_layout_hook") or None
+
+        # --- [[service]] — parse once into (Service, scope) pairs, then partition ---
+        parsed_services = ManifestReader._parse_services(doc.get("service", []))
+        services = [svc for svc, scope in parsed_services if scope == "project"]
+        workspace_services = [svc for svc, scope in parsed_services if scope == "workspace"]
 
         # --- [[status.url]] ---
         raw_urls: list[dict] = doc.get("status", {}).get("url", [])  # type: ignore[type-arg]
@@ -276,4 +306,6 @@ class ManifestReader:
             services=tuple(services),
             status_urls=tuple(status_urls),
             logs=logs,
+            workspace_services=tuple(workspace_services),
+            workspace_layout_hook=workspace_layout_hook,
         )

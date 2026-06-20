@@ -15,6 +15,8 @@ def _make_manifest(
     services: tuple[Service, ...] = (),
     status_urls: tuple[StatusUrl, ...] = (),
     logs: LogConfig = LogConfig(),
+    workspace_services: tuple[Service, ...] = (),
+    workspace_layout_hook: str | None = None,
 ) -> ServiceManifest:
     return ServiceManifest(
         session_prefix=session_prefix,
@@ -23,6 +25,8 @@ def _make_manifest(
         services=services,
         status_urls=status_urls,
         logs=logs,
+        workspace_services=workspace_services,
+        workspace_layout_hook=workspace_layout_hook,
     )
 
 
@@ -325,3 +329,150 @@ def test_multiple_log_violations_all_reported() -> None:
     assert any("max_rotations" in v for v in violations)
     assert any("retention_seconds" in v for v in violations)
     assert len(violations) == 3
+
+
+# ---------------------------------------------------------------------------
+# workspace_services — semantic checks
+# ---------------------------------------------------------------------------
+
+
+def test_valid_workspace_services_no_violations() -> None:
+    manifest = _make_manifest(
+        workspace_services=(
+            _service("docker", window=0, pane=0),
+            _service("monitor", window=0, pane=1),
+        ),
+    )
+    assert _validator.validate(manifest) == []
+
+
+def test_empty_workspace_service_name_is_violation() -> None:
+    manifest = _make_manifest(
+        workspace_services=(Service(name="", target=Target(0, 0), command="cmd"),),
+    )
+    violations = _validator.validate(manifest)
+    assert len(violations) == 1
+    assert "workspace service" in violations[0]
+    assert "empty" in violations[0] or "blank" in violations[0]
+
+
+def test_blank_workspace_service_name_is_violation() -> None:
+    manifest = _make_manifest(
+        workspace_services=(Service(name="   ", target=Target(0, 0), command="cmd"),),
+    )
+    violations = _validator.validate(manifest)
+    assert len(violations) == 1
+    assert "workspace service" in violations[0]
+
+
+def test_duplicate_workspace_service_name_is_violation() -> None:
+    manifest = _make_manifest(
+        workspace_services=(
+            _service("docker", window=0, pane=0),
+            _service("docker", window=0, pane=1),
+        ),
+    )
+    violations = _validator.validate(manifest)
+    assert any("duplicate service name" in v and "docker" in v for v in violations)
+
+
+def test_duplicate_workspace_service_target_is_violation() -> None:
+    manifest = _make_manifest(
+        workspace_services=(
+            _service("docker", window=0, pane=0),
+            _service("monitor", window=0, pane=0),
+        ),
+    )
+    violations = _validator.validate(manifest)
+    assert len(violations) == 1
+    v = violations[0]
+    assert "0.0" in v
+    assert "docker" in v
+    assert "monitor" in v
+    assert "workspace service" in v
+
+
+def test_negative_window_in_workspace_service_is_violation() -> None:
+    manifest = _make_manifest(
+        workspace_services=(Service(name="docker", target=Target(-1, 0), command="cmd"),),
+    )
+    violations = _validator.validate(manifest)
+    assert any("workspace service" in v and "window" in v and "-1" in v for v in violations)
+
+
+def test_negative_pane_in_workspace_service_is_violation() -> None:
+    manifest = _make_manifest(
+        workspace_services=(Service(name="docker", target=Target(0, -1), command="cmd"),),
+    )
+    violations = _validator.validate(manifest)
+    assert any("workspace service" in v and "pane" in v and "-1" in v for v in violations)
+
+
+def test_env_and_workspace_service_sharing_target_is_not_a_violation() -> None:
+    """An env service and a workspace service may share target 0.0 — different sessions."""
+    manifest = _make_manifest(
+        services=(_service("backend", window=0, pane=0),),
+        workspace_services=(_service("docker", window=0, pane=0),),
+    )
+    assert _validator.validate(manifest) == []
+
+
+def test_duplicate_target_within_env_services_still_violation_when_workspace_present() -> None:
+    """Duplicate env service targets are still caught even when workspace_services exist."""
+    manifest = _make_manifest(
+        services=(
+            _service("alpha", window=0, pane=0),
+            _service("beta", window=0, pane=0),
+        ),
+        workspace_services=(_service("docker", window=0, pane=0),),
+    )
+    violations = _validator.validate(manifest)
+    # env services alpha and beta share 0.0 → violation
+    assert any("0.0" in v and "alpha" in v and "beta" in v for v in violations)
+    # env+workspace sharing 0.0 → no cross-list violation
+    assert not any("docker" in v and "alpha" in v for v in violations)
+    assert not any("docker" in v and "beta" in v for v in violations)
+
+
+def test_duplicate_names_within_each_scope_are_violations() -> None:
+    """Duplicate names within the project list and within the workspace list both flag."""
+    manifest = _make_manifest(
+        services=(
+            _service("env-dup", window=0, pane=0),
+            _service("env-dup", window=0, pane=1),
+        ),
+        workspace_services=(
+            _service("ws-dup", window=1, pane=0),
+            _service("ws-dup", window=1, pane=1),
+        ),
+    )
+    violations = _validator.validate(manifest)
+    assert any("duplicate service name" in v and "env-dup" in v for v in violations)
+    assert any("duplicate service name" in v and "ws-dup" in v for v in violations)
+
+
+def test_same_name_across_scopes_is_violation() -> None:
+    """Names share ONE namespace across project + workspace — a reuse across scopes collides.
+
+    The unified [[service]] config means project and workspace services no longer
+    have independent name namespaces (target uniqueness stays per-scope, names do not).
+    """
+    manifest = _make_manifest(
+        services=(_service("shared", window=0, pane=0),),
+        workspace_services=(_service("shared", window=0, pane=1),),
+    )
+    violations = _validator.validate(manifest)
+    assert any("duplicate service name" in v and "shared" in v for v in violations)
+
+
+def test_same_name_across_scopes_with_shared_target_is_name_violation_only() -> None:
+    """A project + workspace service sharing both name and target 0.0: name collides,
+    but the shared target stays legal (targets are still per-scope)."""
+    manifest = _make_manifest(
+        services=(_service("shared", window=0, pane=0),),
+        workspace_services=(_service("shared", window=0, pane=0),),
+    )
+    violations = _validator.validate(manifest)
+    assert any("duplicate service name" in v and "shared" in v for v in violations)
+    # The shared 0.0 target across scopes must NOT be reported as a duplicate target.
+    assert not any("duplicate target" in v for v in violations)

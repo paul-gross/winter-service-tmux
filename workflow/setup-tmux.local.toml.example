@@ -9,14 +9,16 @@
 # this overlay.
 #
 # Overlay merge semantics:
-#   Scalars (session_prefix, env_file, layout_hook):
+#   Scalars (session_prefix, env_file, layout_hook, workspace_layout_hook):
 #     The overlay value REPLACES the committed value when present.
 #
-#   [[service]] — keyed by "name":
+#   [[service]] — keyed by "name" (any scope):
 #     A service whose "name" matches a committed service OVERRIDES it (the
 #     overlay fields are merged into the committed entry; unspecified fields
 #     keep their committed values). A service with a new "name" is APPENDED
-#     after all committed services.
+#     after all committed services. The per-entry "scope" ("project" default,
+#     or "workspace") travels inside the entry: an override omitting "scope"
+#     keeps the committed scope, and a new entry sets its own.
 #
 #   [[status.url]] — keyed by "label":
 #     Same override-or-append rule as [[service]], keyed by "label".
@@ -58,3 +60,20 @@ url = "http://localhost:${LOCAL_BACKEND_PORT}"
 [[status.url]]
 label = "Debug Inspector"
 url = "http://localhost:9229"
+
+# Override a committed workspace service by name — e.g. point docker at a
+# different compose file locally.  Only the fields you specify are replaced;
+# unspecified fields keep their committed values (including scope = "workspace").
+[[service]]
+name = "docker"
+command = "docker compose -f docker-compose.local.yml up"
+
+# Append a workspace service that isn't in the committed manifest — e.g. a
+# personal monitoring tool.  Set scope = "workspace" so it routes to the
+# workspace session.  The workspace_layout_hook must create this pane locally
+# or the orchestrator will have nowhere to send it.
+[[service]]
+name = "local-monitor"
+target = "1.0"
+command = "python -m monitor"
+scope = "workspace"

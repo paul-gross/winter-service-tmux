@@ -11,12 +11,22 @@
 #   created and BEFORE any service commands are sent. The field that activates
 #   this hook is `layout_hook` in setup-tmux.toml.
 #
-# ENVIRONMENT PROVIDED
+# ENVIRONMENT PROVIDED (per-env hook — activated by layout_hook in setup-tmux.toml)
 #   WINTER_TMUX_SESSION       — the fully-qualified tmux session name, e.g. "mp-alpha"
 #   WINTER_TMUX_WORKTREE_DIR  — absolute path to the worktree root
 #   WINTER_ENV                — env name (e.g. "alpha")
 #   WINTER_ENV_INDEX          — numeric env index (e.g. "1" for alpha)
 #   WINTER_PORT_BASE          — base port for this env (e.g. "4100")
+#
+# WORKSPACE HOOK (activated by workspace_layout_hook in setup-tmux.toml)
+#   A separate script (e.g. workspace:/ai/project/workspace-layout-hook.sh) is
+#   invoked once when `winter service up workspace` creates the workspace session.
+#   It follows the same contract as this file (layout only; same CONSTRAINTS apply),
+#   but the orchestrator supplies a different environment:
+#   WINTER_TMUX_SESSION       — e.g. "mp-workspace"
+#   WINTER_TMUX_WORKTREE_DIR  — absolute path to the WORKSPACE ROOT (not a worktree)
+#   WINTER_ENV                — always "workspace"
+#   (WINTER_ENV_INDEX and WINTER_PORT_BASE are NOT set for the workspace hook)
 #
 # PURPOSE — LAYOUT ONLY
 #   This script creates the windows and panes that the manifest's [[service]]

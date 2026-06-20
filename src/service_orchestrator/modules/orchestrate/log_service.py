@@ -40,10 +40,10 @@ import sys
 from typing import IO
 
 from service_manifest.modules.manifest.model import LogMode, Service
-from service_orchestrator.modules.orchestrate.env_context import EnvContext
 from service_orchestrator.modules.orchestrate.follow_clock import IFollowClock
 from service_orchestrator.modules.orchestrate.log_query import LogQuery
 from service_orchestrator.modules.orchestrate.log_repository import ILogRepository
+from service_orchestrator.modules.orchestrate.session_context import SessionContext
 from service_orchestrator.modules.orchestrate.tmux_repository import ITmuxRepository
 
 # ---------------------------------------------------------------------------
@@ -170,7 +170,7 @@ class LogService:
 
     def _gather_backlog(
         self,
-        ctx: EnvContext,
+        ctx: SessionContext,
         in_scope: list[Service],
         tail: int | None,
     ) -> tuple[list[dict[str, str]], dict[tuple[str, str], int]]:
@@ -241,7 +241,7 @@ class LogService:
 
         return merge_sorted(ctx.env, streams), file_seeds
 
-    def logs(self, ctx: EnvContext, query: LogQuery) -> int:
+    def logs(self, ctx: SessionContext, query: LogQuery) -> int:
         """Emit NDJSON backlog for the requested services (backlog-only).
 
         Follow mode is handled by ``follow_streams``; the CLI never calls
@@ -259,10 +259,7 @@ class LogService:
           Returns 0.
         """
         requested = set(query.services)
-        if requested:
-            in_scope = [s for s in ctx.manifest.services if s.name in requested]
-        else:
-            in_scope = list(ctx.manifest.services)
+        in_scope = [s for s in ctx.services if s.name in requested] if requested else list(ctx.services)
 
         # --- backlog ---
         # _gather_backlog reads each service's events and returns the per-env
@@ -291,7 +288,7 @@ class LogService:
 
     def follow_streams(
         self,
-        streams: list[tuple[EnvContext, LogQuery]],
+        streams: list[tuple[SessionContext, LogQuery]],
     ) -> int:
         """Emit merged NDJSON for multiple ``(ctx, query)`` streams, then follow live.
 
@@ -323,13 +320,10 @@ class LogService:
         until = first_query.until
 
         # --- build per-stream in_scope lists ---
-        stream_units: list[tuple[EnvContext, list[Service]]] = []
+        stream_units: list[tuple[SessionContext, list[Service]]] = []
         for ctx, query in streams:
             requested = set(query.services)
-            if requested:
-                in_scope = [s for s in ctx.manifest.services if s.name in requested]
-            else:
-                in_scope = list(ctx.manifest.services)
+            in_scope = [s for s in ctx.services if s.name in requested] if requested else list(ctx.services)
             stream_units.append((ctx, in_scope))
 
         # --- merged backlog across all streams ---
@@ -359,7 +353,7 @@ class LogService:
         self._follow_clock.install()
 
         # Flat list of (ctx, service) units in streams order, manifest order per env.
-        flat_units: list[tuple[EnvContext, Service]] = []
+        flat_units: list[tuple[SessionContext, Service]] = []
         for ctx, in_scope in stream_units:
             for svc in in_scope:
                 flat_units.append((ctx, svc))

@@ -73,10 +73,13 @@ retention_seconds = 604800    # 7 days
 #                         services where TTY matters more than persistence.
 #              "memory" — accepted but not yet implemented; logs emits nothing
 #                         (future work).
+#   scope    (optional, default "project") — "project" runs the service in the
+#              per-env <session_prefix>-<env> session; "workspace" makes it a
+#              workspace-scoped singleton (see the workspace section below).
 #
-# Targets must be unique across all services. The layout hook is responsible
-# for creating the windows/panes named here; the orchestrator sends the
-# commands into them.
+# Targets must be unique across all services in the SAME scope. The layout hook
+# is responsible for creating the windows/panes named here; the orchestrator
+# sends the commands into them.
 
 [[service]]
 name = "backend"
@@ -126,3 +129,54 @@ url = "http://localhost:${BACKEND_PORT}"
 [[status.url]]
 label = "Frontend"
 url = "http://localhost:${FRONTEND_PORT}"
+
+# ---------------------------------------------------------------------------
+# Workspace-scoped singleton services
+# ---------------------------------------------------------------------------
+#
+# A [[service]] entry with scope = "workspace" runs in a SEPARATE tmux session
+# named <session_prefix>-workspace (e.g. "mp-workspace"), created at the
+# workspace root rather than a per-env worktree.  These are shared across all
+# feature environments and are intended for long-running infrastructure that
+# should not be duplicated per-env (e.g. a shared Docker daemon, a registry, a
+# global build watcher).
+#
+# scope is the only field that distinguishes a workspace singleton from a
+# per-env service:
+#   scope = "project"   (DEFAULT, may be omitted) — per-env service, runs in
+#                       the <session_prefix>-<env> session.
+#   scope = "workspace" — workspace singleton, runs in <session_prefix>-workspace.
+# All other fields (name/target/command/log) are identical to a project service.
+#
+# Name uniqueness is GLOBAL across both scopes — a project and a workspace
+# service may not share a name.  Target uniqueness is per-scope: a workspace
+# service at "0.0" and a project service at "0.0" do NOT conflict (different
+# sessions / validated in their own namespace).
+#
+# Note: for workspace services that manage container lifetimes (e.g.
+# `docker compose up`), down reaps the pane process tree, which terminates
+# inline-launched containers (best-effort — containers started detached are
+# not affected).
+#
+# workspace_layout_hook: optional bash script invoked once after the workspace
+# session is created — same semantics as layout_hook but runs at the workspace
+# root.  Relative to the workspace root.  It creates the workspace
+# windows/panes; the orchestrator sends each service's command into its pane.
+
+workspace_layout_hook = "ai/project/workspace-layout-hook.sh"
+
+[[service]]
+name = "docker"
+target = "0.0"
+command = "docker compose -f docker-compose.workspace.yml up"
+scope = "workspace"
+
+[[service]]
+# Workspace pane-mode service — reads output via tmux capture-pane rather
+# than a persisted log file.  Useful when the command has interactive output
+# or TTY colouring that you want preserved.
+name = "registry"
+target = "0.1"
+command = "docker run -p 5000:5000 registry:2"
+log = "pane"
+scope = "workspace"

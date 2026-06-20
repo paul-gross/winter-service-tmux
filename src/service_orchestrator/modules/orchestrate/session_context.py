@@ -1,0 +1,66 @@
+"""Per-action resolved session context.
+
+``SessionContext`` carries the concrete, per-invocation values that both doors
+(``cli.py`` and ``env_cli.py``) derive before calling the single
+``OrchestratorService``.  It is **scope-agnostic**: the same shape describes a
+feature-env session (``env == "alpha"``) and the shared workspace-singleton
+session (``env == "workspace"``).  Each build path selects the right scope's
+service/layout/status values from the manifest and stores them here directly —
+there is no env-shaped-manifest projection.  Building a ``SessionContext`` —
+loading the manifest, resolving the env file path, selecting the scope — is the
+builder's responsibility; this module only defines the dataclass.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+
+from service_manifest.modules.manifest.model import LogConfig, Service, StatusUrl
+
+
+@dataclass(frozen=True)
+class SessionContext:
+    """Resolved per-action state for one orchestrator invocation.
+
+    The service/layout/status fields are already scope-selected by the builder:
+    for a feature env they are the manifest's env-scoped values; for the
+    workspace session they are its ``workspace_*`` values (with no status URLs).
+    The orchestrator consumes them uniformly without knowing which scope it is.
+
+    Attributes:
+        env: The session name segment — a feature-env name (e.g. ``"alpha"``)
+            or the reserved ``"workspace"`` token.
+        workspace_root: Absolute path to the workspace root.
+        worktree_dir: Absolute path to the directory the session runs in — the
+            per-env worktree (``workspace_root / env``) for a feature env, or
+            ``workspace_root`` itself for the workspace session.
+        session_prefix: Tmux session-name prefix; the session is
+            ``<session_prefix>-<env>``.
+        services: The services to run in this session, in declaration order.
+        layout_hook: Optional bash layout hook for this session (relative to the
+            workspace root), or ``None``.
+        status_urls: Status-header URLs for this session (empty for the
+            workspace session).
+        logs: Log-capture configuration.
+        env_vars: Parsed key-value mapping from the env file, or ``None``
+            when no env file was declared or the file was absent.
+        env_file_path: Absolute path to the resolved env file, or ``None``
+            when not applicable.
+    """
+
+    env: str
+    workspace_root: Path
+    worktree_dir: Path
+    session_prefix: str
+    services: tuple[Service, ...]
+    layout_hook: str | None
+    status_urls: tuple[StatusUrl, ...]
+    logs: LogConfig
+    env_vars: dict[str, str] | None
+    env_file_path: Path | None
+
+    @property
+    def session(self) -> str:
+        """The fully-qualified tmux session name: ``<session_prefix>-<env>``."""
+        return f"{self.session_prefix}-{self.env}"

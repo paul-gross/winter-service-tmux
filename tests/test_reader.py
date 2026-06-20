@@ -810,3 +810,421 @@ url = "http://localhost:4100"
     assert committed_doc["status"]["url"][0]["url"] == "http://localhost:3000", (
         "overlay merge mutated the committed dict's nested 'status' table"
     )
+
+
+# ---------------------------------------------------------------------------
+# workspace_services and workspace_layout_hook — parse + validate
+# ---------------------------------------------------------------------------
+
+
+def test_workspace_services_parsed() -> None:
+    """[[service]] entries with scope="workspace" partition into workspace_services."""
+    content = """\
+session_prefix = "mp"
+workspace_layout_hook = "ai/project/workspace-layout-hook.sh"
+
+[[service]]
+name = "docker"
+target = "0.0"
+command = "docker compose up"
+scope = "workspace"
+
+[[service]]
+name = "watcher"
+target = "0.1"
+command = "npm run watch"
+log = "pane"
+scope = "workspace"
+"""
+    manifest = _read({_COMMITTED_PATH: content})
+
+    assert len(manifest.workspace_services) == 2
+    assert manifest.workspace_services[0].name == "docker"
+    assert manifest.workspace_services[0].target.window == 0
+    assert manifest.workspace_services[0].target.pane == 0
+    assert manifest.workspace_services[0].command == "docker compose up"
+    assert manifest.workspace_services[1].name == "watcher"
+    assert manifest.workspace_services[1].log == LogMode.PANE
+    assert manifest.workspace_layout_hook == "ai/project/workspace-layout-hook.sh"
+
+
+def test_services_partitioned_by_scope() -> None:
+    """A single [[service]] array splits into project / workspace lists by scope."""
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "backend"
+target = "0.0"
+command = "npm start"
+
+[[service]]
+name = "docker"
+target = "0.0"
+command = "docker compose up"
+scope = "workspace"
+"""
+    manifest = _read({_COMMITTED_PATH: content})
+    assert [s.name for s in manifest.services] == ["backend"]
+    assert [s.name for s in manifest.workspace_services] == ["docker"]
+
+
+def test_service_scope_defaults_to_project() -> None:
+    """A [[service]] entry without scope is a project service."""
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "backend"
+target = "0.0"
+command = "npm start"
+"""
+    manifest = _read({_COMMITTED_PATH: content})
+    assert [s.name for s in manifest.services] == ["backend"]
+    assert manifest.workspace_services == ()
+
+
+def test_explicit_project_scope_is_project_service() -> None:
+    """scope = "project" written explicitly routes to the project list."""
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "backend"
+target = "0.0"
+command = "npm start"
+scope = "project"
+"""
+    manifest = _read({_COMMITTED_PATH: content})
+    assert [s.name for s in manifest.services] == ["backend"]
+    assert manifest.workspace_services == ()
+
+
+def test_unknown_scope_raises() -> None:
+    """An unrecognised scope value is rejected with a clear message."""
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "backend"
+target = "0.0"
+command = "npm start"
+scope = "global"
+"""
+    with pytest.raises(ManifestError, match="invalid scope"):
+        _read({_COMMITTED_PATH: content})
+
+
+def test_scope_is_not_carried_onto_runtime_service() -> None:
+    """scope is config-only — it is consumed at parse time, not stored on Service."""
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "docker"
+target = "0.0"
+command = "docker compose up"
+scope = "workspace"
+"""
+    manifest = _read({_COMMITTED_PATH: content})
+    assert not hasattr(manifest.workspace_services[0], "scope")
+
+
+def test_workspace_layout_hook_parsed() -> None:
+    """workspace_layout_hook scalar is parsed independently of layout_hook."""
+    content = """\
+session_prefix = "mp"
+layout_hook = "ai/project/layout-hook.sh"
+workspace_layout_hook = "ai/project/workspace-layout-hook.sh"
+"""
+    manifest = _read({_COMMITTED_PATH: content})
+    assert manifest.layout_hook == "ai/project/layout-hook.sh"
+    assert manifest.workspace_layout_hook == "ai/project/workspace-layout-hook.sh"
+
+
+def test_workspace_services_absent_defaults_empty() -> None:
+    """No [[workspace_service]] section → workspace_services is an empty tuple."""
+    manifest = _read({_COMMITTED_PATH: 'session_prefix = "mp"\n'})
+    assert manifest.workspace_services == ()
+    assert manifest.workspace_layout_hook is None
+
+
+def test_workspace_service_log_defaults_to_file() -> None:
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "docker"
+target = "0.0"
+command = "docker compose up"
+scope = "workspace"
+"""
+    manifest = _read({_COMMITTED_PATH: content})
+    assert manifest.workspace_services[0].log == LogMode.FILE
+
+
+def test_workspace_service_missing_name_raises() -> None:
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+target = "0.0"
+command = "cmd"
+scope = "workspace"
+"""
+    with pytest.raises(ManifestError, match="name"):
+        _read({_COMMITTED_PATH: content})
+
+
+def test_workspace_service_missing_target_raises() -> None:
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "docker"
+command = "cmd"
+scope = "workspace"
+"""
+    with pytest.raises(ManifestError, match="target"):
+        _read({_COMMITTED_PATH: content})
+
+
+def test_workspace_service_malformed_target_raises() -> None:
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "docker"
+target = "abc"
+command = "cmd"
+scope = "workspace"
+"""
+    with pytest.raises(ManifestError, match="malformed target"):
+        _read({_COMMITTED_PATH: content})
+
+
+def test_workspace_service_float_target_raises() -> None:
+    """target = 0.0 (TOML float) must be rejected for a workspace-scoped service too."""
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "docker"
+target = 0.0
+command = "cmd"
+scope = "workspace"
+"""
+    with pytest.raises(ManifestError, match="quoted string"):
+        _read({_COMMITTED_PATH: content})
+
+
+def test_workspace_service_invalid_log_raises() -> None:
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "docker"
+target = "0.0"
+command = "cmd"
+log = "invalid"
+scope = "workspace"
+"""
+    with pytest.raises(ManifestError, match="'log'"):
+        _read({_COMMITTED_PATH: content})
+
+
+def test_workspace_service_non_string_log_raises() -> None:
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "docker"
+target = "0.0"
+command = "cmd"
+log = true
+scope = "workspace"
+"""
+    with pytest.raises(ManifestError, match="'log'"):
+        _read({_COMMITTED_PATH: content})
+
+
+# ---------------------------------------------------------------------------
+# workspace-scoped service overlay semantics (scope = "workspace")
+# ---------------------------------------------------------------------------
+
+
+def test_overlay_workspace_service_overrides_by_name() -> None:
+    committed = """\
+session_prefix = "mp"
+
+[[service]]
+name = "docker"
+target = "0.0"
+command = "docker compose up"
+scope = "workspace"
+"""
+    overlay = """\
+[[service]]
+name = "docker"
+target = "0.0"
+command = "docker compose up --build"
+scope = "workspace"
+"""
+    manifest = _read({_COMMITTED_PATH: committed, _LOCAL_PATH: overlay})
+    assert len(manifest.workspace_services) == 1
+    assert manifest.workspace_services[0].command == "docker compose up --build"
+
+
+def test_overlay_workspace_service_append_new_name() -> None:
+    committed = """\
+session_prefix = "mp"
+
+[[service]]
+name = "docker"
+target = "0.0"
+command = "docker compose up"
+scope = "workspace"
+"""
+    overlay = """\
+[[service]]
+name = "monitor"
+target = "0.1"
+command = "python -m monitor"
+scope = "workspace"
+"""
+    manifest = _read({_COMMITTED_PATH: committed, _LOCAL_PATH: overlay})
+    assert len(manifest.workspace_services) == 2
+    assert manifest.workspace_services[0].name == "docker"
+    assert manifest.workspace_services[1].name == "monitor"
+
+
+def test_overlay_workspace_service_preserves_order() -> None:
+    """Override stays in place; append follows all committed entries."""
+    committed = """\
+session_prefix = "mp"
+
+[[service]]
+name = "docker"
+target = "0.0"
+command = "docker compose up"
+scope = "workspace"
+
+[[service]]
+name = "registry"
+target = "0.1"
+command = "docker run registry"
+scope = "workspace"
+"""
+    overlay = """\
+[[service]]
+name = "registry"
+target = "0.1"
+command = "docker run registry:2"
+scope = "workspace"
+
+[[service]]
+name = "monitor"
+target = "1.0"
+command = "python -m monitor"
+scope = "workspace"
+"""
+    manifest = _read({_COMMITTED_PATH: committed, _LOCAL_PATH: overlay})
+    assert len(manifest.workspace_services) == 3
+    assert manifest.workspace_services[0].name == "docker"
+    assert manifest.workspace_services[1].name == "registry"
+    assert manifest.workspace_services[1].command == "docker run registry:2"
+    assert manifest.workspace_services[2].name == "monitor"
+
+
+def test_overlay_service_scope_travels_through_merge() -> None:
+    """An overlay override keeps its scope, and a workspace-scoped append routes correctly."""
+    committed = """\
+session_prefix = "mp"
+
+[[service]]
+name = "backend"
+target = "0.0"
+command = "npm start"
+
+[[service]]
+name = "docker"
+target = "0.0"
+command = "docker compose up"
+scope = "workspace"
+"""
+    # Override the workspace docker entry (changing only command); append a new
+    # workspace service. Both must land in the workspace list, not the project one.
+    overlay = """\
+[[service]]
+name = "docker"
+command = "docker compose up --build"
+scope = "workspace"
+
+[[service]]
+name = "monitor"
+target = "1.0"
+command = "python -m monitor"
+scope = "workspace"
+"""
+    manifest = _read({_COMMITTED_PATH: committed, _LOCAL_PATH: overlay})
+    assert [s.name for s in manifest.services] == ["backend"]
+    assert [s.name for s in manifest.workspace_services] == ["docker", "monitor"]
+    assert manifest.workspace_services[0].command == "docker compose up --build"
+
+
+def test_overlay_workspace_layout_hook_replaces_committed() -> None:
+    committed = """\
+session_prefix = "mp"
+workspace_layout_hook = "ai/project/workspace-layout-hook.sh"
+"""
+    overlay = 'workspace_layout_hook = "ai/project/workspace-layout-hook.local.sh"\n'
+    manifest = _read({_COMMITTED_PATH: committed, _LOCAL_PATH: overlay})
+    assert manifest.workspace_layout_hook == "ai/project/workspace-layout-hook.local.sh"
+
+
+def test_overlay_workspace_service_partial_override_keeps_existing_fields() -> None:
+    """Partial overlay (only command changed) keeps the committed log + scope."""
+    committed = """\
+session_prefix = "mp"
+
+[[service]]
+name = "docker"
+target = "0.0"
+command = "docker compose up"
+log = "pane"
+scope = "workspace"
+"""
+    # Overlay omits scope; the committed scope = "workspace" rides the merge.
+    overlay = """\
+[[service]]
+name = "docker"
+command = "docker compose up --build"
+"""
+    manifest = _read({_COMMITTED_PATH: committed, _LOCAL_PATH: overlay})
+    assert manifest.workspace_services[0].command == "docker compose up --build"
+    assert manifest.workspace_services[0].log == LogMode.PANE
+    assert [s.name for s in manifest.services] == []
+
+
+def test_env_services_and_workspace_services_can_share_same_target() -> None:
+    """An env service and a workspace service may use the same target (different sessions)."""
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "backend"
+target = "0.0"
+command = "npm start"
+
+[[service]]
+name = "docker"
+target = "0.0"
+command = "docker compose up"
+scope = "workspace"
+"""
+    # Should parse without error
+    manifest = _read({_COMMITTED_PATH: content})
+    assert manifest.services[0].target.window == 0
+    assert manifest.services[0].target.pane == 0
+    assert manifest.workspace_services[0].target.window == 0
+    assert manifest.workspace_services[0].target.pane == 0
