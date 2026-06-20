@@ -241,15 +241,9 @@ def main(argv: list[str]) -> int:
 
             # Derive prefix from the first session to enumerate envs
             candidate_session = sessions[0]
-            candidate_env_name = (
-                candidate_session.split("-", 1)[1]
-                if "-" in candidate_session
-                else candidate_session
-            )
+            candidate_env_name = candidate_session.split("-", 1)[1] if "-" in candidate_session else candidate_session
             try:
-                seed_ctx = container.env_context_builder.build(
-                    candidate_env_name, workspace_root=workspace_root
-                )
+                seed_ctx = container.env_context_builder.build(candidate_env_name, workspace_root=workspace_root)
             except (ManifestError, OSError, OrchestratorError) as exc:
                 print(f"orchestrate: could not read manifest: {exc}", file=sys.stderr)
                 return 1
@@ -285,9 +279,7 @@ def main(argv: list[str]) -> int:
             return 1
 
         prefix, services_list = manifest_info
-        env_services, dead_patterns = _expand_patterns(
-            container, patterns, workspace_root, services_list, prefix
-        )
+        env_services, dead_patterns = _expand_patterns(container, patterns, workspace_root, services_list, prefix)
 
         if dead_patterns:
             for pat in dead_patterns:
@@ -306,9 +298,7 @@ def main(argv: list[str]) -> int:
                 rc = 1
                 continue
             try:
-                result = container.orchestrator.status(
-                    ctx, services=tuple(svc_names), json_output=json_output
-                )
+                result = container.orchestrator.status(ctx, services=tuple(svc_names), json_output=json_output)
                 if result != 0:
                     rc = result
             except OrchestratorError as exc:
@@ -338,9 +328,7 @@ def main(argv: list[str]) -> int:
             return 1
 
         prefix, services_list = manifest_info
-        env_services, dead_patterns = _expand_patterns(
-            container, patterns, workspace_root, services_list, prefix
-        )
+        env_services, dead_patterns = _expand_patterns(container, patterns, workspace_root, services_list, prefix)
 
         if dead_patterns:
             for pat in dead_patterns:
@@ -390,9 +378,7 @@ def main(argv: list[str]) -> int:
             return 1
 
         prefix, services_list = manifest_info
-        env_services, dead_patterns = _expand_patterns(
-            container, patterns, workspace_root, services_list, prefix
-        )
+        env_services, dead_patterns = _expand_patterns(container, patterns, workspace_root, services_list, prefix)
 
         if dead_patterns:
             for pat in dead_patterns:

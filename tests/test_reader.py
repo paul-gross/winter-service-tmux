@@ -76,23 +76,13 @@ url = "http://localhost:${FRONTEND_PORT}"
     assert manifest.layout_hook == "ai/project/layout-hook.sh"
 
     assert len(manifest.services) == 3
-    assert manifest.services[0] == Service(
-        name="backend", target=Target(window=0, pane=0), command="npm run start:dev"
-    )
-    assert manifest.services[1] == Service(
-        name="frontend", target=Target(window=0, pane=1), command="npm run dev"
-    )
-    assert manifest.services[2] == Service(
-        name="shell", target=Target(window=1, pane=0), command=""
-    )
+    assert manifest.services[0] == Service(name="backend", target=Target(window=0, pane=0), command="npm run start:dev")
+    assert manifest.services[1] == Service(name="frontend", target=Target(window=0, pane=1), command="npm run dev")
+    assert manifest.services[2] == Service(name="shell", target=Target(window=1, pane=0), command="")
 
     assert len(manifest.status_urls) == 2
-    assert manifest.status_urls[0] == StatusUrl(
-        label="Backend", url="http://localhost:${BACKEND_PORT}"
-    )
-    assert manifest.status_urls[1] == StatusUrl(
-        label="Frontend", url="http://localhost:${FRONTEND_PORT}"
-    )
+    assert manifest.status_urls[0] == StatusUrl(label="Backend", url="http://localhost:${BACKEND_PORT}")
+    assert manifest.status_urls[1] == StatusUrl(label="Frontend", url="http://localhost:${FRONTEND_PORT}")
 
 
 def test_valid_minimal_manifest() -> None:
@@ -250,10 +240,12 @@ def test_no_overlay_file_reads_committed() -> None:
 
 
 def test_overlay_overrides_session_prefix() -> None:
-    manifest = _read({
-        _COMMITTED_PATH: 'session_prefix = "committed"\n',
-        _LOCAL_PATH: 'session_prefix = "local"\n',
-    })
+    manifest = _read(
+        {
+            _COMMITTED_PATH: 'session_prefix = "committed"\n',
+            _LOCAL_PATH: 'session_prefix = "local"\n',
+        }
+    )
     assert manifest.session_prefix == "local"
 
 
@@ -262,10 +254,12 @@ def test_overlay_overrides_env_file() -> None:
 session_prefix = "mp"
 env_file = ".winter.env"
 """
-    manifest = _read({
-        _COMMITTED_PATH: committed,
-        _LOCAL_PATH: 'env_file = ".local.env"\n',
-    })
+    manifest = _read(
+        {
+            _COMMITTED_PATH: committed,
+            _LOCAL_PATH: 'env_file = ".local.env"\n',
+        }
+    )
     assert manifest.env_file == ".local.env"
 
 
@@ -274,10 +268,12 @@ def test_overlay_overrides_layout_hook() -> None:
 session_prefix = "mp"
 layout_hook = "ai/project/layout-hook.sh"
 """
-    manifest = _read({
-        _COMMITTED_PATH: committed,
-        _LOCAL_PATH: 'layout_hook = "ai/project/layout-hook.local.sh"\n',
-    })
+    manifest = _read(
+        {
+            _COMMITTED_PATH: committed,
+            _LOCAL_PATH: 'layout_hook = "ai/project/layout-hook.local.sh"\n',
+        }
+    )
     assert manifest.layout_hook == "ai/project/layout-hook.local.sh"
 
 
@@ -286,10 +282,12 @@ def test_overlay_absent_scalar_uses_committed() -> None:
 session_prefix = "mp"
 env_file = ".winter.env"
 """
-    manifest = _read({
-        _COMMITTED_PATH: committed,
-        _LOCAL_PATH: 'session_prefix = "local"\n',
-    })
+    manifest = _read(
+        {
+            _COMMITTED_PATH: committed,
+            _LOCAL_PATH: 'session_prefix = "local"\n',
+        }
+    )
     assert manifest.env_file == ".winter.env"
 
 
@@ -481,10 +479,12 @@ url = "http://localhost:4300"
 
 def test_malformed_overlay_toml_raises() -> None:
     with pytest.raises(ManifestError, match="malformed TOML"):
-        _read({
-            _COMMITTED_PATH: 'session_prefix = "mp"\n',
-            _LOCAL_PATH: "this is [ not valid toml !!!\n",
-        })
+        _read(
+            {
+                _COMMITTED_PATH: 'session_prefix = "mp"\n',
+                _LOCAL_PATH: "this is [ not valid toml !!!\n",
+            }
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -549,9 +549,7 @@ max_rotations = 3
 retention_seconds = 86400
 """
     manifest = _read({_COMMITTED_PATH: content})
-    assert manifest.logs == LogConfig(
-        rotate_size_bytes=2048, max_rotations=3, retention_seconds=86400
-    )
+    assert manifest.logs == LogConfig(rotate_size_bytes=2048, max_rotations=3, retention_seconds=86400)
 
 
 def test_partial_logs_table_fills_defaults() -> None:

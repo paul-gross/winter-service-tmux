@@ -78,11 +78,7 @@ def build_launch_line(
     quoted_banner = shlex.quote(f"=== {name} ===")
     line = f"{prefix} && echo {quoted_banner}"
     if command:
-        capture = (
-            logfile is not None
-            and rotate_size_bytes is not None
-            and max_rotations is not None
-        )
+        capture = logfile is not None and rotate_size_bytes is not None and max_rotations is not None
         if capture:
             writer = logwriter_path()
             line = (

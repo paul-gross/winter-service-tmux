@@ -28,6 +28,7 @@ class TmuxStatusPlugin:
         # Lazy import keeps the plugin loadable when winter-cli isn't in sys.path
         # at module-import time (e.g. when type-checked standalone).
         from winter_cli.plugins.types import PluginRegistration
+
         return PluginRegistration(environment_decorators=[tmux_session_badge])
 
 

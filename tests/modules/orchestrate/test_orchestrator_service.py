@@ -904,7 +904,9 @@ def test_prune_deletes_old_rotated_segment_when_session_not_running() -> None:
     log_repo.seed_mtime(seg, 1.0)  # very old: mtime=1 < cutoff=95200
 
     ctx = _make_prune_ctx(retention_seconds=604800)
-    svc = OrchestratorService(tmux=tmux, reaper=FakeProcessReaper(), hook_runner=FakeLayoutHookRunner(), log_repo=log_repo, clock=clock)
+    svc = OrchestratorService(
+        tmux=tmux, reaper=FakeProcessReaper(), hook_runner=FakeLayoutHookRunner(), log_repo=log_repo, clock=clock
+    )
     svc._prune(ctx)
 
     assert seg in log_repo.deleted
@@ -925,7 +927,9 @@ def test_prune_skips_deletion_when_session_is_running() -> None:
     log_repo.seed_mtime(seg, 1.0)  # old — would be deleted if session not running
 
     ctx = _make_prune_ctx()
-    svc = OrchestratorService(tmux=tmux, reaper=FakeProcessReaper(), hook_runner=FakeLayoutHookRunner(), log_repo=log_repo, clock=clock)
+    svc = OrchestratorService(
+        tmux=tmux, reaper=FakeProcessReaper(), hook_runner=FakeLayoutHookRunner(), log_repo=log_repo, clock=clock
+    )
     svc._prune(ctx)
 
     assert log_repo.deleted == []
@@ -944,7 +948,9 @@ def test_prune_keeps_recent_segment() -> None:
     log_repo.seed_mtime(seg, 500000.0)  # within retention window
 
     ctx = _make_prune_ctx(retention_seconds=604800)
-    svc = OrchestratorService(tmux=tmux, reaper=FakeProcessReaper(), hook_runner=FakeLayoutHookRunner(), log_repo=log_repo, clock=clock)
+    svc = OrchestratorService(
+        tmux=tmux, reaper=FakeProcessReaper(), hook_runner=FakeLayoutHookRunner(), log_repo=log_repo, clock=clock
+    )
     svc._prune(ctx)
 
     assert log_repo.deleted == []
@@ -966,7 +972,9 @@ def test_prune_active_log_never_deleted() -> None:
     log_repo.seed_mtime(active_log, 1.0)  # would be prunable if eligible
 
     ctx = _make_prune_ctx()
-    svc = OrchestratorService(tmux=tmux, reaper=FakeProcessReaper(), hook_runner=FakeLayoutHookRunner(), log_repo=log_repo, clock=clock)
+    svc = OrchestratorService(
+        tmux=tmux, reaper=FakeProcessReaper(), hook_runner=FakeLayoutHookRunner(), log_repo=log_repo, clock=clock
+    )
     svc._prune(ctx)
 
     assert active_log not in log_repo.deleted

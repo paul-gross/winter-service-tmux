@@ -123,7 +123,6 @@ class LocalLogRepository:
         lines = [line.rstrip("\n") for line in text.splitlines() if line.rstrip("\n")]
         return lines, offset + consumed
 
-
     def rotated_segments(self, worktree_dir: Path, service: str) -> list[Path]:
         """Return all rotated segment files for *service* under *worktree_dir*.
 
@@ -135,9 +134,7 @@ class LocalLogRepository:
         """
         log_dir = self.log_dir(worktree_dir)
         pattern = f"{service}.log.*"
-        return sorted(
-            p for p in log_dir.glob(pattern) if p.suffix.lstrip(".").isdigit()
-        )
+        return sorted(p for p in log_dir.glob(pattern) if p.suffix.lstrip(".").isdigit())
 
     def mtime(self, path: Path) -> float:
         """Return the modification time of *path* in seconds since the epoch."""

@@ -348,9 +348,7 @@ def test_status_single_literal_service(
     rc = main(["status", "backend"])
 
     assert rc == 0
-    container.orchestrator.status.assert_called_once_with(
-        ctx, services=("backend",), json_output=False
-    )
+    container.orchestrator.status.assert_called_once_with(ctx, services=("backend",), json_output=False)
 
 
 # ---------------------------------------------------------------------------

@@ -36,8 +36,7 @@ _WORKTREE = _WORKSPACE / "alpha"
 
 def _make_manifest(*service_names: str) -> ServiceManifest:
     services = tuple(
-        Service(name=n, target=Target(window=0, pane=i), command="cmd")
-        for i, n in enumerate(service_names)
+        Service(name=n, target=Target(window=0, pane=i), command="cmd") for i, n in enumerate(service_names)
     )
     return ServiceManifest(
         session_prefix="mp",
@@ -211,12 +210,7 @@ def test_apply_tail_larger_than_list_returns_all() -> None:
 
 def test_single_service_backlog_emits_ndjson() -> None:
     fake_repo = FakeLogRepository(
-        segments={
-            "api": [
-                "2026-06-15T10:00:01.000000Z\tlistening on :8080\n"
-                "2026-06-15T10:00:02.000000Z\tready\n"
-            ]
-        }
+        segments={"api": ["2026-06-15T10:00:01.000000Z\tlistening on :8080\n2026-06-15T10:00:02.000000Z\tready\n"]}
     )
     manifest = _make_manifest("api")
     ctx = _make_ctx(manifest)
@@ -381,9 +375,7 @@ def test_multi_segment_oldest_first() -> None:
 
 def test_follow_emits_backlog_first_then_exits_130_on_interrupt() -> None:
     """Backlog is emitted before live poll; interrupt exits with rc=130."""
-    fake_repo = FakeLogRepository(
-        segments={"api": ["2026-06-15T10:00:01Z\tbacklog-line\n"]}
-    )
+    fake_repo = FakeLogRepository(segments={"api": ["2026-06-15T10:00:01Z\tbacklog-line\n"]})
     manifest = _make_manifest("api")
     ctx = _make_ctx(manifest)
     sink = io.StringIO()
@@ -453,9 +445,7 @@ def test_follow_live_lines_emitted_between_ticks() -> None:
             tick_count[0] += 1
             if tick_count[0] == 2 and not appended:
                 # Append a new line to the fake active file.
-                fake_repo.seed_live_content(
-                    active, "2026-06-15T10:00:05Z\tlive-line\n"
-                )
+                fake_repo.seed_live_content(active, "2026-06-15T10:00:05Z\tlive-line\n")
                 appended.append(True)
             return tick_count[0] > 3
 
@@ -829,9 +819,7 @@ def test_mixed_file_and_pane_both_contribute() -> None:
         services=(svc_file, svc_pane),
         status_urls=(),
     )
-    fake_repo = FakeLogRepository(
-        segments={"api": ["2026-06-16T10:00:01Z\tapi-msg\n"]}
-    )
+    fake_repo = FakeLogRepository(segments={"api": ["2026-06-16T10:00:01Z\tapi-msg\n"]})
     tmux = FakeTmuxRepository(capture_text={"0.1": "shell-line\n"})
     tmux.seed_session("mp-alpha", {"0.0": 10, "0.1": 20})
     ctx = _make_ctx(manifest)
@@ -1005,13 +993,7 @@ def test_time_filter_until_only_filters_correctly() -> None:
 def test_logs_since_filters_events_before_bound() -> None:
     """LogService.logs respects query.since — events before the bound are dropped."""
     fake_repo = FakeLogRepository(
-        segments={
-            "api": [
-                "2026-06-15T09:00:00Z\tearly\n"
-                "2026-06-15T10:00:00Z\tat-since\n"
-                "2026-06-15T10:00:01Z\tafter\n"
-            ]
-        }
+        segments={"api": ["2026-06-15T09:00:00Z\tearly\n2026-06-15T10:00:00Z\tat-since\n2026-06-15T10:00:01Z\tafter\n"]}
     )
     manifest = _make_manifest("api")
     ctx = _make_ctx(manifest)
@@ -1034,11 +1016,7 @@ def test_logs_until_filters_events_after_bound() -> None:
     """LogService.logs respects query.until — events after the bound are dropped."""
     fake_repo = FakeLogRepository(
         segments={
-            "api": [
-                "2026-06-15T10:00:00Z\tbefore\n"
-                "2026-06-15T10:00:01Z\tat-until\n"
-                "2026-06-15T10:00:02Z\tafter\n"
-            ]
+            "api": ["2026-06-15T10:00:00Z\tbefore\n2026-06-15T10:00:01Z\tat-until\n2026-06-15T10:00:02Z\tafter\n"]
         }
     )
     manifest = _make_manifest("api")
@@ -1097,9 +1075,7 @@ def test_logs_tail_applies_after_time_filter() -> None:
 
 def test_ndjson_serialized_line_contains_env_file_mode() -> None:
     """File-mode: each serialized NDJSON line on the wire contains the 'env' field."""
-    fake_repo = FakeLogRepository(
-        segments={"api": ["2026-06-15T10:00:00Z\thello\n"]}
-    )
+    fake_repo = FakeLogRepository(segments={"api": ["2026-06-15T10:00:00Z\thello\n"]})
     manifest = _make_manifest("api")
     ctx = _make_ctx(manifest)
     sink = io.StringIO()

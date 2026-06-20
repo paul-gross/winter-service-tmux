@@ -63,10 +63,7 @@ def test_build_launch_line_with_env_file_and_command() -> None:
 
 def test_build_launch_line_without_env_file() -> None:
     line = build_launch_line(_WORKTREE, None, "backend", "npm run start:dev")
-    expected = (
-        f"cd {shlex.quote(str(_WORKTREE))}"
-        f" && echo {shlex.quote('=== backend ===')} && npm run start:dev"
-    )
+    expected = f"cd {shlex.quote(str(_WORKTREE))} && echo {shlex.quote('=== backend ===')} && npm run start:dev"
     assert line == expected
 
 
@@ -88,10 +85,7 @@ def test_build_launch_line_empty_command_banner_only_without_env_file() -> None:
 
 def test_build_launch_line_command_with_spaces() -> None:
     line = build_launch_line(_WORKTREE, None, "worker", "python -m worker --reload")
-    expected = (
-        f"cd {shlex.quote(str(_WORKTREE))}"
-        f" && echo {shlex.quote('=== worker ===')} && python -m worker --reload"
-    )
+    expected = f"cd {shlex.quote(str(_WORKTREE))} && echo {shlex.quote('=== worker ===')} && python -m worker --reload"
     assert line == expected
 
 

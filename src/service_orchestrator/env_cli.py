@@ -280,8 +280,7 @@ def _handle_status(
         hits = [name for name in all_names if fnmatch.fnmatchcase(name, pat)]
         if not hits:
             print(
-                f"status: pattern '{pat}' matches no declared services; "
-                f"declared: {', '.join(all_names) or '(none)'}",
+                f"status: pattern '{pat}' matches no declared services; declared: {', '.join(all_names) or '(none)'}",
                 file=sys.stderr,
             )
             return 1
@@ -290,9 +289,7 @@ def _handle_status(
                 matched.append(name)
 
     try:
-        return container.orchestrator.status(
-            ctx, services=tuple(matched), json_output=json_output
-        )
+        return container.orchestrator.status(ctx, services=tuple(matched), json_output=json_output)
     except OrchestratorError as exc:
         print(f"status: env '{env}': {exc}", file=sys.stderr)
         return 1
@@ -371,8 +368,7 @@ def _handle_restart(
         hits = [name for name in all_names if fnmatch.fnmatchcase(name, pat)]
         if not hits:
             print(
-                f"restart: pattern '{pat}' matches no declared services; "
-                f"declared: {', '.join(all_names) or '(none)'}",
+                f"restart: pattern '{pat}' matches no declared services; declared: {', '.join(all_names) or '(none)'}",
                 file=sys.stderr,
             )
             return 1

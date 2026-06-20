@@ -80,9 +80,7 @@ class ManifestReader:
         """
         if not self._fs.exists(path):
             if required:
-                raise ManifestError(
-                    f"committed manifest not found: {path}"
-                ) from None
+                raise ManifestError(f"committed manifest not found: {path}") from None
             return {}
 
         try:
@@ -184,8 +182,7 @@ class ManifestReader:
         parts = raw.split(".")
         if len(parts) != 2:
             raise ManifestError(
-                f"service '{service_name}': malformed target '{raw}' "
-                f"— expected '<window>.<pane>' (e.g. '0.1')"
+                f"service '{service_name}': malformed target '{raw}' — expected '<window>.<pane>' (e.g. '0.1')"
             )
         w_raw, p_raw = parts
         try:
@@ -193,8 +190,7 @@ class ManifestReader:
             pane = int(p_raw)
         except ValueError as exc:
             raise ManifestError(
-                f"service '{service_name}': malformed target '{raw}' "
-                f"— window and pane must be integers"
+                f"service '{service_name}': malformed target '{raw}' — window and pane must be integers"
             ) from exc
         return Target(window=window, pane=pane)
 
@@ -220,18 +216,12 @@ class ManifestReader:
         for i, raw in enumerate(raw_services):
             name = raw.get("name")
             if not name:
-                raise ManifestError(
-                    f"[[service]] entry #{i} is missing required field 'name'"
-                )
+                raise ManifestError(f"[[service]] entry #{i} is missing required field 'name'")
             if not isinstance(name, str):
-                raise ManifestError(
-                    f"[[service]] entry #{i}: name must be a string, got {type(name).__name__}"
-                )
+                raise ManifestError(f"[[service]] entry #{i}: name must be a string, got {type(name).__name__}")
             target_str = raw.get("target")
             if target_str is None:
-                raise ManifestError(
-                    f"service '{name}' is missing required field 'target'"
-                )
+                raise ManifestError(f"service '{name}' is missing required field 'target'")
             if not isinstance(target_str, str):
                 raise ManifestError(
                     f"service '{name}': target must be a quoted string like \"0.1\", got {type(target_str).__name__}"
@@ -239,9 +229,7 @@ class ManifestReader:
             target = ManifestReader._parse_target(target_str, name)
             command_raw = raw.get("command", "")
             if not isinstance(command_raw, str):
-                raise ManifestError(
-                    f"service '{name}': command must be a string, got {type(command_raw).__name__}"
-                )
+                raise ManifestError(f"service '{name}': command must be a string, got {type(command_raw).__name__}")
             command: str = command_raw
             log_raw = raw.get("log", LogMode.FILE.value)
             _allowed = [m.value for m in LogMode]
@@ -265,9 +253,7 @@ class ManifestReader:
         for raw_url in raw_urls:
             label = raw_url.get("label", "")
             if not isinstance(label, str):
-                raise ManifestError(
-                    f"[[status.url]] entry: label must be a string, got {type(label).__name__}"
-                )
+                raise ManifestError(f"[[status.url]] entry: label must be a string, got {type(label).__name__}")
             url = raw_url.get("url", "")
             status_urls.append(StatusUrl(label=label, url=url))
 
@@ -279,9 +265,7 @@ class ManifestReader:
             if field_name in raw_logs:
                 val = raw_logs[field_name]
                 if not isinstance(val, int):
-                    raise ManifestError(
-                        f"[logs] '{field_name}' must be an integer, got {type(val).__name__}"
-                    )
+                    raise ManifestError(f"[logs] '{field_name}' must be an integer, got {type(val).__name__}")
                 log_kwargs[field_name] = val
         logs = LogConfig(**log_kwargs)
 

@@ -40,7 +40,5 @@ class EnvFileReader:
         try:
             text = self._fs.read_text(env_file_path)
         except UnicodeDecodeError as exc:
-            raise ManifestError(
-                f"env file '{env_file_path}' contains non-UTF-8 bytes: {exc}"
-            ) from exc
+            raise ManifestError(f"env file '{env_file_path}' contains non-UTF-8 bytes: {exc}") from exc
         return parse_env_text(text)

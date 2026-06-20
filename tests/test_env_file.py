@@ -113,7 +113,7 @@ def test_env_reader_present_empty_file_returns_empty_dict() -> None:
 
 
 def test_env_reader_parses_all_features() -> None:
-    content = "KEY=val\nexport EXPORTED=exp_val\n# comment\n\nQUOTED=\"quoted val\"\n"
+    content = 'KEY=val\nexport EXPORTED=exp_val\n# comment\n\nQUOTED="quoted val"\n'
     fs = FakeFilesystemReader({_ENV_PATH: content})
     reader = EnvFileReader(fs)
     result = reader.resolve(_ENV_PATH)

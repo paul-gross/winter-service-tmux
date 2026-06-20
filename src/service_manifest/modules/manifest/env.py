@@ -35,7 +35,7 @@ def parse_env_text(text: str) -> dict[str, str]:
             continue
         # Strip optional leading "export "
         if line.startswith("export "):
-            line = line[len("export "):].lstrip()
+            line = line[len("export ") :].lstrip()
         if "=" not in line:
             continue
         key, _, value = line.partition("=")

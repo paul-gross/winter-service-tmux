@@ -211,7 +211,7 @@ def test_read_new_lines_no_offset_drift_with_multibyte_utf8(tmp_path: Path) -> N
     log_dir = _setup_log_dir(tmp_path)
     log_file = log_dir / "svc.log"
 
-    emoji = "\U0001F600"  # 4 bytes in UTF-8
+    emoji = "\U0001f600"  # 4 bytes in UTF-8
     chunk1 = f"{emoji}\n".encode()
     log_file.write_bytes(chunk1)
 

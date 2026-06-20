@@ -213,9 +213,7 @@ class LogService:
                         # Read the active file with an offset-returning read so
                         # the follow loop seeds from the byte boundary consumed
                         # here. Closed (rotated) segments use the plain reader.
-                        raw_lines, file_seeds[svc.name] = self._log_repo.read_new_lines(
-                            active, 0
-                        )
+                        raw_lines, file_seeds[svc.name] = self._log_repo.read_new_lines(active, 0)
                     else:
                         raw_lines = self._log_repo.read_lines(seg_path)
                     for raw in raw_lines:
@@ -236,7 +234,7 @@ class LogService:
                     captured = ""
                 lines = [ln for ln in captured.splitlines() if ln]
                 if query.tail is not None:
-                    lines = lines[-query.tail:]
+                    lines = lines[-query.tail :]
                 for ln in lines:
                     pairs.append((None, ln))
 
@@ -309,9 +307,7 @@ class LogService:
                         if current_size < offsets[svc.name]:
                             offsets[svc.name] = 0
 
-                        new_lines, new_offset = self._log_repo.read_new_lines(
-                            active, offsets[svc.name]
-                        )
+                        new_lines, new_offset = self._log_repo.read_new_lines(active, offsets[svc.name])
                         offsets[svc.name] = new_offset
 
                         for raw in new_lines:

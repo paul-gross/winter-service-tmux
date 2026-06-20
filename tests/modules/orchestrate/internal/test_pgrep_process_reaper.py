@@ -198,8 +198,7 @@ def test_reap_descendants_re_collects_after_sleep_and_kills_new_grandchild(monke
     # KILL phase must have signalled PID 101 (re-collected grandchild).
     kill_pids = {pid for pid, sig in killed if sig == signal.SIGKILL}
     assert 101 in kill_pids, (
-        "grandchild 101 forked during shutdown window was not SIGKILLed — "
-        "re-collection after sleep is required"
+        "grandchild 101 forked during shutdown window was not SIGKILLed — re-collection after sleep is required"
     )
 
 

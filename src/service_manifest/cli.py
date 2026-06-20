@@ -110,10 +110,7 @@ def main(argv: list[str] | None = None) -> None:
         dest="use_json",
         action="store_true",
         default=False,
-        help=(
-            "Emit a single JSON object {\"ok\": bool, \"violations\": [...]} "
-            "instead of human-readable output."
-        ),
+        help=('Emit a single JSON object {"ok": bool, "violations": [...]} instead of human-readable output.'),
     )
 
     args = parser.parse_args(argv)

@@ -80,35 +80,26 @@ class ManifestValidator:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _check_session_prefix(
-        manifest: ServiceManifest, violations: list[str]
-    ) -> None:
+    def _check_session_prefix(manifest: ServiceManifest, violations: list[str]) -> None:
         if not manifest.session_prefix:
             violations.append("'session_prefix' is missing or empty")
 
     @staticmethod
-    def _check_service_names(
-        manifest: ServiceManifest, violations: list[str]
-    ) -> None:
+    def _check_service_names(manifest: ServiceManifest, violations: list[str]) -> None:
         seen: set[str] = set()
         for service in manifest.services:
             if not service.name or not service.name.strip():
                 violations.append(
-                    f"service with target '{service.target.window}.{service.target.pane}'"
-                    f" has an empty or blank name"
+                    f"service with target '{service.target.window}.{service.target.pane}' has an empty or blank name"
                 )
                 continue
             if service.name in seen:
-                violations.append(
-                    f"duplicate service name '{service.name}'"
-                )
+                violations.append(f"duplicate service name '{service.name}'")
             else:
                 seen.add(service.name)
 
     @staticmethod
-    def _check_duplicate_targets(
-        manifest: ServiceManifest, violations: list[str]
-    ) -> None:
+    def _check_duplicate_targets(manifest: ServiceManifest, violations: list[str]) -> None:
         target_to_names: dict[tuple[int, int], list[str]] = {}
         for service in manifest.services:
             key = (service.target.window, service.target.pane)
@@ -119,42 +110,26 @@ class ManifestValidator:
         for (window, pane), names in target_to_names.items():
             if len(names) > 1:
                 named = ", ".join(f"'{n}'" for n in names)
-                violations.append(
-                    f"duplicate target '{window}.{pane}' used by services: {named}"
-                )
+                violations.append(f"duplicate target '{window}.{pane}' used by services: {named}")
 
     @staticmethod
-    def _check_target_non_negative(
-        manifest: ServiceManifest, violations: list[str]
-    ) -> None:
+    def _check_target_non_negative(manifest: ServiceManifest, violations: list[str]) -> None:
         for service in manifest.services:
             target = service.target
             if target.window < 0:
-                violations.append(
-                    f"service '{service.name}': target window {target.window} is negative"
-                )
+                violations.append(f"service '{service.name}': target window {target.window} is negative")
             if target.pane < 0:
-                violations.append(
-                    f"service '{service.name}': target pane {target.pane} is negative"
-                )
+                violations.append(f"service '{service.name}': target pane {target.pane} is negative")
 
     @staticmethod
-    def _check_log_config(
-        manifest: ServiceManifest, violations: list[str]
-    ) -> None:
+    def _check_log_config(manifest: ServiceManifest, violations: list[str]) -> None:
         logs = manifest.logs
         if logs.rotate_size_bytes <= 0:
-            violations.append(
-                f"[logs] 'rotate_size_bytes' must be positive, got {logs.rotate_size_bytes}"
-            )
+            violations.append(f"[logs] 'rotate_size_bytes' must be positive, got {logs.rotate_size_bytes}")
         if logs.max_rotations < 0:
-            violations.append(
-                f"[logs] 'max_rotations' must be non-negative, got {logs.max_rotations}"
-            )
+            violations.append(f"[logs] 'max_rotations' must be non-negative, got {logs.max_rotations}")
         if logs.retention_seconds < 0:
-            violations.append(
-                f"[logs] 'retention_seconds' must be non-negative, got {logs.retention_seconds}"
-            )
+            violations.append(f"[logs] 'retention_seconds' must be non-negative, got {logs.retention_seconds}")
 
     @staticmethod
     def _check_status_url_vars(
@@ -165,6 +140,4 @@ class ManifestValidator:
         for status_url in manifest.status_urls:
             _rendered, unresolved = interpolate(status_url.url, env)
             for var in unresolved:
-                violations.append(
-                    f"status url '{status_url.label}': unresolvable variable '${{{var}}}'"
-                )
+                violations.append(f"status url '{status_url.label}': unresolvable variable '${{{var}}}'")

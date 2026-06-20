@@ -49,9 +49,7 @@ def test_valid_manifest_returns_empty_list() -> None:
             _service("backend", window=0, pane=0),
             _service("frontend", window=0, pane=1),
         ),
-        status_urls=(
-            _status_url("Backend", "http://localhost:${BACKEND_PORT}"),
-        ),
+        status_urls=(_status_url("Backend", "http://localhost:${BACKEND_PORT}"),),
     )
     env = {"BACKEND_PORT": "3000"}
     assert _validator.validate(manifest, env=env) == []
@@ -225,9 +223,7 @@ def test_unresolvable_var_skipped_when_env_is_none() -> None:
 
 def test_unresolvable_var_names_status_label_and_var() -> None:
     manifest = _make_manifest(
-        status_urls=(
-            _status_url("Frontend", "http://localhost:${FRONTEND_PORT}/app"),
-        ),
+        status_urls=(_status_url("Frontend", "http://localhost:${FRONTEND_PORT}/app"),),
     )
     violations = _validator.validate(manifest, env={})
     assert len(violations) == 1
@@ -253,9 +249,7 @@ def test_multiple_violations_all_reported() -> None:
             Service(name="svc-b", target=Target(1, 0), command="cmd"),
             Service(name="svc-c", target=Target(1, 0), command="cmd"),
         ),
-        status_urls=(
-            _status_url("Api", "http://localhost:${API_PORT}"),
-        ),
+        status_urls=(_status_url("Api", "http://localhost:${API_PORT}"),),
     )
     violations = _validator.validate(manifest, env={})
 

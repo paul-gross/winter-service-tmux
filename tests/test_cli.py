@@ -111,9 +111,7 @@ command = "npm run start"
     assert exc_info.value.code == 0
 
 
-def test_semantic_violation_duplicate_target_exit_1(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_semantic_violation_duplicate_target_exit_1(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Two services on the same target → semantic violation → exit 1."""
     content = """\
 session_prefix = "mp"
@@ -140,9 +138,7 @@ command = "npm run dev"
     assert "frontend" in captured.out
 
 
-def test_semantic_violation_duplicate_target_json(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_semantic_violation_duplicate_target_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Duplicate target → --json output has ok=false and violation listed."""
     content = """\
 session_prefix = "mp"
@@ -217,9 +213,7 @@ def test_malformed_toml_json_exit_1(tmp_path: Path, capsys: pytest.CaptureFixtur
     assert any("read error" in v for v in data["violations"])
 
 
-def test_unresolvable_var_with_env_file_exit_1(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_unresolvable_var_with_env_file_exit_1(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Env file present but missing a required var → violation → exit 1."""
     content = """\
 session_prefix = "mp"
@@ -245,9 +239,7 @@ url = "http://localhost:${BACKEND_PORT}"
     assert "BACKEND_PORT" in captured.out
 
 
-def test_missing_env_file_skips_var_check_exit_0(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_missing_env_file_skips_var_check_exit_0(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """env_file declared but file absent → var checks skipped → valid."""
     content = """\
 session_prefix = "mp"

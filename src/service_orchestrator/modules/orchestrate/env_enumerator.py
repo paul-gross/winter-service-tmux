@@ -25,4 +25,4 @@ def running_envs(tmux: ITmuxRepository, prefix: str) -> list[str]:
     """
     sessions = tmux.list_sessions()
     needle = f"{prefix}-"
-    return [s[len(needle):] for s in sessions if s.startswith(needle)]
+    return [s[len(needle) :] for s in sessions if s.startswith(needle)]

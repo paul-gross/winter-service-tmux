@@ -279,9 +279,7 @@ class FakeLogRepository:
                 # contents[0] is oldest → suffix = len(contents) - 1 - i
                 suffix = len(contents) - 1 - i
                 path = Path(f"{base}.{suffix}")
-            self._path_to_lines[path] = [
-                line.rstrip("\n") for line in content.splitlines() if line.rstrip("\n")
-            ]
+            self._path_to_lines[path] = [line.rstrip("\n") for line in content.splitlines() if line.rstrip("\n")]
             if path == base:
                 # Production reads the active file's backlog via
                 # ``read_new_lines(base, 0)`` (not ``read_lines``), so the

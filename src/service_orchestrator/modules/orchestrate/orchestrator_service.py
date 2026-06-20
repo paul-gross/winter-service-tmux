@@ -198,9 +198,7 @@ class OrchestratorService:
         print(f"Stopped services for '{ctx.env}' (session: {ctx.session})")
         return 0
 
-    def status(
-        self, ctx: EnvContext, services: tuple[str, ...] = (), *, json_output: bool = False
-    ) -> int:
+    def status(self, ctx: EnvContext, services: tuple[str, ...] = (), *, json_output: bool = False) -> int:
         """Print service status for *ctx.env*.
 
         Renders the manifest's declarative status URLs as a header (with
