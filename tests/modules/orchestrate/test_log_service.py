@@ -369,256 +369,6 @@ def test_multi_segment_oldest_first() -> None:
 
 
 # ---------------------------------------------------------------------------
-# LogService follow tests
-# ---------------------------------------------------------------------------
-
-
-def test_follow_emits_backlog_first_then_exits_130_on_interrupt() -> None:
-    """Backlog is emitted before live poll; interrupt exits with rc=130."""
-    fake_repo = FakeLogRepository(segments={"api": ["2026-06-15T10:00:01Z\tbacklog-line\n"]})
-    manifest = _make_manifest("api")
-    ctx = _make_ctx(manifest)
-    sink = io.StringIO()
-
-    # Seed an empty active file (no new lines during follow).
-    active = fake_repo.log_path(_WORKTREE, "api")
-    fake_repo.seed_live_content(active, "")
-
-    # Clock: first tick = not interrupted, second tick = interrupted.
-    clock = FakeFollowClock(tick_results=[False, True])
-    svc = _make_svc(fake_repo, sink, clock=clock)
-
-    rc = svc.logs(ctx, _make_query(follow=True))
-
-    assert rc == 130
-    sink.seek(0)
-    events = [json.loads(line) for line in sink if line.strip()]
-    # Backlog line must appear.
-    assert any(e["msg"] == "backlog-line" for e in events)
-
-
-def test_follow_tail_limits_backlog_before_live() -> None:
-    """query.tail is applied to the backlog before live polling starts."""
-    lines = "".join(f"2026-06-15T10:00:0{i}Z\tline-{i}\n" for i in range(5))
-    fake_repo = FakeLogRepository(segments={"api": [lines]})
-    manifest = _make_manifest("api")
-    ctx = _make_ctx(manifest)
-    sink = io.StringIO()
-
-    active = fake_repo.log_path(_WORKTREE, "api")
-    fake_repo.seed_live_content(active, "")
-
-    # Immediately interrupted — just backlog + exit.
-    clock = FakeFollowClock(tick_results=[True])
-    svc = _make_svc(fake_repo, sink, clock=clock)
-
-    rc = svc.logs(ctx, _make_query(follow=True, tail=2))
-
-    assert rc == 130
-    sink.seek(0)
-    events = [json.loads(line) for line in sink if line.strip()]
-    assert len(events) == 2
-    assert events[0]["msg"] == "line-3"
-    assert events[1]["msg"] == "line-4"
-
-
-def test_follow_live_lines_emitted_between_ticks() -> None:
-    """Lines appended to the active file between ticks are emitted live."""
-    fake_repo = FakeLogRepository(segments={"api": []})
-    manifest = _make_manifest("api")
-    ctx = _make_ctx(manifest)
-    sink = io.StringIO()
-
-    active = fake_repo.log_path(_WORKTREE, "api")
-    # No content at follow start (backlog offset = 0).
-    fake_repo.seed_live_content(active, "")
-
-    # We need the live content to grow between ticks.  The FakeFollowClock
-    # supports a side-effect callable for this.  We patch seed_live_content
-    # to grow after the first tick.
-    appended: list[bool] = []
-
-    tick_count: list[int] = [0]
-
-    class GrowingClock(FakeFollowClock):
-        def interrupted(self) -> bool:
-            tick_count[0] += 1
-            if tick_count[0] == 2 and not appended:
-                # Append a new line to the fake active file.
-                fake_repo.seed_live_content(active, "2026-06-15T10:00:05Z\tlive-line\n")
-                appended.append(True)
-            return tick_count[0] > 3
-
-    clock = GrowingClock()
-    svc = _make_svc(fake_repo, sink, clock=clock)
-
-    rc = svc.logs(ctx, _make_query(follow=True))
-
-    assert rc == 130
-    sink.seek(0)
-    events = [json.loads(line) for line in sink if line.strip()]
-    assert any(e["msg"] == "live-line" for e in events)
-
-
-def test_follow_broken_pipe_returns_0() -> None:
-    """A BrokenPipeError from the sink during live follow returns rc=0."""
-    fake_repo = FakeLogRepository(segments={"api": []})
-    manifest = _make_manifest("api")
-    ctx = _make_ctx(manifest)
-
-    active = fake_repo.log_path(_WORKTREE, "api")
-    # Start with empty file so offset=0.
-    fake_repo.seed_live_content(active, "")
-
-    live_content_appended: list[bool] = []
-
-    class BrokenSink(io.StringIO):
-        def write(self, s: str) -> int:
-            raise BrokenPipeError("consumer closed")
-
-    broken = BrokenSink()
-    tick_count: list[int] = [0]
-
-    class GrowThenBrokenClock(FakeFollowClock):
-        def interrupted(self) -> bool:
-            tick_count[0] += 1
-            if tick_count[0] == 1 and not live_content_appended:
-                # Grow the file so the next tick finds new lines.
-                fake_repo.seed_live_content(active, "2026-06-15T10:00:01Z\tlive\n")
-                live_content_appended.append(True)
-            # Never naturally interrupt — BrokenPipeError must exit the loop.
-            return False
-
-    clock = GrowThenBrokenClock()
-    svc = LogService(log_repo=fake_repo, follow_clock=clock, tmux=FakeTmuxRepository(), sink=broken)
-
-    rc = svc.logs(ctx, _make_query(follow=True))
-
-    assert rc == 0
-
-
-def test_follow_rotation_resets_offset() -> None:
-    """If the active file shrinks (rotation/truncation), offset resets to 0.
-
-    Scenario: at follow start the active file has 50+ bytes (all consumed,
-    offset = 50).  On tick 2 a rotation occurs: the active file is replaced
-    with a fresh short file (< 50 bytes).  The loop must detect the shrink,
-    reset offset to 0, and emit the new line.
-    """
-    fake_repo = FakeLogRepository(segments={"api": []})
-    manifest = _make_manifest("api")
-    ctx = _make_ctx(manifest)
-    sink = io.StringIO()
-
-    active = fake_repo.log_path(_WORKTREE, "api")
-    # Initial content is long enough that offset will be > len(fresh_content).
-    initial_content = "2026-06-15T10:00:01Z\told-line-with-lots-of-extra-content\n"
-    fake_repo.seed_live_content(active, initial_content)
-
-    # fresh content is deliberately shorter than initial_content so that
-    # file_size < offset triggers the rotation reset.
-    fresh_content = "2026-06-15T10:00:10Z\tnew\n"
-    assert len(fresh_content) < len(initial_content)  # sanity
-
-    tick_count: list[int] = [0]
-
-    class RotatingClock(FakeFollowClock):
-        def interrupted(self) -> bool:
-            tick_count[0] += 1
-            if tick_count[0] == 2:
-                # Simulate rotation: file is now shorter than the tracked offset.
-                fake_repo.seed_live_content(active, fresh_content)
-            return tick_count[0] > 4
-
-    clock = RotatingClock()
-    svc = _make_svc(fake_repo, sink, clock=clock)
-
-    rc = svc.logs(ctx, _make_query(follow=True))
-
-    assert rc == 130
-    sink.seek(0)
-    events = [json.loads(line) for line in sink if line.strip()]
-    assert any(e["msg"] == "new" for e in events)
-
-
-def test_follow_seeds_from_backlog_boundary_not_file_end() -> None:
-    """A line incomplete at backlog time is emitted by follow once completed.
-
-    Regression for the backlog->follow handoff: the follow offset is seeded
-    from the byte boundary the backlog read consumed (end of the last complete
-    line), NOT the current end of the file. Seeding from the file end would
-    skip past a trailing partial line, dropping it permanently even after it
-    is completed. Here the active file holds one complete line plus a partial
-    line at follow start; once the partial line gains its newline mid-follow it
-    must be emitted exactly once.
-    """
-    complete = "2026-06-15T10:00:01Z\tcomplete-line\n"
-    partial = "2026-06-15T10:00:02Z\tlate-line"  # no trailing newline yet
-    fake_repo = FakeLogRepository(segments={"api": [complete + partial]})
-    manifest = _make_manifest("api")
-    ctx = _make_ctx(manifest)
-    sink = io.StringIO()
-
-    active = fake_repo.log_path(_WORKTREE, "api")
-    tick_count: list[int] = [0]
-
-    class CompletingClock(FakeFollowClock):
-        def interrupted(self) -> bool:
-            tick_count[0] += 1
-            if tick_count[0] == 2:
-                # The partial line gains its newline (writer finished it).
-                fake_repo.seed_live_content(active, complete + partial + "\n")
-            return tick_count[0] > 3
-
-    svc = _make_svc(fake_repo, sink, clock=CompletingClock())
-
-    rc = svc.logs(ctx, _make_query(follow=True))
-
-    assert rc == 130
-    sink.seek(0)
-    msgs = [json.loads(line)["msg"] for line in sink if line.strip()]
-    # Backlog emits the complete line; follow emits the late line exactly once.
-    assert msgs == ["complete-line", "late-line"]
-
-
-def test_follow_install_is_called() -> None:
-    """follow_clock.install() is called before the follow loop starts."""
-    fake_repo = FakeLogRepository(segments={"api": []})
-    manifest = _make_manifest("api")
-    ctx = _make_ctx(manifest)
-    sink = io.StringIO()
-
-    active = fake_repo.log_path(_WORKTREE, "api")
-    fake_repo.seed_live_content(active, "")
-
-    clock = FakeFollowClock(tick_results=[True])
-    svc = _make_svc(fake_repo, sink, clock=clock)
-
-    svc.logs(ctx, _make_query(follow=True))
-
-    assert clock.install_called
-
-
-def test_follow_sleep_called_per_tick() -> None:
-    """follow_clock.sleep() is called once per non-interrupted tick."""
-    fake_repo = FakeLogRepository(segments={"api": []})
-    manifest = _make_manifest("api")
-    ctx = _make_ctx(manifest)
-    sink = io.StringIO()
-
-    active = fake_repo.log_path(_WORKTREE, "api")
-    fake_repo.seed_live_content(active, "")
-
-    # Two non-interrupted ticks then interrupt.
-    clock = FakeFollowClock(tick_results=[False, False, True])
-    svc = _make_svc(fake_repo, sink, clock=clock)
-
-    svc.logs(ctx, _make_query(follow=True))
-
-    assert len(clock.sleep_calls) == 2
-
-
-# ---------------------------------------------------------------------------
 # RealFollowClock unit test
 # ---------------------------------------------------------------------------
 
@@ -840,49 +590,6 @@ def test_mixed_file_and_pane_both_contribute() -> None:
     assert "ts" in api_events[0]
     assert shell_events[0]["msg"] == "shell-line"
     assert "ts" not in shell_events[0]
-
-
-# ---------------------------------------------------------------------------
-# PANE follow — best-effort new-lines across ticks
-# ---------------------------------------------------------------------------
-
-
-def test_pane_follow_emits_new_lines_across_ticks() -> None:
-    """PANE follow: new lines in capture_pane on each tick are emitted once."""
-    tmux = FakeTmuxRepository()
-    tmux.seed_session("mp-alpha", {"0.0": 10})
-    # Start with 2 lines; tick 2 adds a third.
-    tmux.capture_text["0.0"] = "tick1-line1\ntick1-line2\n"
-
-    manifest = _make_pane_manifest("shell")
-    ctx = _make_ctx(manifest)
-    sink = io.StringIO()
-
-    tick_count: list[int] = [0]
-
-    class GrowingCaptureClock(FakeFollowClock):
-        def interrupted(self) -> bool:
-            tick_count[0] += 1
-            if tick_count[0] == 2:
-                tmux.capture_text["0.0"] = "tick1-line1\ntick1-line2\ntick2-new\n"
-            return tick_count[0] > 3
-
-    clock = GrowingCaptureClock()
-    fake_repo = FakeLogRepository()
-    svc = _make_svc(fake_repo, sink, clock=clock, tmux=tmux)
-
-    rc = svc.logs(ctx, _make_query(follow=True))
-
-    assert rc == 130
-    sink.seek(0)
-    events = [json.loads(line) for line in sink if line.strip()]
-    msgs = [e["msg"] for e in events]
-    # The backlog emitted tick1-line1 and tick1-line2 first.
-    # tick2-new should appear (emitted during follow loop).
-    assert "tick2-new" in msgs
-    # No ts on any pane event.
-    for e in events:
-        assert "ts" not in e
 
 
 # ---------------------------------------------------------------------------
@@ -1128,3 +835,494 @@ def test_ndjson_serialized_line_contains_env_pane_mode() -> None:
     assert "env" in parsed
     assert parsed["env"] == "alpha"
     assert "ts" not in parsed
+
+
+# ---------------------------------------------------------------------------
+# follow_streams tests
+# ---------------------------------------------------------------------------
+
+_WORKSPACE_BETA = Path("/fake/workspace")
+_WORKTREE_ALPHA = _WORKSPACE_BETA / "alpha"
+_WORKTREE_BETA = _WORKSPACE_BETA / "beta"
+
+
+def _make_dual_repo(alpha_repo: FakeLogRepository, beta_repo: FakeLogRepository) -> FakeLogRepository:
+    """Return a FakeLogRepository that routes alpha/beta calls to the right underlying repo.
+
+    Routing key: ``"alpha" in str(path/worktree_dir)`` → alpha_repo, else beta_repo.
+    This consolidates the repeated CombinedFakeRepo/2/3 pattern across tests.
+    """
+
+    class DualFakeRepo(FakeLogRepository):
+        def log_path(self, worktree_dir: Path, service: str) -> Path:
+            return (alpha_repo if "alpha" in str(worktree_dir) else beta_repo).log_path(worktree_dir, service)
+
+        def segment_files(self, worktree_dir: Path, service: str) -> list[Path]:
+            return (alpha_repo if "alpha" in str(worktree_dir) else beta_repo).segment_files(worktree_dir, service)
+
+        def read_lines(self, path: Path) -> list[str]:
+            return (alpha_repo if "alpha" in str(path) else beta_repo).read_lines(path)
+
+        def file_size(self, path: Path) -> int:
+            return (alpha_repo if "alpha" in str(path) else beta_repo).file_size(path)
+
+        def read_new_lines(self, path: Path, offset: int) -> tuple[list[str], int]:
+            return (alpha_repo if "alpha" in str(path) else beta_repo).read_new_lines(path, offset)
+
+    return DualFakeRepo()
+
+
+def _make_ctx_env(env: str, manifest: ServiceManifest) -> EnvContext:
+    """Build an EnvContext for *env* with a worktree at /fake/workspace/<env>."""
+    worktree = Path("/fake/workspace") / env
+    return EnvContext(
+        env=env,
+        workspace_root=Path("/fake/workspace"),
+        worktree_dir=worktree,
+        manifest=manifest,
+        env_vars=None,
+        env_file_path=None,
+    )
+
+
+def _run_follow(
+    service: LogService,
+    streams: list[tuple[EnvContext, LogQuery]],
+) -> tuple[list[dict], int]:
+    """Call follow_streams and return ``(parsed_events, rc)``."""
+    sink = io.StringIO()
+    service._sink = sink
+    rc = service.follow_streams(streams)
+    sink.seek(0)
+    return [json.loads(line) for line in sink if line.strip()], rc
+
+
+def test_follow_streams_single_stream_regression() -> None:
+    """Single (ctx, query) pair: backlog emitted then live line; rc 130."""
+    fake_repo = FakeLogRepository(segments={"backend": ["2026-06-15T10:00:01Z\tbacklog-line\n"]})
+    manifest = _make_manifest("backend")
+    ctx = _make_ctx_env("alpha", manifest)
+    active = fake_repo.log_path(_WORKTREE_ALPHA, "backend")
+
+    tick_count: list[int] = [0]
+
+    class GrowingClock(FakeFollowClock):
+        def interrupted(self) -> bool:
+            tick_count[0] += 1
+            if tick_count[0] == 2:
+                fake_repo.seed_live_content(
+                    active, "2026-06-15T10:00:01Z\tbacklog-line\n2026-06-15T10:00:05Z\tlive-line\n"
+                )
+            return tick_count[0] > 3
+
+    sink = io.StringIO()
+    svc = _make_svc(fake_repo, sink, clock=GrowingClock())
+
+    query = _make_query()
+    events, rc = _run_follow(svc, [(ctx, query)])
+
+    assert rc == 130
+    msgs = [e["msg"] for e in events]
+    assert "backlog-line" in msgs
+    assert "live-line" in msgs
+
+
+def test_follow_streams_multi_service_single_env_interleaves() -> None:
+    """Two FILE services in one env: merged time-sorted backlog; both grow live."""
+    fake_repo = FakeLogRepository(
+        segments={
+            "api": ["2026-06-15T10:00:01Z\tapi-backlog\n"],
+            "worker": ["2026-06-15T10:00:02Z\tworker-backlog\n"],
+        }
+    )
+    manifest = _make_manifest("api", "worker")
+    ctx = _make_ctx_env("alpha", manifest)
+
+    active_api = fake_repo.log_path(_WORKTREE_ALPHA, "api")
+    active_worker = fake_repo.log_path(_WORKTREE_ALPHA, "worker")
+
+    tick_count: list[int] = [0]
+
+    class GrowBothClock(FakeFollowClock):
+        def interrupted(self) -> bool:
+            tick_count[0] += 1
+            if tick_count[0] == 2:
+                fake_repo.seed_live_content(
+                    active_api, "2026-06-15T10:00:01Z\tapi-backlog\n2026-06-15T10:00:10Z\tapi-live\n"
+                )
+                fake_repo.seed_live_content(
+                    active_worker, "2026-06-15T10:00:02Z\tworker-backlog\n2026-06-15T10:00:11Z\tworker-live\n"
+                )
+            return tick_count[0] > 3
+
+    sink = io.StringIO()
+    svc = _make_svc(fake_repo, sink, clock=GrowBothClock())
+
+    events, rc = _run_follow(svc, [(ctx, _make_query())])
+
+    assert rc == 130
+    msgs = [e["msg"] for e in events]
+    # Backlog is time-sorted.
+    assert msgs.index("api-backlog") < msgs.index("worker-backlog")
+    # Both live lines appear.
+    assert "api-live" in msgs
+    assert "worker-live" in msgs
+    # Correct svc tags.
+    api_live = next(e for e in events if e["msg"] == "api-live")
+    worker_live = next(e for e in events if e["msg"] == "worker-live")
+    assert api_live["svc"] == "api"
+    assert api_live["env"] == "alpha"
+    assert worker_live["svc"] == "worker"
+    assert worker_live["env"] == "alpha"
+
+
+def test_follow_streams_cross_env_merged_backlog() -> None:
+    """Two ctxs (alpha, beta) each with FILE backend: backlog merged sorted by ts; env field correct."""
+    fake_repo = FakeLogRepository(
+        segments={
+            "backend": [
+                "2026-06-15T10:00:02Z\talpha-backlog\n",
+            ]
+        }
+    )
+    # Beta uses its own repo instance so its segments are independent.
+    fake_repo_beta = FakeLogRepository(
+        segments={
+            "backend": [
+                "2026-06-15T10:00:01Z\tbeta-backlog\n",
+            ]
+        }
+    )
+
+    manifest_alpha = _make_manifest("backend")
+    manifest_beta = _make_manifest("backend")
+
+    ctx_alpha = _make_ctx_env("alpha", manifest_alpha)
+    ctx_beta = _make_ctx_env("beta", manifest_beta)
+
+    clock = FakeFollowClock(tick_results=[True])
+    sink = io.StringIO()
+
+    # Route alpha/beta calls to their respective repos via the shared dual-repo helper.
+    combined = _make_dual_repo(fake_repo, fake_repo_beta)
+    svc = LogService(log_repo=combined, follow_clock=clock, tmux=FakeTmuxRepository(), sink=sink)
+
+    events, rc = _run_follow(svc, [(ctx_alpha, _make_query()), (ctx_beta, _make_query())])
+
+    assert rc == 130
+    # Beta has earlier ts → should sort first.
+    msgs = [e["msg"] for e in events]
+    assert msgs.index("beta-backlog") < msgs.index("alpha-backlog")
+    # Each event carries the correct env.
+    alpha_ev = next(e for e in events if e["msg"] == "alpha-backlog")
+    beta_ev = next(e for e in events if e["msg"] == "beta-backlog")
+    assert alpha_ev["env"] == "alpha"
+    assert beta_ev["env"] == "beta"
+
+
+def test_follow_streams_same_service_name_distinct_offsets() -> None:
+    """Two envs both named 'backend': only beta's file grows → only beta's line emitted."""
+    fake_repo_alpha = FakeLogRepository(segments={"backend": ["2026-06-15T10:00:01Z\talpha-backlog\n"]})
+    fake_repo_beta = FakeLogRepository(segments={"backend": ["2026-06-15T10:00:02Z\tbeta-backlog\n"]})
+
+    manifest_alpha = _make_manifest("backend")
+    manifest_beta = _make_manifest("backend")
+
+    ctx_alpha = _make_ctx_env("alpha", manifest_alpha)
+    ctx_beta = _make_ctx_env("beta", manifest_beta)
+
+    active_beta = fake_repo_beta.log_path(_WORKTREE_BETA, "backend")
+
+    tick_count: list[int] = [0]
+
+    class GrowBetaClock(FakeFollowClock):
+        def interrupted(self) -> bool:
+            tick_count[0] += 1
+            if tick_count[0] == 2:
+                # Only beta grows.
+                fake_repo_beta.seed_live_content(
+                    active_beta,
+                    "2026-06-15T10:00:02Z\tbeta-backlog\n2026-06-15T10:00:10Z\tbeta-live\n",
+                )
+            return tick_count[0] > 3
+
+    combined = _make_dual_repo(fake_repo_alpha, fake_repo_beta)
+    sink = io.StringIO()
+    svc = LogService(log_repo=combined, follow_clock=GrowBetaClock(), tmux=FakeTmuxRepository(), sink=sink)
+
+    events, rc = _run_follow(svc, [(ctx_alpha, _make_query()), (ctx_beta, _make_query())])
+
+    assert rc == 130
+    live_events = [e for e in events if e.get("msg") == "beta-live"]
+    assert len(live_events) == 1
+    assert live_events[0]["env"] == "beta"
+    # Alpha must emit no live events.
+    alpha_live = [e for e in events if e.get("env") == "alpha" and e.get("msg") not in ("alpha-backlog",)]
+    assert alpha_live == []
+
+
+def test_follow_streams_global_tail_applies_to_merged_backlog() -> None:
+    """Two streams, tail=2 → exactly last 2 of merged backlog (not 2 per stream)."""
+    # Each list entry is one segment file; the two-line string is a single active
+    # segment with two log lines (intentional adjacent-string-literal concat).
+    fake_repo = FakeLogRepository(
+        segments={"backend": ["2026-06-15T10:00:01Z\talpha-1\n2026-06-15T10:00:02Z\talpha-2\n"]}
+    )
+    fake_repo_beta = FakeLogRepository(
+        segments={"backend": ["2026-06-15T10:00:03Z\tbeta-1\n2026-06-15T10:00:04Z\tbeta-2\n"]}
+    )
+
+    manifest_alpha = _make_manifest("backend")
+    manifest_beta = _make_manifest("backend")
+    ctx_alpha = _make_ctx_env("alpha", manifest_alpha)
+    ctx_beta = _make_ctx_env("beta", manifest_beta)
+
+    combined = _make_dual_repo(fake_repo, fake_repo_beta)
+    clock = FakeFollowClock(tick_results=[True])
+    sink = io.StringIO()
+    svc = LogService(log_repo=combined, follow_clock=clock, tmux=FakeTmuxRepository(), sink=sink)
+
+    events, rc = _run_follow(svc, [(ctx_alpha, _make_query(tail=2)), (ctx_beta, _make_query(tail=2))])
+
+    assert rc == 130
+    # Merged set sorted by ts: alpha-1, alpha-2, beta-1, beta-2 → tail=2 → beta-1, beta-2
+    assert len(events) == 2
+    msgs = [e["msg"] for e in events]
+    assert "beta-1" in msgs
+    assert "beta-2" in msgs
+    assert "alpha-1" not in msgs
+    assert "alpha-2" not in msgs
+
+
+def test_follow_streams_clean_interrupt_returns_130() -> None:
+    """Immediate-interrupt clock, two streams → rc 130 and install was called."""
+    fake_repo = FakeLogRepository(segments={"backend": []})
+    manifest = _make_manifest("backend")
+    ctx_alpha = _make_ctx_env("alpha", manifest)
+    ctx_beta = _make_ctx_env("beta", manifest)
+
+    clock = FakeFollowClock(tick_results=[True])
+    sink = io.StringIO()
+    svc = _make_svc(fake_repo, sink, clock=clock)
+
+    _, rc = _run_follow(svc, [(ctx_alpha, _make_query()), (ctx_beta, _make_query())])
+
+    assert rc == 130
+    assert clock.install_called
+
+
+def test_follow_streams_broken_pipe_returns_0() -> None:
+    """Sink raises BrokenPipeError during live follow over two streams → rc 0."""
+    fake_repo = FakeLogRepository(segments={"backend": []})
+    manifest = _make_manifest("backend")
+    ctx_alpha = _make_ctx_env("alpha", manifest)
+    ctx_beta = _make_ctx_env("beta", manifest)
+
+    active_alpha = fake_repo.log_path(_WORKTREE_ALPHA, "backend")
+    active_beta = fake_repo.log_path(_WORKTREE_BETA, "backend")
+    fake_repo.seed_live_content(active_alpha, "")
+    fake_repo.seed_live_content(active_beta, "")
+
+    class BrokenSink(io.StringIO):
+        def write(self, s: str) -> int:
+            raise BrokenPipeError("consumer closed")
+
+    broken = BrokenSink()
+    live_appended: list[bool] = []
+    tick_count: list[int] = [0]
+
+    class GrowThenBreakClock(FakeFollowClock):
+        def interrupted(self) -> bool:
+            tick_count[0] += 1
+            if tick_count[0] == 1 and not live_appended:
+                fake_repo.seed_live_content(active_alpha, "2026-06-15T10:00:01Z\tlive\n")
+                live_appended.append(True)
+            return False
+
+    clock = GrowThenBreakClock()
+    # Construct with broken sink directly; do NOT use _run_follow (it replaces the sink).
+    svc = LogService(log_repo=fake_repo, follow_clock=clock, tmux=FakeTmuxRepository(), sink=broken)
+
+    rc = svc.follow_streams(
+        [(ctx_alpha, _make_query()), (ctx_beta, _make_query())],
+    )
+
+    assert rc == 0
+
+
+def test_follow_streams_mixed_file_and_pane() -> None:
+    """One FILE + one PANE stream: both contribute live lines; PANE events carry no ts."""
+    svc_file = Service(name="api", target=Target(window=0, pane=0), command="cmd", log=LogMode.FILE)
+    svc_pane = Service(name="shell", target=Target(window=0, pane=1), command="", log=LogMode.PANE)
+    manifest = ServiceManifest(
+        session_prefix="mp",
+        env_file=None,
+        layout_hook=None,
+        services=(svc_file, svc_pane),
+        status_urls=(),
+    )
+    ctx = _make_ctx_env("alpha", manifest)
+
+    fake_repo = FakeLogRepository(segments={"api": []})
+    active_api = fake_repo.log_path(_WORKTREE_ALPHA, "api")
+    fake_repo.seed_live_content(active_api, "")
+
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.1": 10})
+    tmux.capture_text["0.1"] = "pane-line-1\n"
+
+    tick_count: list[int] = [0]
+
+    class MixedGrowClock(FakeFollowClock):
+        def interrupted(self) -> bool:
+            tick_count[0] += 1
+            if tick_count[0] == 2:
+                fake_repo.seed_live_content(active_api, "2026-06-15T10:00:05Z\tfile-live\n")
+                tmux.capture_text["0.1"] = "pane-line-1\npane-live\n"
+            return tick_count[0] > 3
+
+    sink = io.StringIO()
+    svc = LogService(log_repo=fake_repo, follow_clock=MixedGrowClock(), tmux=tmux, sink=sink)
+
+    query = _make_query()
+    events, rc = _run_follow(svc, [(ctx, query)])
+
+    assert rc == 130
+    msgs = [e["msg"] for e in events]
+    assert "file-live" in msgs
+    assert "pane-live" in msgs
+
+    file_ev = next(e for e in events if e["msg"] == "file-live")
+    pane_ev = next(e for e in events if e["msg"] == "pane-live")
+    assert "ts" in file_ev
+    assert "ts" not in pane_ev
+
+
+def test_follow_streams_install_called_once_sleep_per_tick() -> None:
+    """One install() call; one sleep per non-interrupted tick regardless of stream count."""
+    fake_repo = FakeLogRepository(segments={"backend": []})
+    manifest = _make_manifest("backend")
+    ctx_alpha = _make_ctx_env("alpha", manifest)
+    ctx_beta = _make_ctx_env("beta", manifest)
+
+    active_alpha = fake_repo.log_path(_WORKTREE_ALPHA, "backend")
+    active_beta = fake_repo.log_path(_WORKTREE_BETA, "backend")
+    fake_repo.seed_live_content(active_alpha, "")
+    fake_repo.seed_live_content(active_beta, "")
+
+    # Two non-interrupted ticks, then interrupt.
+    clock = FakeFollowClock(tick_results=[False, False, True])
+    sink = io.StringIO()
+    svc = _make_svc(fake_repo, sink, clock=clock)
+
+    _run_follow(svc, [(ctx_alpha, _make_query()), (ctx_beta, _make_query())])
+
+    assert clock.install_called
+    # install() must only be called once — tracked by a single bool.
+    # Two ticks → two sleep calls.
+    assert len(clock.sleep_calls) == 2
+
+
+def test_follow_streams_rotation_resets_offset() -> None:
+    """File shrinks mid-follow (rotation/truncation) → offset resets to 0 and new line emitted.
+
+    Ported from the former ``test_follow_rotation_resets_offset`` (which exercised
+    ``logs()``-follow, now removed).  Scenario: the active file starts at a large
+    offset; on tick 2 the file is replaced with shorter content.  The loop must
+    detect the shrink, reset the offset, and emit the new-segment line.
+    """
+    fake_repo = FakeLogRepository(segments={"backend": []})
+    manifest = _make_manifest("backend")
+    ctx = _make_ctx_env("alpha", manifest)
+    sink = io.StringIO()
+
+    active = fake_repo.log_path(_WORKTREE_ALPHA, "backend")
+    # Long initial content so offset ends up > len(fresh_content).
+    initial_content = "2026-06-15T10:00:01Z\told-line-with-lots-of-extra-content\n"
+    fake_repo.seed_live_content(active, initial_content)
+
+    fresh_content = "2026-06-15T10:00:10Z\tnew\n"
+    assert len(fresh_content) < len(initial_content)  # sanity: shrink triggers reset
+
+    tick_count: list[int] = [0]
+
+    class RotatingClock(FakeFollowClock):
+        def interrupted(self) -> bool:
+            tick_count[0] += 1
+            if tick_count[0] == 2:
+                fake_repo.seed_live_content(active, fresh_content)
+            return tick_count[0] > 4
+
+    clock = RotatingClock()
+    svc = _make_svc(fake_repo, sink, clock=clock)
+
+    events, rc = _run_follow(svc, [(ctx, _make_query())])
+
+    assert rc == 130
+    assert any(e["msg"] == "new" for e in events)
+
+
+def test_follow_streams_seeds_from_backlog_boundary_not_file_end() -> None:
+    """A line incomplete at backlog time is emitted by follow once completed.
+
+    Ported from the former ``test_follow_seeds_from_backlog_boundary_not_file_end``
+    (which exercised ``logs()``-follow, now removed).  Regression guard for the
+    backlog→follow handoff: the follow offset is seeded from the byte boundary
+    the backlog read consumed (end of the last complete line), NOT the file end.
+    Seeding from file end would skip a trailing partial line even after it is
+    completed.  Here the active file holds one complete line plus a partial line
+    at follow start; once the partial line gains its newline mid-follow it must
+    be emitted exactly once.
+    """
+    complete = "2026-06-15T10:00:01Z\tcomplete-line\n"
+    partial = "2026-06-15T10:00:02Z\tlate-line"  # no trailing newline yet
+    fake_repo = FakeLogRepository(segments={"backend": [complete + partial]})
+    manifest = _make_manifest("backend")
+    ctx = _make_ctx_env("alpha", manifest)
+    sink = io.StringIO()
+
+    active = fake_repo.log_path(_WORKTREE_ALPHA, "backend")
+    tick_count: list[int] = [0]
+
+    class CompletingClock(FakeFollowClock):
+        def interrupted(self) -> bool:
+            tick_count[0] += 1
+            if tick_count[0] == 2:
+                fake_repo.seed_live_content(active, complete + partial + "\n")
+            return tick_count[0] > 3
+
+    svc = _make_svc(fake_repo, sink, clock=CompletingClock())
+
+    events, rc = _run_follow(svc, [(ctx, _make_query())])
+
+    assert rc == 130
+    msgs = [e["msg"] for e in events]
+    # Backlog emits the complete line; follow emits the late line exactly once.
+    assert msgs == ["complete-line", "late-line"]
+
+
+def test_follow_streams_broken_pipe_during_backlog_returns_0() -> None:
+    """BrokenPipeError raised during initial backlog emit → rc 0 (no traceback).
+
+    Exercises the ``try/except BrokenPipeError`` wrapping the backlog-write
+    loop in ``follow_streams``.  The sink raises immediately on first write;
+    the function must catch it and return 0 without entering the follow loop.
+    """
+    fake_repo = FakeLogRepository(segments={"backend": ["2026-06-15T10:00:01Z\tbacklog-line\n"]})
+    manifest = _make_manifest("backend")
+    ctx = _make_ctx_env("alpha", manifest)
+
+    class BrokenSink(io.StringIO):
+        def write(self, s: str) -> int:
+            raise BrokenPipeError("consumer closed during backlog")
+
+    broken = BrokenSink()
+    # Clock is never-interrupted (safe default) — BrokenPipeError must exit before the loop.
+    clock = FakeFollowClock(tick_results=[False, False, True])
+    svc = LogService(log_repo=fake_repo, follow_clock=clock, tmux=FakeTmuxRepository(), sink=broken)
+
+    rc = svc.follow_streams([(ctx, _make_query())])
+
+    assert rc == 0
+    # The follow loop must not have started (install not called — BrokenPipe exits before install).
+    assert not clock.install_called

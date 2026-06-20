@@ -27,8 +27,12 @@ winter service logs alpha              # all services, full backlog
 winter service logs alpha/backend      # one service
 winter service logs alpha -n 50        # last 50 events
 winter service logs alpha --since 2026-06-15T10:00:00Z   # time-bounded
-winter service logs alpha/backend -f   # follow (live tail, Ctrl-C to exit)
+winter service logs alpha -f           # follow ALL services in alpha, interleaved (Ctrl-C to stop)
+winter service logs alpha/backend -f   # follow one service
+winter service logs '*/backend' -f     # follow backend across every running env, interleaved
 ```
+
+`-f` follows ALL matched `(env, service)` streams concurrently, interleaving their lines into one output until Ctrl-C. **`-f` blocks forever** — an agent must bound it: `timeout -s INT <seconds> winter service logs alpha -f`, or use the Bash tool's `run_in_background` facility. Calling it bare hangs the tool.
 
 File-mode logs persist to `<env>/.winter/logs/<service>.log` on `up`, survive `down` and teardown, and carry per-line timestamps — prefer this path for diagnosis. The flag surface and rendering rules live in `workspace:/ai/winter-cli/usage/service.md`.
 

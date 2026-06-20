@@ -32,11 +32,15 @@ Once installed, the workspace conventions are:
   ```bash
   winter service logs alpha              # all services, full backlog
   winter service logs alpha/backend      # one service
-  winter service logs alpha/backend -f   # follow (live tail, Ctrl-C to exit)
   winter service logs alpha -n 50        # last 50 events
   winter service logs alpha --since 2026-06-15T10:00:00Z   # time-bounded
   winter service logs '*/backend'        # cross-env aggregation: backend in every running env
+  winter service logs alpha -f           # follow ALL services in alpha, interleaved (Ctrl-C to stop)
+  winter service logs alpha/backend -f   # follow one service
+  winter service logs '*/backend' -f     # follow backend across every running env, interleaved
   ```
+
+  `-f` follows ALL matched `(env, service)` streams concurrently until Ctrl-C, interleaving their lines into one output.
 
   The wire contract and rendering (plain lines vs. NDJSON) are winter's responsibility — see `workspace:/ai/winter-cli/usage/service.md`. There is no env-root `./logs` script; the interface is `winter service logs`.
 - **Not all services are captured the same way.** Each `[[service]]` entry has a `log` field (default `"file"`) that controls how its output is captured and read:
@@ -67,3 +71,5 @@ ln -sfn ../.winter/ext/service-tmux/workflow/up alpha/up   # restore — always,
 Repeat per script you changed. **Restore is mandatory** — a left-over override silently makes every later service call in that env run worktree code. This is the service-orchestration case of the generic "verify against the real environment" guidance in `winter-harness:/workflows/feature-delivery.md`.
 
 The shims (`workflow/up` etc.) are thin Python launchers that call `python3 -m service_orchestrator.env_cli <action>`. To run the package's unit tests directly, see the repo `CONTRIBUTING.md`.
+
+**Note on `-f` in verification:** `winter service logs … -f` blocks until SIGINT — it never returns on its own. An automated verifier must bound it: `timeout -s INT 10 winter service logs '*/backend' -f`. Alternatively, use the Bash tool's `run_in_background` facility and cancel when done.

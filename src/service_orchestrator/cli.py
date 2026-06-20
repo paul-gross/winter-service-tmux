@@ -37,6 +37,7 @@ from pathlib import Path
 
 from service_manifest.modules.manifest.errors import ManifestError
 from service_orchestrator.container import Container
+from service_orchestrator.modules.orchestrate.env_context import EnvContext
 from service_orchestrator.modules.orchestrate.env_enumerator import running_envs
 from service_orchestrator.modules.orchestrate.errors import OrchestratorError
 from service_orchestrator.modules.orchestrate.log_query import LogQuery
@@ -394,17 +395,39 @@ def main(argv: list[str]) -> int:
         until = os.environ.get("WINTER_LOG_UNTIL", "")
         timestamps = os.environ.get("WINTER_LOG_TIMESTAMPS") == "1"
 
-        if follow:
-            total_services = sum(len(svcs) for svcs in env_services.values())
-            if total_services > 1:
-                print(
-                    "orchestrate: logs -f (follow) supports a single service at a time; "
-                    "narrow the pattern to one service",
-                    file=sys.stderr,
-                )
-                return 1
-
         rc = 0
+
+        if follow:
+            pairs: list[tuple[EnvContext, LogQuery]] = []
+            for env, svc_names in env_services.items():
+                try:
+                    ctx = container.env_context_builder.build(env, workspace_root=workspace_root)
+                except (ManifestError, OSError, OrchestratorError) as exc:
+                    print(f"orchestrate: env '{env}': {exc}", file=sys.stderr)
+                    rc = 1
+                    continue
+                pairs.append(
+                    (
+                        ctx,
+                        LogQuery(
+                            services=tuple(svc_names),
+                            follow=True,
+                            tail=tail,
+                            since=since,
+                            until=until,
+                            timestamps=timestamps,
+                        ),
+                    )
+                )
+            if not pairs:
+                return rc or 1
+            try:
+                result = container.log_service.follow_streams(pairs)
+            except OrchestratorError as exc:
+                print(f"orchestrate: follow_streams: {exc}", file=sys.stderr)
+                return 1
+            return result if result != 0 else rc
+
         for env, svc_names in env_services.items():
             try:
                 ctx = container.env_context_builder.build(env, workspace_root=workspace_root)

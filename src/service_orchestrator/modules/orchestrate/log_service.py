@@ -1,4 +1,4 @@
-"""Log read service — implements the ``logs`` action (backlog + follow).
+"""Log read service — implements the ``logs`` action (backlog) and ``follow_streams``.
 
 Reads persisted log files written by ``logwriter.py`` and emits NDJSON to
 an injected output sink.  Pure helpers are free functions so they unit-test
@@ -9,12 +9,13 @@ Rotation: ``<svc>.log`` is newest; ``<svc>.log.1`` … ``<svc>.log.<N>`` are
 older segments, higher number = older.
 
 Follow mode:
-  When ``query.follow`` is True the backlog is emitted first (honoring
-  ``query.tail``), then the loop polls each service's active log file for
-  new lines at a 0.25-second interval.  The loop exits when
-  ``follow_clock.interrupted()`` returns True and the caller returns 130.
-  A ``BrokenPipeError`` from the sink (consumer closed the pipe) exits the
-  loop with return code 0 and suppresses the traceback.
+  Handled by ``follow_streams`` (not by ``logs``).  The CLI always routes
+  follow calls through ``follow_streams``; ``logs`` is backlog-only.
+
+  ``follow_streams`` installs the follow clock once, then runs a single
+  interleaved poll loop over a flat ``(ctx, service)`` unit list, keyed by
+  ``(env, svc-name)`` to avoid same-service-name collisions across envs.
+  Returns 130 on SIGINT, 0 on BrokenPipeError.
 
   Rotation/truncation during follow (v1): if a file shrinks below the
   tracked byte offset the offset is reset to 0, treating the file as a
@@ -38,7 +39,7 @@ import json
 import sys
 from typing import IO
 
-from service_manifest.modules.manifest.model import LogMode
+from service_manifest.modules.manifest.model import LogMode, Service
 from service_orchestrator.modules.orchestrate.env_context import EnvContext
 from service_orchestrator.modules.orchestrate.follow_clock import IFollowClock
 from service_orchestrator.modules.orchestrate.log_query import LogQuery
@@ -167,41 +168,30 @@ class LogService:
         self._tmux = tmux
         self._sink: IO[str] = sink if sink is not None else sys.stdout
 
-    def logs(self, ctx: EnvContext, query: LogQuery) -> int:
-        """Emit NDJSON for the requested services.
+    def _gather_backlog(
+        self,
+        ctx: EnvContext,
+        in_scope: list[Service],
+        tail: int | None,
+    ) -> tuple[list[dict[str, str]], dict[tuple[str, str], int]]:
+        """Read each in-scope service's backlog for one env.
 
-        Non-follow (backlog) path:
-          1. Determine in-scope services (filtered by ``query.services`` if set,
-             else all manifest services in manifest order).
-          2. For each service: read based on its LogMode (FILE reads segment
-             files; PANE reads via capture-pane; MEMORY emits a STDERR note).
-          3. Apply ``since``/``until`` filter (events without ``ts`` are kept).
-          4. Merge across services, sort by ``ts``.
-          5. Apply ``query.tail`` to the filtered set.
-          6. Emit each event as a compact NDJSON line to ``self._sink``.
-          Returns 0.
+        Returns ``(events, file_seeds)`` where ``events`` is the per-env
+        merge_sorted event list (build events + stable time-sort across all
+        in-scope services) and ``file_seeds`` is keyed by
+        ``(env, service-name)`` so callers can resume follow-mode reads
+        without cross-env offset collisions.
 
-        Follow path (``query.follow`` is True):
-          Steps 1-6 above (backlog, filtered, tail-trimmed), then live polling.
-          FILE-mode services are polled via byte-offset reads.
-          PANE-mode services are re-captured each tick; only lines not yet
-          emitted (new tail lines since last tick) are output — best-effort
-          approximation (no guarantee of no duplicates on rapid rotation).
-          Returns 130 when interrupted via SIGINT; returns 0 on BrokenPipeError
-          (consumer closed the pipe).
+        Note: ``since``/``until`` time-filtering and global ``tail`` trimming
+        are NOT applied here — they are applied by the caller over the
+        returned event list so the order of operations is preserved exactly
+        as in the original backlog path.
+
+        The PANE per-service tail trim (``lines[-tail:]``) IS applied here,
+        matching the original gather-loop behaviour.
         """
-        requested = set(query.services)
-        if requested:
-            in_scope = [s for s in ctx.manifest.services if s.name in requested]
-        else:
-            in_scope = list(ctx.manifest.services)
-
-        # --- backlog ---
-        # file_seeds[svc] records the byte boundary the active-file backlog read
-        # consumed, so the follow loop can resume from exactly there (no gap, no
-        # duplicate across the backlog→follow handoff).
         streams: list[tuple[str, list[tuple[str | None, str]]]] = []
-        file_seeds: dict[str, int] = {}
+        file_seeds: dict[tuple[str, str], int] = {}
         for svc in in_scope:
             pairs: list[tuple[str | None, str]] = []
 
@@ -213,7 +203,7 @@ class LogService:
                         # Read the active file with an offset-returning read so
                         # the follow loop seeds from the byte boundary consumed
                         # here. Closed (rotated) segments use the plain reader.
-                        raw_lines, file_seeds[svc.name] = self._log_repo.read_new_lines(active, 0)
+                        raw_lines, file_seeds[(ctx.env, svc.name)] = self._log_repo.read_new_lines(active, 0)
                     else:
                         raw_lines = self._log_repo.read_lines(seg_path)
                     for raw in raw_lines:
@@ -233,8 +223,8 @@ class LogService:
                     )
                     captured = ""
                 lines = [ln for ln in captured.splitlines() if ln]
-                if query.tail is not None:
-                    lines = lines[-query.tail :]
+                if tail is not None:
+                    lines = lines[-tail:]
                 for ln in lines:
                     pairs.append((None, ln))
 
@@ -249,20 +239,44 @@ class LogService:
 
             streams.append((svc.name, pairs))
 
+        return merge_sorted(ctx.env, streams), file_seeds
+
+    def logs(self, ctx: EnvContext, query: LogQuery) -> int:
+        """Emit NDJSON backlog for the requested services (backlog-only).
+
+        Follow mode is handled by ``follow_streams``; the CLI never calls
+        ``logs`` with ``query.follow=True``.
+
+        Steps:
+          1. Determine in-scope services (filtered by ``query.services`` if set,
+             else all manifest services in manifest order).
+          2. For each service: read based on its LogMode (FILE reads segment
+             files; PANE reads via capture-pane; MEMORY emits a STDERR note).
+          3. Apply ``since``/``until`` filter (events without ``ts`` are kept).
+          4. Merge across services, sort by ``ts``.
+          5. Apply ``query.tail`` to the filtered set.
+          6. Emit each event as a compact NDJSON line to ``self._sink``.
+          Returns 0.
+        """
+        requested = set(query.services)
+        if requested:
+            in_scope = [s for s in ctx.manifest.services if s.name in requested]
+        else:
+            in_scope = list(ctx.manifest.services)
+
+        # --- backlog ---
+        # _gather_backlog reads each service's events and returns the per-env
+        # merge_sorted list plus file_seeds (used by follow_streams; discarded here).
+        all_events, _ = self._gather_backlog(ctx, in_scope, query.tail)
+
         # Merge across services (build events + stable time-sort) → apply
         # since/until filter (order-preserving) → apply tail. Order of operations
         # ensures tail is the last N of the *filtered* set.
-        #
-        # The backlog→follow handoff is gap-free: the follow loop seeds each FILE
-        # service's offset from file_seeds — the exact byte boundary this backlog
-        # read consumed — so a line appended between backlog and follow is picked
-        # up by the first poll tick rather than dropped or double-emitted.
         #
         # v1 approximation: when both FILE and PANE services are in scope, the
         # global tail trims the mixed-mode merged set; PANE events (no ts) sort
         # before FILE events and may consume tail slots, making the effective
         # backlog for FILE-mode services smaller than requested.
-        all_events = merge_sorted(ctx.env, streams)
         all_events = apply_time_filter(all_events, query.since, query.until)
         file_events = apply_tail(all_events, query.tail)
 
@@ -273,72 +287,137 @@ class LogService:
         except BrokenPipeError:
             return 0
 
-        if not query.follow:
+        return 0
+
+    def follow_streams(
+        self,
+        streams: list[tuple[EnvContext, LogQuery]],
+    ) -> int:
+        """Emit merged NDJSON for multiple ``(ctx, query)`` streams, then follow live.
+
+        ``tail``, ``since``, and ``until`` are read from the per-pair
+        ``LogQuery`` objects — the CLI sets them identically across all pairs.
+
+        Backlog path:
+          For each ``(ctx, query)`` pair, resolve in-scope services and call
+          ``_gather_backlog``.  Concatenate all per-env event lists, re-sort
+          by ``ts`` (cross-env merge; pane events with no ts sort first),
+          apply ``since``/``until`` filter, apply ``tail``, and emit each
+          event as NDJSON to ``self._sink``.
+
+        Follow path:
+          Install the follow clock once, then run a single interleaved poll
+          loop over a flat ``(ctx, service)`` unit list — env order matches
+          the ``streams`` argument order, service order matches the manifest
+          order for each env.  FILE-mode units use byte-offset reads keyed by
+          ``(ctx.env, svc.name)``; PANE-mode units use per-tick capture-diff
+          keyed by the same tuple.
+
+          Returns 130 on SIGINT, 0 on BrokenPipeError.
+        """
+        assert streams, "follow_streams requires at least one (ctx, query) pair"
+        # tail/since/until are uniform across pairs (the CLI guarantees this).
+        first_query = streams[0][1]
+        tail = first_query.tail
+        since = first_query.since
+        until = first_query.until
+
+        # --- build per-stream in_scope lists ---
+        stream_units: list[tuple[EnvContext, list[Service]]] = []
+        for ctx, query in streams:
+            requested = set(query.services)
+            if requested:
+                in_scope = [s for s in ctx.manifest.services if s.name in requested]
+            else:
+                in_scope = list(ctx.manifest.services)
+            stream_units.append((ctx, in_scope))
+
+        # --- merged backlog across all streams ---
+        all_events: list[dict[str, str]] = []
+        combined_file_seeds: dict[tuple[str, str], int] = {}
+
+        for ctx, in_scope in stream_units:
+            # Pass tail to _gather_backlog for the PANE per-service tail trim;
+            # global tail is applied once below over the merged set.
+            per_env_events, file_seeds = self._gather_backlog(ctx, in_scope, tail)
+            all_events.extend(per_env_events)
+            combined_file_seeds.update(file_seeds)
+
+        # Cross-env merge: re-sort by ts (pane events with no ts sort to front).
+        all_events.sort(key=lambda e: e.get("ts", ""))
+        all_events = apply_time_filter(all_events, since, until)
+        all_events = apply_tail(all_events, tail)
+
+        try:
+            for event in all_events:
+                self._sink.write(json.dumps(event, ensure_ascii=False) + "\n")
+            self._sink.flush()
+        except BrokenPipeError:
             return 0
 
-        # --- live follow ---
+        # --- live interleaved follow ---
         self._follow_clock.install()
 
-        # FILE-mode: seed per-service byte offsets from the boundary the backlog
-        # read consumed (file_seeds). A service whose active file did not exist
-        # at backlog time has no entry and starts from 0, so its first appended
-        # line is emitted in full.
-        offsets: dict[str, int] = {}
-        for svc in in_scope:
-            if svc.log == LogMode.FILE:
-                offsets[svc.name] = file_seeds.get(svc.name, 0)
+        # Flat list of (ctx, service) units in streams order, manifest order per env.
+        flat_units: list[tuple[EnvContext, Service]] = []
+        for ctx, in_scope in stream_units:
+            for svc in in_scope:
+                flat_units.append((ctx, svc))
 
-        # PANE-mode follow: track the number of lines already emitted per service
-        # so we can emit only new lines on each tick (best-effort; if the pane
-        # scrolls and lines disappear, we may miss or re-emit some lines).
-        pane_emitted_counts: dict[str, int] = {}
-        for svc in in_scope:
+        # FILE-mode: seed byte offsets from combined backlog boundaries.
+        offsets: dict[tuple[str, str], int] = {}
+        for ctx, svc in flat_units:
+            if svc.log == LogMode.FILE:
+                key = (ctx.env, svc.name)
+                offsets[key] = combined_file_seeds.get(key, 0)
+
+        # PANE-mode: track emitted line counts per (env, svc).
+        pane_emitted_counts: dict[tuple[str, str], int] = {}
+        for ctx, svc in flat_units:
             if svc.log == LogMode.PANE:
-                pane_emitted_counts[svc.name] = 0
+                pane_emitted_counts[(ctx.env, svc.name)] = 0
 
         try:
             while not self._follow_clock.interrupted():
-                for svc in in_scope:
+                for ctx, svc in flat_units:
                     if svc.log == LogMode.FILE:
                         active = self._log_repo.log_path(ctx.worktree_dir, svc.name)
+                        key = (ctx.env, svc.name)
                         current_size = self._log_repo.file_size(active)
 
                         # Rotation/truncation: file shrank → reset to start of new segment.
-                        if current_size < offsets[svc.name]:
-                            offsets[svc.name] = 0
+                        if current_size < offsets[key]:
+                            offsets[key] = 0
 
-                        new_lines, new_offset = self._log_repo.read_new_lines(active, offsets[svc.name])
-                        offsets[svc.name] = new_offset
+                        new_lines, new_offset = self._log_repo.read_new_lines(active, offsets[key])
+                        offsets[key] = new_offset
 
                         for raw in new_lines:
                             if not raw:
                                 continue
                             ts, msg = parse_line(raw)
-                            # Apply since/until filter to each live line (same
-                            # semantics as the backlog path; pane events have no
-                            # ts and are always kept).
+                            # Apply since/until filter to each live line.
                             if ts is not None:
-                                if query.since and ts < query.since:
+                                if since and ts < since:
                                     continue
-                                if query.until and ts > query.until:
+                                if until and ts > until:
                                     continue
                             event = build_event(ts, ctx.env, svc.name, msg)
                             self._sink.write(json.dumps(event, ensure_ascii=False) + "\n")
                             self._sink.flush()
 
                     elif svc.log == LogMode.PANE:
-                        # Best-effort pane follow: re-capture the pane and emit
-                        # only lines beyond the previously emitted count.
+                        # Best-effort pane follow: re-capture and emit only new lines.
                         target = f"{svc.target.window}.{svc.target.pane}"
                         try:
                             captured = self._tmux.capture_pane(ctx.session, target)
                         except Exception:
-                            # Session gone or pane missing — skip silently this tick.
                             continue
                         all_lines = [ln for ln in captured.splitlines() if ln]
-                        prev_count = pane_emitted_counts[svc.name]
+                        key = (ctx.env, svc.name)
+                        prev_count = pane_emitted_counts[key]
                         new_lines_pane = all_lines[prev_count:]
-                        pane_emitted_counts[svc.name] = len(all_lines)
+                        pane_emitted_counts[key] = len(all_lines)
                         for ln in new_lines_pane:
                             event = build_event(None, ctx.env, svc.name, ln)
                             self._sink.write(json.dumps(event, ensure_ascii=False) + "\n")
