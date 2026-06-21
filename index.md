@@ -42,7 +42,7 @@ Once installed, the workspace conventions are:
 
   `-f` follows ALL matched `(env, service)` streams concurrently until Ctrl-C, interleaving their lines into one output.
 
-  The wire contract and rendering (plain lines vs. NDJSON) are winter's responsibility — see `workspace:/ai/winter-cli/usage/service.md`. There is no env-root `./logs` script; the interface is `winter service logs`. Workspace service logs land at `<workspace-root>/.winter/logs/<service>.log` — note that `winter service logs workspace` is not yet wired in this iteration; read the log files directly. Workspace log support is future work.
+  The wire contract and rendering (plain lines vs. NDJSON) are winter's responsibility — see `workspace:/ai/winter-cli/usage/service.md`. There is no env-root `./logs` script; the interface is `winter service logs`. Workspace service logs land at `<workspace-root>/.winter/logs/<service>.log` — `winter service logs workspace` is not wired; read the log files directly.
 - **Not all services are captured the same way.** Each `[[service]]` entry has a `log` field (default `"file"`) that controls how its output is captured and read:
   - `"file"` (default): stdout/stderr is captured to `<env>/.winter/logs/<svc>.log` via the capture writer; `logs` reads the persisted file (timestamped, survives `down`). Note: the live pane shows plain (uncolored) output because stdout is piped.
   - `"pane"`: the service is launched bare (TTY preserved); `logs` reads the pane buffer via `tmux capture-pane` on demand (no file persistence, no timestamps, requires a running session). Natural for interactive panes (`shell`) or services where TTY fidelity matters more than persistence.
@@ -105,7 +105,7 @@ See `winter-service-tmux:/workflow/setup-tmux.toml.example` and `winter-service-
 
 Workspace services run **inline** (blocking) in their tmux pane — a `postgres -D ...` or `docker run ...` command occupies the pane's foreground process. `down workspace` reaps the session, terminating each pane's foreground process tree (best-effort).
 
-**This is best-effort.** A service that double-forks, daemonizes, or detaches from the pane's process group before `down` is called may survive the session reap. The orchestrator does not track child PIDs, issue container stop commands, or perform managed/graceful shutdown — that is explicitly out of scope for this iteration. For workloads where graceful teardown matters (e.g. `docker compose down` instead of `docker compose up` kill), run the teardown logic inside the pane's start command (e.g. a wrapper script that traps SIGHUP and calls `docker compose down` before exiting).
+**This is best-effort.** A service that double-forks, daemonizes, or detaches from the pane's process group before `down` is called may survive the session reap. The orchestrator does not track child PIDs, issue container stop commands, or perform managed/graceful shutdown — managed graceful shutdown is not supported. For workloads where graceful teardown matters (e.g. `docker compose down` instead of `docker compose up` kill), run the teardown logic inside the pane's start command (e.g. a wrapper script that traps SIGHUP and calls `docker compose down` before exiting).
 
 ## Log capture configuration
 

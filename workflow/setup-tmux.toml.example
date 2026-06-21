@@ -25,9 +25,9 @@ session_prefix = "mp"
 # (relative to the worktree root, optional).
 env_file = ".winter.env"
 
-# Optional bash layout hook — invoked by the future orchestrator (issue #6)
-# once per ./up, AFTER the tmux session is created. The hook creates the
-# windows/panes; the orchestrator sends each service's command into its pane.
+# Optional bash layout hook — invoked by the orchestrator once per ./up,
+# AFTER the tmux session is created. The hook creates the windows/panes;
+# the orchestrator sends each service's command into its pane.
 # Absent until you need a non-default layout; the doctor probe checks that this
 # file exists and is executable when the field is set.
 layout_hook = "ai/project/layout-hook.sh"
