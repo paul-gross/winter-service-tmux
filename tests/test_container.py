@@ -10,7 +10,9 @@ from pathlib import Path
 
 import service_manifest.container as sm_container_mod
 from service_orchestrator.container import Container
+from service_orchestrator.modules.orchestrate.dispatch_service import DispatchService
 from service_orchestrator.modules.orchestrate.orchestrator_service import OrchestratorService
+from service_orchestrator.modules.orchestrate.selector_service import SelectorService
 from tests.conftest import (
     FakeLayoutHookRunner,
     FakeLogRepository,
@@ -45,6 +47,8 @@ def test_container_resolves_orchestrator_with_fakes() -> None:
     )
 
     assert isinstance(container.orchestrator, OrchestratorService)
+    assert isinstance(container.selector, SelectorService)
+    assert isinstance(container.dispatch, DispatchService)
     assert container.tmux is tmux
     assert container.reaper is reaper
     assert container.hook_runner is hook

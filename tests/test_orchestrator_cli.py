@@ -27,9 +27,12 @@ import pytest
 from service_manifest.modules.manifest.errors import ManifestError
 from service_manifest.modules.manifest.model import Service, ServiceManifest, Target
 from service_orchestrator.cli import main
+from service_orchestrator.modules.orchestrate.dispatch_service import DispatchService
 from service_orchestrator.modules.orchestrate.log_query import LogQuery
+from service_orchestrator.modules.orchestrate.selector_service import SelectorService
 from service_orchestrator.modules.orchestrate.session_context import SessionContext
 from service_orchestrator.modules.orchestrate.session_context_builder import WORKSPACE_TARGET
+from tests.fakes import FakeLogService, FakeOrchestrator
 
 # ---------------------------------------------------------------------------
 # Helpers / shared fixtures
@@ -113,12 +116,7 @@ class _FakeContainer:
         self._log_rc = log_rc
         self._build_raises = build_raises
 
-        # Records
-        self.status_calls: list[tuple[SessionContext, tuple[str, ...]]] = []
-        self.restart_calls: list[tuple[SessionContext, str]] = []
-        self.logs_calls: list[tuple[SessionContext, LogQuery]] = []
-        self.up_calls: list[SessionContext] = []
-        self.down_calls: list[SessionContext] = []
+        # Build_call records (on the container for test access)
         self.build_calls: list[str] = []
         self.build_workspace_calls: list[Path | None] = []
 
@@ -145,45 +143,50 @@ class _FakeContainer:
 
         self.session_context_builder = _FakeBuilder()
 
-        # orchestrator seam
-        class _FakeOrchestrator:
-            def up(inner_self, ctx: SessionContext) -> int:
-                self.up_calls.append(ctx)
-                return self._service_rc
+        # orchestrator seam — promoted to FakeOrchestrator from fakes.py
+        self.orchestrator = FakeOrchestrator(service_rc=service_rc)
 
-            def down(inner_self, ctx: SessionContext) -> int:
-                self.down_calls.append(ctx)
-                return self._service_rc
+        # log_service seam — promoted to FakeLogService from fakes.py
+        self.log_service = FakeLogService(log_rc=log_rc)
 
-            def status(
-                inner_self,
-                ctx: SessionContext,
-                services: tuple[str, ...] = (),
-                *,
-                json_output: bool = False,
-            ) -> int:
-                self.status_calls.append((ctx, services))
-                return self._service_rc
+    # Forward call records from inner fakes for backward-compatible test access
+    @property
+    def status_calls(self) -> list[tuple[SessionContext, tuple[str, ...]]]:
+        return self.orchestrator.status_calls
 
-            def restart(inner_self, ctx: SessionContext, service_name: str) -> int:
-                self.restart_calls.append((ctx, service_name))
-                return self._service_rc
+    @property
+    def restart_calls(self) -> list[tuple[SessionContext, str]]:
+        return self.orchestrator.restart_calls
 
-        self.orchestrator = _FakeOrchestrator()
+    @property
+    def logs_calls(self) -> list[tuple[SessionContext, LogQuery]]:
+        return self.log_service.logs_calls
 
-        self.follow_streams_calls: list[list] = []
+    @property
+    def up_calls(self) -> list[SessionContext]:
+        return self.orchestrator.up_calls
 
-        # log_service seam
-        class _FakeLogService:
-            def logs(inner_self, ctx: SessionContext, query: LogQuery) -> int:
-                self.logs_calls.append((ctx, query))
-                return self._log_rc
+    @property
+    def down_calls(self) -> list[SessionContext]:
+        return self.orchestrator.down_calls
 
-            def follow_streams(inner_self, streams) -> int:
-                self.follow_streams_calls.append(list(streams))
-                return self._log_rc
+    @property
+    def follow_streams_calls(self) -> list[list]:
+        return self.log_service.follow_streams_calls
 
-        self.log_service = _FakeLogService()
+    @property
+    def selector(self) -> SelectorService:
+        """Real SelectorService wired around the fake tmux and builder seams."""
+        return SelectorService(self.tmux, self.session_context_builder)  # type: ignore[arg-type]
+
+    @property
+    def dispatch(self) -> DispatchService:
+        """Real DispatchService wired around all fake seams."""
+        return DispatchService(
+            builder=self.session_context_builder,  # type: ignore[arg-type]
+            orchestrator=self.orchestrator,  # type: ignore[arg-type]
+            log_service=self.log_service,  # type: ignore[arg-type]
+        )
 
 
 def _install(monkeypatch: pytest.MonkeyPatch, fake: _FakeContainer) -> _FakeContainer:
