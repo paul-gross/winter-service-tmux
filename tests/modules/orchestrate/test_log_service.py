@@ -11,8 +11,6 @@ import io
 import json
 from pathlib import Path
 
-import pytest
-
 from service_manifest.modules.manifest.model import LogMode, Service, ServiceManifest, Target
 from service_orchestrator.modules.orchestrate.log_query import LogQuery
 from service_orchestrator.modules.orchestrate.log_service import (
@@ -82,6 +80,7 @@ def _make_svc(
     sink: io.StringIO,
     clock: FakeFollowClock | None = None,
     tmux: FakeTmuxRepository | None = None,
+    err_sink: io.StringIO | None = None,
 ) -> LogService:
     """Construct a LogService with a fake clock (defaults to never-follow clock)."""
     return LogService(
@@ -89,6 +88,7 @@ def _make_svc(
         follow_clock=clock or FakeFollowClock(),
         tmux=tmux or FakeTmuxRepository(),
         sink=sink,
+        err_sink=err_sink,
     )
 
 
@@ -526,8 +526,8 @@ def test_memory_mode_emits_nothing() -> None:
     assert events == []
 
 
-def test_memory_mode_emits_one_line_stderr_diagnostic(capsys: pytest.CaptureFixture[str]) -> None:
-    """MEMORY-mode service emits exactly one diagnostic line to stderr explaining
+def test_memory_mode_emits_one_line_stderr_diagnostic() -> None:
+    """MEMORY-mode service emits exactly one diagnostic line to err_sink explaining
     why there is no output, so callers see a clear message instead of silence.
     """
     svc_mem = Service(name="worker", target=Target(window=0, pane=0), command="cmd", log=LogMode.MEMORY)
@@ -542,17 +542,17 @@ def test_memory_mode_emits_one_line_stderr_diagnostic(capsys: pytest.CaptureFixt
     tmux = FakeTmuxRepository()
     ctx = _make_ctx(manifest)
     sink = io.StringIO()
-    svc = _make_svc(fake_repo, sink, tmux=tmux)
+    err = io.StringIO()
+    svc = _make_svc(fake_repo, sink, tmux=tmux, err_sink=err)
 
     rc = svc.logs(ctx, _make_query())
 
     assert rc == 0
-    captured = capsys.readouterr()
-    # Exactly one stderr line mentioning the service name and "memory"
-    stderr_lines = [ln for ln in captured.err.splitlines() if ln.strip()]
-    assert len(stderr_lines) == 1
-    assert "worker" in stderr_lines[0]
-    assert "memory" in stderr_lines[0].lower()
+    # Exactly one err_sink line mentioning the service name and "memory"
+    err_lines = [ln for ln in err.getvalue().splitlines() if ln.strip()]
+    assert len(err_lines) == 1
+    assert "worker" in err_lines[0]
+    assert "memory" in err_lines[0].lower()
 
 
 # ---------------------------------------------------------------------------

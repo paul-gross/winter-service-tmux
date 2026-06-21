@@ -6,6 +6,7 @@ are made; all I/O is mediated through the fakes defined in tests/conftest.py.
 
 from __future__ import annotations
 
+import io
 import shlex
 from pathlib import Path
 
@@ -98,6 +99,8 @@ def _make_service(
     hook_runner: FakeLayoutHookRunner | None = None,
     log_repo: FakeLogRepository | None = None,
     clock: FakeFollowClock | None = None,
+    stdout: io.StringIO | None = None,
+    stderr: io.StringIO | None = None,
 ) -> OrchestratorService:
     if tmux is None:
         tmux = FakeTmuxRepository()
@@ -113,6 +116,8 @@ def _make_service(
         hook_runner=hook_runner,
         log_repo=log_repo,
         clock=clock,
+        stdout=stdout,
+        stderr=stderr,
     )
 
 
@@ -287,18 +292,18 @@ command = "npm run start:dev"
 # ---------------------------------------------------------------------------
 
 
-def test_up_idempotent_when_session_exists(capsys: pytest.CaptureFixture[str]) -> None:
+def test_up_idempotent_when_session_exists() -> None:
     tmux = FakeTmuxRepository()
     tmux.seed_session("mp-alpha", {"0.0": 100})
     ctx = _make_ctx()
-    svc = _make_service(tmux=tmux)
+    out = io.StringIO()
+    svc = _make_service(tmux=tmux, stdout=out)
 
     result = svc.up(ctx)
 
     assert result == 0
     assert tmux.sent == []
-    captured = capsys.readouterr()
-    assert "already running" in captured.out
+    assert "already running" in out.getvalue()
 
 
 # ---------------------------------------------------------------------------
@@ -336,9 +341,7 @@ def test_up_salvage_hook_fail_single_window_kills_and_raises() -> None:
     assert "mp-alpha" in tmux.killed_sessions
 
 
-def test_up_salvage_hook_fail_multiple_windows_keeps_session(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
+def test_up_salvage_hook_fail_multiple_windows_keeps_session() -> None:
     """Hook failure with >1 windows → session kept, non-zero returned, warning printed."""
     tmux = FakeTmuxRepository()
 
@@ -352,15 +355,15 @@ def test_up_salvage_hook_fail_multiple_windows_keeps_session(
 
     hook = _HookWithPreRaiseSideEffect()
     ctx = _make_ctx()
-    svc = _make_service(tmux=tmux, hook_runner=hook)
+    out = io.StringIO()
+    svc = _make_service(tmux=tmux, hook_runner=hook, stdout=out)
 
     result = svc.up(ctx)
 
     assert result == 1
     assert "mp-alpha" in tmux._sessions
     assert "mp-alpha" not in tmux.killed_sessions
-    captured = capsys.readouterr()
-    assert "Warning" in captured.out
+    assert "Warning" in out.getvalue()
 
 
 # ---------------------------------------------------------------------------
@@ -407,18 +410,18 @@ def test_down_reaps_all_descendants_then_kills_session() -> None:
     assert set(killed_pids) == {100, 101, 200}
 
 
-def test_down_noop_when_no_session(capsys: pytest.CaptureFixture[str]) -> None:
+def test_down_noop_when_no_session() -> None:
     tmux = FakeTmuxRepository()
     reaper = FakeProcessReaper()
     ctx = _make_ctx()
-    svc = _make_service(tmux=tmux, reaper=reaper)
+    out = io.StringIO()
+    svc = _make_service(tmux=tmux, reaper=reaper, stdout=out)
 
     result = svc.down(ctx)
 
     assert result == 0
     assert reaper.killed == []
-    captured = capsys.readouterr()
-    assert "No running session" in captured.out
+    assert "No running session" in out.getvalue()
 
 
 def test_down_skips_reap_when_no_descendants() -> None:
@@ -439,91 +442,93 @@ def test_down_skips_reap_when_no_descendants() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_status_running_service(capsys: pytest.CaptureFixture[str]) -> None:
+def test_status_running_service() -> None:
     tmux = FakeTmuxRepository()
     tmux.seed_session("mp-alpha", {"0.0": 10, "0.1": 20})
     tmux.capture_text = {"0.0": "Starting server...\nListening on :3000\n"}
     reaper = FakeProcessReaper(children_set={10})  # 10 has children → running
     ctx = _make_ctx(env_vars={"BACKEND_PORT": "3000"})
-    svc = _make_service(tmux=tmux, reaper=reaper)
+    out = io.StringIO()
+    svc = _make_service(tmux=tmux, reaper=reaper, stdout=out)
 
     result = svc.status(ctx)
 
     assert result == 0
-    captured = capsys.readouterr()
-    assert "backend:" in captured.out
-    assert "running" in captured.out
-    assert "Listening on :3000" in captured.out
+    output = out.getvalue()
+    assert "backend:" in output
+    assert "running" in output
+    assert "Listening on :3000" in output
 
 
-def test_status_stopped_service(capsys: pytest.CaptureFixture[str]) -> None:
+def test_status_stopped_service() -> None:
     tmux = FakeTmuxRepository()
     tmux.seed_session("mp-alpha", {"0.0": 10, "0.1": 20})
     reaper = FakeProcessReaper(children_set=set())  # no children → stopped
     ctx = _make_ctx()
-    svc = _make_service(tmux=tmux, reaper=reaper)
+    out = io.StringIO()
+    svc = _make_service(tmux=tmux, reaper=reaper, stdout=out)
 
     result = svc.status(ctx)
 
     assert result == 0
-    captured = capsys.readouterr()
-    assert "stopped" in captured.out
+    assert "stopped" in out.getvalue()
 
 
-def test_status_missing_pane(capsys: pytest.CaptureFixture[str]) -> None:
+def test_status_missing_pane() -> None:
     tmux = FakeTmuxRepository()
     # Only pane 0.0 exists; manifest also declares 0.1
     tmux.seed_session("mp-alpha", {"0.0": 10})
     reaper = FakeProcessReaper()
     ctx = _make_ctx()
-    svc = _make_service(tmux=tmux, reaper=reaper)
+    out = io.StringIO()
+    svc = _make_service(tmux=tmux, reaper=reaper, stdout=out)
 
     result = svc.status(ctx)
 
     assert result == 0
-    captured = capsys.readouterr()
-    assert "missing" in captured.out
-    assert "frontend" in captured.out
+    output = out.getvalue()
+    assert "missing" in output
+    assert "frontend" in output
 
 
-def test_status_interpolates_status_url_header(capsys: pytest.CaptureFixture[str]) -> None:
+def test_status_interpolates_status_url_header() -> None:
     tmux = FakeTmuxRepository()
     tmux.seed_session("mp-alpha", {"0.0": 10, "0.1": 20})
     reaper = FakeProcessReaper()
     ctx = _make_ctx(env_vars={"BACKEND_PORT": "4100"})
-    svc = _make_service(tmux=tmux, reaper=reaper)
+    out = io.StringIO()
+    svc = _make_service(tmux=tmux, reaper=reaper, stdout=out)
 
     svc.status(ctx)
 
-    captured = capsys.readouterr()
-    assert "http://localhost:4100" in captured.out
+    assert "http://localhost:4100" in out.getvalue()
 
 
-def test_status_unresolved_var_left_literal(capsys: pytest.CaptureFixture[str]) -> None:
+def test_status_unresolved_var_left_literal() -> None:
     """When env_vars is None, ${VAR} placeholders are left as literals."""
     tmux = FakeTmuxRepository()
     tmux.seed_session("mp-alpha", {"0.0": 10, "0.1": 20})
     reaper = FakeProcessReaper()
     ctx = _make_ctx(env_vars=None)
-    svc = _make_service(tmux=tmux, reaper=reaper)
+    out = io.StringIO()
+    svc = _make_service(tmux=tmux, reaper=reaper, stdout=out)
 
     svc.status(ctx)
 
-    captured = capsys.readouterr()
-    assert "${BACKEND_PORT}" in captured.out
+    assert "${BACKEND_PORT}" in out.getvalue()
 
 
-def test_status_no_session(capsys: pytest.CaptureFixture[str]) -> None:
+def test_status_no_session() -> None:
     tmux = FakeTmuxRepository()
     reaper = FakeProcessReaper()
     ctx = _make_ctx()
-    svc = _make_service(tmux=tmux, reaper=reaper)
+    out = io.StringIO()
+    svc = _make_service(tmux=tmux, reaper=reaper, stdout=out)
 
     result = svc.status(ctx)
 
     assert result == 0
-    captured = capsys.readouterr()
-    assert "No mp-alpha session running" in captured.out
+    assert "No mp-alpha session running" in out.getvalue()
 
 
 # ---------------------------------------------------------------------------
@@ -1115,27 +1120,27 @@ def test_segments_to_prune_skips_vanished_segment() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_status_json_session_not_running(capsys: pytest.CaptureFixture[str]) -> None:
+def test_status_json_session_not_running() -> None:
     """When no session exists, JSON output has running=false and empty services."""
     import json
 
     tmux = FakeTmuxRepository()
     reaper = FakeProcessReaper()
     ctx = _make_ctx()
-    svc = _make_service(tmux=tmux, reaper=reaper)
+    out = io.StringIO()
+    svc = _make_service(tmux=tmux, reaper=reaper, stdout=out)
 
     result = svc.status(ctx, json_output=True)
 
     assert result == 0
-    captured = capsys.readouterr()
-    doc = json.loads(captured.out)
+    doc = json.loads(out.getvalue())
     assert doc["env"] == "alpha"
     assert doc["session"] == "mp-alpha"
     assert doc["running"] is False
     assert doc["services"] == []
 
 
-def test_status_json_running_and_stopped_verdicts(capsys: pytest.CaptureFixture[str]) -> None:
+def test_status_json_running_and_stopped_verdicts() -> None:
     """JSON output includes per-service verdicts: 'running' when pane has children,
     'stopped' when it does not, 'missing' when the pane is absent."""
     import json
@@ -1145,20 +1150,20 @@ def test_status_json_running_and_stopped_verdicts(capsys: pytest.CaptureFixture[
     tmux.seed_session("mp-alpha", {"0.0": 10, "0.1": 20})
     reaper = FakeProcessReaper(children_set={10})  # only pid 10 has children
     ctx = _make_ctx()
-    svc = _make_service(tmux=tmux, reaper=reaper)
+    out = io.StringIO()
+    svc = _make_service(tmux=tmux, reaper=reaper, stdout=out)
 
     result = svc.status(ctx, json_output=True)
 
     assert result == 0
-    captured = capsys.readouterr()
-    doc = json.loads(captured.out)
+    doc = json.loads(out.getvalue())
     assert doc["running"] is True
     verdicts = {s["name"]: s["verdict"] for s in doc["services"]}
     assert verdicts["backend"] == "running"
     assert verdicts["frontend"] == "stopped"
 
 
-def test_status_json_missing_pane_verdict(capsys: pytest.CaptureFixture[str]) -> None:
+def test_status_json_missing_pane_verdict() -> None:
     """A pane absent from the session reports verdict='missing' in JSON output."""
     import json
 
@@ -1167,18 +1172,18 @@ def test_status_json_missing_pane_verdict(capsys: pytest.CaptureFixture[str]) ->
     tmux.seed_session("mp-alpha", {"0.0": 10})
     reaper = FakeProcessReaper()
     ctx = _make_ctx()
-    svc = _make_service(tmux=tmux, reaper=reaper)
+    out = io.StringIO()
+    svc = _make_service(tmux=tmux, reaper=reaper, stdout=out)
 
     result = svc.status(ctx, json_output=True)
 
     assert result == 0
-    captured = capsys.readouterr()
-    doc = json.loads(captured.out)
+    doc = json.loads(out.getvalue())
     verdicts = {s["name"]: s["verdict"] for s in doc["services"]}
     assert verdicts["frontend"] == "missing"
 
 
-def test_status_json_does_not_emit_human_text(capsys: pytest.CaptureFixture[str]) -> None:
+def test_status_json_does_not_emit_human_text() -> None:
     """json_output=True must not emit the human-readable header or service lines."""
     import json
 
@@ -1186,13 +1191,92 @@ def test_status_json_does_not_emit_human_text(capsys: pytest.CaptureFixture[str]
     tmux.seed_session("mp-alpha", {"0.0": 10, "0.1": 20})
     reaper = FakeProcessReaper()
     ctx = _make_ctx()
-    svc = _make_service(tmux=tmux, reaper=reaper)
+    out = io.StringIO()
+    svc = _make_service(tmux=tmux, reaper=reaper, stdout=out)
 
     svc.status(ctx, json_output=True)
 
-    captured = capsys.readouterr()
     # Must be parseable as exactly one JSON object — no stray human-readable text.
-    lines = [ln for ln in captured.out.splitlines() if ln.strip()]
+    lines = [ln for ln in out.getvalue().splitlines() if ln.strip()]
     assert len(lines) == 1
     doc = json.loads(lines[0])
     assert "env" in doc
+
+
+# ---------------------------------------------------------------------------
+# Output seam — user-facing lines go through injected stdout/stderr, not print()
+# ---------------------------------------------------------------------------
+
+
+def test_up_started_message_goes_through_stdout_seam() -> None:
+    """up() writes its 'Started services' message to the injected stdout seam."""
+    tmux = FakeTmuxRepository()
+    hook = FakeLayoutHookRunner()
+    ctx = _make_ctx()
+    out = io.StringIO()
+    svc = _make_service(tmux=tmux, hook_runner=hook, stdout=out)
+
+    def _add_panes() -> None:
+        tmux.seed_session("mp-alpha", {"0.0": 100, "0.1": 101})
+
+    hook._side_effect = _add_panes
+
+    result = svc.up(ctx)
+
+    assert result == 0
+    assert "Started services" in out.getvalue()
+
+
+def test_down_stopped_message_goes_through_stdout_seam() -> None:
+    """down() writes its 'Stopped services' message to the injected stdout seam."""
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 10, "0.1": 20})
+    ctx = _make_ctx()
+    out = io.StringIO()
+    svc = _make_service(tmux=tmux, stdout=out)
+
+    result = svc.down(ctx)
+
+    assert result == 0
+    assert "Stopped services" in out.getvalue()
+
+
+def test_restart_message_goes_through_stdout_seam() -> None:
+    """restart() writes its 'Restarted' message to the injected stdout seam."""
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 10, "0.1": 20})
+    ctx = _make_ctx(env_file_path=_ENV_FILE)
+    out = io.StringIO()
+    svc = _make_service(tmux=tmux, stdout=out)
+
+    result = svc.restart(ctx, "backend")
+
+    assert result == 0
+    assert "Restarted" in out.getvalue()
+    assert "backend" in out.getvalue()
+
+
+def test_prune_failure_warning_goes_through_stderr_seam() -> None:
+    """Prune failure warning goes through the injected stderr seam, not print()."""
+
+    class _BrokenLogRepo(FakeLogRepository):
+        def rotated_segments(self, worktree_dir: Path, service: str) -> list[Path]:
+            raise RuntimeError("disk error simulated")
+
+    tmux = FakeTmuxRepository()
+    log_repo = _BrokenLogRepo()
+    clock = FakeFollowClock(current_time=10000.0)
+    hook = FakeLayoutHookRunner()
+    err = io.StringIO()
+
+    def _add_panes() -> None:
+        tmux.seed_session("mp-alpha", {"0.0": 100, "0.1": 101})
+
+    hook._side_effect = _add_panes
+
+    ctx = _make_ctx()
+    svc = _make_service(tmux=tmux, hook_runner=hook, log_repo=log_repo, clock=clock, stderr=err)
+    result = svc.up(ctx)
+
+    assert result == 0
+    assert "prune failed" in err.getvalue()

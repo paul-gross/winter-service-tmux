@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from typing import IO
 
 from service_manifest.modules.manifest.env import interpolate
 from service_manifest.modules.manifest.model import LogMode
@@ -71,12 +72,16 @@ class OrchestratorService:
         hook_runner: ILayoutHookRunner,
         log_repo: ILogRepository,
         clock: IFollowClock | None = None,
+        stdout: IO[str] | None = None,
+        stderr: IO[str] | None = None,
     ) -> None:
         self._tmux = tmux
         self._reaper = reaper
         self._hook_runner = hook_runner
         self._log_repo = log_repo
         self._clock = clock
+        self._stdout: IO[str] = stdout if stdout is not None else sys.stdout
+        self._stderr: IO[str] = stderr if stderr is not None else sys.stderr
 
     # ------------------------------------------------------------------
     # Public actions
@@ -91,8 +96,9 @@ class OrchestratorService:
         is raised.
         """
         if self._tmux.has_session(ctx.session):
-            print(f"Session '{ctx.session}' is already running.")
-            print("Use ./status to check services, or ./down to stop.")
+            self._stdout.write(f"Session '{ctx.session}' is already running.\n")
+            self._stdout.write("Use ./status to check services, or ./down to stop.\n")
+            self._stdout.flush()
             return 0
 
         # Prune old rotated log segments opportunistically before starting.
@@ -100,7 +106,8 @@ class OrchestratorService:
         try:
             self._prune(ctx)
         except Exception as exc:
-            print(f"Warning: prune failed (ignored): {exc}", file=sys.stderr, flush=True)
+            self._stderr.write(f"Warning: prune failed (ignored): {exc}\n")
+            self._stderr.flush()
 
         self._tmux.new_session(
             ctx.session,
@@ -123,15 +130,12 @@ class OrchestratorService:
                         f"layout hook failed and no windows were created; session '{ctx.session}' torn down: {exc}"
                     ) from exc
                 else:
-                    print(
+                    self._stdout.write(
                         f"Warning: layout hook returned an error but session "
-                        f"'{ctx.session}' has {len(windows)} windows running.",
-                        flush=True,
+                        f"'{ctx.session}' has {len(windows)} windows running.\n"
                     )
-                    print(
-                        "  Inspect with ./status; stop with ./down if the session is unhealthy.",
-                        flush=True,
-                    )
+                    self._stdout.write("  Inspect with ./status; stop with ./down if the session is unhealthy.\n")
+                    self._stdout.flush()
                     hook_ok = False
                     # Hook failed; we kept the session but cannot safely
                     # validate panes or send service commands.
@@ -178,7 +182,8 @@ class OrchestratorService:
                 )
             self._tmux.send_keys(ctx.session, target, line)
 
-        print(f"Started services in tmux session '{ctx.session}'")
+        self._stdout.write(f"Started services in tmux session '{ctx.session}'\n")
+        self._stdout.flush()
         return 0 if hook_ok else 1
 
     def down(self, ctx: SessionContext) -> int:
@@ -187,7 +192,8 @@ class OrchestratorService:
         No-op (returns 0) when the session is not running.
         """
         if not self._tmux.has_session(ctx.session):
-            print(f"No running session '{ctx.session}'")
+            self._stdout.write(f"No running session '{ctx.session}'\n")
+            self._stdout.flush()
             return 0
 
         pane_infos = self._tmux.list_panes(ctx.session)
@@ -195,7 +201,8 @@ class OrchestratorService:
         self._reaper.reap_descendants(pane_pids)
 
         self._tmux.kill_session(ctx.session)
-        print(f"Stopped services for '{ctx.env}' (session: {ctx.session})")
+        self._stdout.write(f"Stopped services for '{ctx.env}' (session: {ctx.session})\n")
+        self._stdout.flush()
         return 0
 
     def status(self, ctx: SessionContext, services: tuple[str, ...] = (), *, json_output: bool = False) -> int:
@@ -233,9 +240,11 @@ class OrchestratorService:
         if not self._tmux.has_session(ctx.session):
             if json_output:
                 doc = build_status_json(ctx.env, ctx.session, session_running=False, services=[])
-                print(json.dumps(doc, ensure_ascii=False))
+                self._stdout.write(json.dumps(doc, ensure_ascii=False) + "\n")
+                self._stdout.flush()
             else:
-                print(f"No {ctx.session} session running.")
+                self._stdout.write(f"No {ctx.session} session running.\n")
+                self._stdout.flush()
             return 0
 
         pane_infos = self._tmux.list_panes(ctx.session)
@@ -257,21 +266,22 @@ class OrchestratorService:
                     verdict = "running" if self._reaper.has_children(pane_pid) else "stopped"
                 svc_verdicts.append({"name": svc.name, "verdict": verdict})
             doc = build_status_json(ctx.env, ctx.session, session_running=True, services=svc_verdicts)
-            print(json.dumps(doc, ensure_ascii=False))
+            self._stdout.write(json.dumps(doc, ensure_ascii=False) + "\n")
+            self._stdout.flush()
             return 0
 
-        print(f"=== {ctx.env} ===")
+        self._stdout.write(f"=== {ctx.env} ===\n")
 
         if ctx.status_urls:
             env_vars = ctx.env_vars or {}
             for status_url in ctx.status_urls:
                 rendered_url, _ = interpolate(status_url.url, env_vars)
-                print(f"  {status_url.label}: {rendered_url}")
+                self._stdout.write(f"  {status_url.label}: {rendered_url}\n")
 
         for svc in in_scope:
             target = f"{svc.target.window}.{svc.target.pane}"
             if target not in pane_map:
-                print(f"  {svc.name}:".ljust(16) + "missing")
+                self._stdout.write(f"  {svc.name}:".ljust(16) + "missing\n")
                 continue
 
             pane_pid = pane_map[target]
@@ -281,9 +291,10 @@ class OrchestratorService:
             captured = self._tmux.capture_pane(ctx.session, target)
             last_line = truncate_status_line(last_non_blank_line(captured))
 
-            print(f"  {svc.name + ':':<14} {status_str:<8}  {last_line}")
+            self._stdout.write(f"  {svc.name + ':':<14} {status_str:<8}  {last_line}\n")
 
-        print()
+        self._stdout.write("\n")
+        self._stdout.flush()
         return 0
 
     def restart(self, ctx: SessionContext, service_name: str) -> int:
@@ -323,7 +334,8 @@ class OrchestratorService:
             service.command,
         )
         self._tmux.send_keys(ctx.session, target, line)
-        print(f"Restarted '{service_name}' in {ctx.session}:{target}")
+        self._stdout.write(f"Restarted '{service_name}' in {ctx.session}:{target}\n")
+        self._stdout.flush()
         return 0
 
     def _prune(self, ctx: SessionContext) -> None:

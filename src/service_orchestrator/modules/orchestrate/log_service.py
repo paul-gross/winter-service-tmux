@@ -162,11 +162,13 @@ class LogService:
         follow_clock: IFollowClock,
         tmux: ITmuxRepository,
         sink: IO[str] | None = None,
+        err_sink: IO[str] | None = None,
     ) -> None:
         self._log_repo = log_repo
         self._follow_clock = follow_clock
         self._tmux = tmux
         self._sink: IO[str] = sink if sink is not None else sys.stdout
+        self._err_sink: IO[str] = err_sink if err_sink is not None else sys.stderr
 
     def _gather_backlog(
         self,
@@ -217,10 +219,8 @@ class LogService:
                 try:
                     captured = self._tmux.capture_pane(ctx.session, target)
                 except Exception as exc:
-                    print(
-                        f"logs: pane capture failed for '{svc.name}' ({target}): {exc}",
-                        file=sys.stderr,
-                    )
+                    self._err_sink.write(f"logs: pane capture failed for '{svc.name}' ({target}): {exc}\n")
+                    self._err_sink.flush()
                     captured = ""
                 lines = [ln for ln in captured.splitlines() if ln]
                 if tail is not None:
@@ -229,13 +229,11 @@ class LogService:
                     pairs.append((None, ln))
 
             elif svc.log == LogMode.MEMORY:
-                # MEMORY mode not yet implemented — emit a note to stderr so the
-                # caller knows why the service is silent, rather than seeing
+                # MEMORY mode not yet implemented — emit a note to err_sink so
+                # the caller knows why the service is silent, rather than seeing
                 # ambiguous empty output.
-                print(
-                    f"logs: memory-mode not yet implemented for '{svc.name}'; no output",
-                    file=sys.stderr,
-                )
+                self._err_sink.write(f"logs: memory-mode not yet implemented for '{svc.name}'; no output\n")
+                self._err_sink.flush()
 
             streams.append((svc.name, pairs))
 

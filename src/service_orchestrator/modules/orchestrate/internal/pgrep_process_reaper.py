@@ -13,12 +13,16 @@ root to pass.
 
 from __future__ import annotations
 
+import logging
 import os
 import signal
 import subprocess
 import time
 
+from service_orchestrator.modules.orchestrate.errors import OrchestratorError
 from service_orchestrator.modules.orchestrate.reaper import IProcessReaper
+
+logger = logging.getLogger(__name__)
 
 
 class PgrepProcessReaper:
@@ -26,6 +30,21 @@ class PgrepProcessReaper:
 
     All ``pgrep`` and ``kill`` subprocess calls are confined here.
     """
+
+    def _run_pgrep(self, pid: int) -> subprocess.CompletedProcess:  # type: ignore[type-arg]
+        """Run ``pgrep -P <pid>`` and return the result.
+
+        Raises :class:`OrchestratorError` if ``pgrep`` is not on ``PATH``.
+        """
+        try:
+            return subprocess.run(
+                ["pgrep", "-P", str(pid)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except FileNotFoundError as exc:
+            raise OrchestratorError(f"pgrep not found; cannot collect descendants: {exc}") from exc
 
     def descendants(self, pid: int) -> list[int]:
         """Return all recursive descendant PIDs of *pid*, excluding *pid* itself.
@@ -40,12 +59,7 @@ class PgrepProcessReaper:
         return collected
 
     def _collect(self, pid: int, *, root: int, out: list[int]) -> None:
-        result = subprocess.run(
-            ["pgrep", "-P", str(pid)],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        result = self._run_pgrep(pid)
         # pgrep exits 1 when no children exist — not an error.
         children = [int(line) for line in result.stdout.splitlines() if line.strip()]
         for child in children:
@@ -55,12 +69,7 @@ class PgrepProcessReaper:
 
     def has_children(self, pid: int) -> bool:
         """Return ``True`` when *pid* has at least one direct child process."""
-        result = subprocess.run(
-            ["pgrep", "-P", str(pid)],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        result = self._run_pgrep(pid)
         return result.returncode == 0 and bool(result.stdout.strip())
 
     def reap_descendants(self, root_pids: list[int]) -> None:
@@ -82,9 +91,13 @@ class PgrepProcessReaper:
             try:
                 os.kill(pid, signal.SIGTERM)
             except ProcessLookupError:
+                # Process already exited — not an error; ignore.
                 pass
-            except OSError:
-                pass
+            except OSError as exc:
+                # Non-ESRCH failure (e.g. EPERM — process re-parented after
+                # collection; cannot signal it).  Emit a warning so a stuck
+                # process is visible instead of silently surviving.
+                logger.warning("reaper: SIGTERM pid %d failed: %s", pid, exc)
 
         time.sleep(1)
 
@@ -97,9 +110,12 @@ class PgrepProcessReaper:
             try:
                 os.kill(pid, signal.SIGKILL)
             except ProcessLookupError:
+                # Process already exited — not an error; ignore.
                 pass
-            except OSError:
-                pass
+            except OSError as exc:
+                # Non-ESRCH failure (e.g. EPERM).  Warn so the stuck process
+                # is visible.
+                logger.warning("reaper: SIGKILL pid %d failed: %s", pid, exc)
 
 
 def _conforms_pgrep_process_reaper(x: PgrepProcessReaper) -> IProcessReaper:

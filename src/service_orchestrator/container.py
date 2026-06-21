@@ -53,6 +53,8 @@ class Container:
         log_repo: ILogRepository | None = None,
         follow_clock: IFollowClock | None = None,
         log_sink: IO[str] | None = None,
+        out_sink: IO[str] | None = None,
+        err_sink: IO[str] | None = None,
     ) -> None:
         self.error_factory = TmuxErrorFactory()
 
@@ -73,6 +75,8 @@ class Container:
             hook_runner=self.hook_runner,
             log_repo=self.log_repo,
             clock=self.follow_clock,
+            stdout=out_sink,
+            stderr=err_sink,
         )
 
         self.log_service = LogService(
@@ -80,6 +84,7 @@ class Container:
             follow_clock=self.follow_clock,
             tmux=self.tmux,
             sink=log_sink,
+            err_sink=err_sink,
         )
 
         self.session_context_builder = SessionContextBuilder(

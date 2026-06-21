@@ -5,13 +5,19 @@ import site.  Tests assert:
   1. Exact argv passed to subprocess.run for pgrep -P.
   2. Recursive descendant collection order.
   3. SIGTERM → sleep 1 → re-collect → SIGKILL ordering for reap_descendants.
+  4. Non-ProcessLookupError signal failures emit a logger.warning.
+  5. Missing pgrep binary raises OrchestratorError.
 """
 
 from __future__ import annotations
 
+import logging
 import signal
 from unittest.mock import MagicMock
 
+import pytest
+
+from service_orchestrator.modules.orchestrate.errors import OrchestratorError
 from service_orchestrator.modules.orchestrate.internal import pgrep_process_reaper as adapter_module
 from service_orchestrator.modules.orchestrate.internal.pgrep_process_reaper import PgrepProcessReaper
 
@@ -253,3 +259,147 @@ def test_reap_descendants_term_before_sleep_before_kill(monkeypatch):
     kill_idx = next(i for i, (kind, val) in enumerate(events) if kind == "kill" and val == signal.SIGKILL)
 
     assert term_idx < sleep_idx < kill_idx
+
+
+# ---------------------------------------------------------------------------
+# reap_descendants — non-ProcessLookupError signal failures emit a warning
+# ---------------------------------------------------------------------------
+
+
+def test_reap_descendants_permission_error_sigterm_emits_warning(monkeypatch, caplog):
+    """PermissionError (EPERM) during SIGTERM is warned via logger, not silently swallowed.
+
+    The process survives because we cannot signal it (it was re-parented after
+    collection).  The reaper must emit a visible diagnostic rather than passing
+    silently, so operators know a stuck process may exist.
+    """
+
+    def fake_run(args, **kwargs):
+        pid_arg = args[2]
+        if pid_arg == "10":
+            return _pgrep_result(returncode=0, stdout="100\n")
+        return _pgrep_result(returncode=1, stdout="")
+
+    fake_subprocess = MagicMock()
+    fake_subprocess.run.side_effect = fake_run
+    monkeypatch.setattr(adapter_module, "subprocess", fake_subprocess)
+
+    permission_err = PermissionError(1, "Operation not permitted")
+
+    fake_os = MagicMock()
+    fake_os.kill.side_effect = permission_err
+    monkeypatch.setattr(adapter_module, "os", fake_os)
+
+    fake_time = MagicMock()
+    monkeypatch.setattr(adapter_module, "time", fake_time)
+
+    reaper = PgrepProcessReaper()
+    with caplog.at_level(logging.WARNING, logger=adapter_module.__name__):
+        reaper.reap_descendants([10])
+
+    assert any("100" in r.message and r.levelno == logging.WARNING for r in caplog.records)
+
+
+def test_reap_descendants_permission_error_sigkill_emits_warning(monkeypatch, caplog):
+    """PermissionError (EPERM) during SIGKILL phase is warned via logger.
+
+    The SIGTERM phase succeeds (ProcessLookupError, already dead); the
+    second-pass re-collection still finds pid 100; SIGKILL then raises EPERM.
+    The reaper must warn rather than silently pass.
+    """
+    call_count = {"n": 0}
+
+    def fake_run(args, **kwargs):
+        pid_arg = args[2]
+        if pid_arg == "10":
+            call_count["n"] += 1
+            return _pgrep_result(returncode=0, stdout="100\n")
+        return _pgrep_result(returncode=1, stdout="")
+
+    fake_subprocess = MagicMock()
+    fake_subprocess.run.side_effect = fake_run
+    monkeypatch.setattr(adapter_module, "subprocess", fake_subprocess)
+
+    # SIGTERM raises ProcessLookupError (already dead); SIGKILL raises PermissionError.
+    permission_err = PermissionError(1, "Operation not permitted")
+
+    def _kill(pid, sig):
+        if sig == signal.SIGTERM:
+            raise ProcessLookupError(3, "No such process")
+        raise permission_err
+
+    fake_os = MagicMock()
+    fake_os.kill.side_effect = _kill
+    monkeypatch.setattr(adapter_module, "os", fake_os)
+
+    fake_time = MagicMock()
+    monkeypatch.setattr(adapter_module, "time", fake_time)
+
+    reaper = PgrepProcessReaper()
+    with caplog.at_level(logging.WARNING, logger=adapter_module.__name__):
+        reaper.reap_descendants([10])
+
+    assert any("100" in r.message and r.levelno == logging.WARNING for r in caplog.records)
+
+
+def test_reap_descendants_process_lookup_error_not_warned(monkeypatch, caplog):
+    """ProcessLookupError (ESRCH) — process already exited — must NOT emit any warning.
+
+    This is the expected case: the process died on its own between the collection
+    snapshot and the signal call.  Emitting a warning here would be a false alarm.
+    """
+
+    def fake_run(args, **kwargs):
+        pid_arg = args[2]
+        if pid_arg == "10":
+            return _pgrep_result(returncode=0, stdout="100\n")
+        return _pgrep_result(returncode=1, stdout="")
+
+    fake_subprocess = MagicMock()
+    fake_subprocess.run.side_effect = fake_run
+    monkeypatch.setattr(adapter_module, "subprocess", fake_subprocess)
+
+    fake_os = MagicMock()
+    fake_os.kill.side_effect = ProcessLookupError(3, "No such process")
+    monkeypatch.setattr(adapter_module, "os", fake_os)
+
+    fake_time = MagicMock()
+    monkeypatch.setattr(adapter_module, "time", fake_time)
+
+    reaper = PgrepProcessReaper()
+    with caplog.at_level(logging.WARNING, logger=adapter_module.__name__):
+        reaper.reap_descendants([10])
+
+    # ProcessLookupError is silent — no warning log records expected.
+    assert not any(r.levelno >= logging.WARNING for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# _collect / descendants — missing pgrep binary raises OrchestratorError
+# ---------------------------------------------------------------------------
+
+
+def test_descendants_raises_orchestrator_error_when_pgrep_missing(monkeypatch):
+    """FileNotFoundError from subprocess.run (pgrep not on PATH) is wrapped into
+    OrchestratorError so the env_cli boundary can surface it as a user-facing error.
+    """
+    fake_subprocess = MagicMock()
+    fake_subprocess.run.side_effect = FileNotFoundError(2, "No such file or directory")
+    monkeypatch.setattr(adapter_module, "subprocess", fake_subprocess)
+
+    reaper = PgrepProcessReaper()
+    with pytest.raises(OrchestratorError, match="pgrep not found"):
+        reaper.descendants(100)
+
+
+def test_has_children_raises_orchestrator_error_when_pgrep_missing(monkeypatch):
+    """FileNotFoundError from subprocess.run in has_children is wrapped into
+    OrchestratorError, the same as in descendants/_collect.
+    """
+    fake_subprocess = MagicMock()
+    fake_subprocess.run.side_effect = FileNotFoundError(2, "No such file or directory")
+    monkeypatch.setattr(adapter_module, "subprocess", fake_subprocess)
+
+    reaper = PgrepProcessReaper()
+    with pytest.raises(OrchestratorError, match="pgrep not found"):
+        reaper.has_children(100)
