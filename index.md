@@ -124,7 +124,7 @@ cd alpha && ./up && ./status                               # exercise via the re
 ln -sfn ../.winter/ext/service-tmux/workflow/up alpha/up   # restore — always, even if the test failed
 ```
 
-Repeat per script you changed. **Restore is mandatory** — a left-over override silently makes every later service call in that env run worktree code. This is the service-orchestration case of the generic "verify against the real environment" guidance in `winter-harness:/workflows/feature-delivery.md`.
+Repeat per script you changed. **Restore is mandatory** — a left-over override silently makes every later service call in that env run worktree code.
 
 The shims (`workflow/up` etc.) are thin Python launchers that call `python3 -m service_orchestrator.env_cli <action>`. To run the package's unit tests directly, see the repo `CONTRIBUTING.md`.
 
