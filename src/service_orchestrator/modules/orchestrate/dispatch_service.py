@@ -169,65 +169,85 @@ class DispatchService:
 
     # ------------------------------------------------------------------
     # status
+    #
+    # The winter service entrypoint always emits a single env-keyed JSON
+    # document (``{"envs": [...]}``) aggregated across every env in scope, so
+    # these methods *collect* per-env document fragments and return them rather
+    # than rendering — ``cli.py`` serialises the aggregate once.  rc folds
+    # last-non-zero-wins over build failures and per-env OrchestratorErrors;
+    # a successful status is always rc 0 (rendering never fails here).
     # ------------------------------------------------------------------
 
-    def status_all_envs(
-        self,
-        envs: list[str],
-        workspace_root: Path | None,
-        *,
-        json_output: bool = False,
-        current_rc: int = 0,
-    ) -> int:
-        """Call status for every env in *envs*.  Folds exit codes last-non-zero-wins."""
-
-        def _invoke(ctx: SessionContext, env: str, svc_names: list[str]) -> int:
-            return self._orchestrator.status(ctx, json_output=json_output)
-
-        return self._run_for_target(
-            {env: [] for env in envs},
-            workspace_root,
-            _invoke,
-            current_rc=current_rc,
-        )
-
-    def status_env_services(
+    def _collect_for_target(
         self,
         env_services: dict[str, list[str]],
         workspace_root: Path | None,
         *,
-        json_output: bool = False,
         current_rc: int = 0,
-    ) -> int:
-        """Call status for each env → [services] mapping.  Folds last-non-zero-wins."""
+    ) -> tuple[list[dict], int]:  # type: ignore[type-arg]
+        """Build a per-env status document for each (env, svc_names) pair.
 
-        def _invoke(ctx: SessionContext, env: str, svc_names: list[str]) -> int:
-            return self._orchestrator.status(
-                ctx,
-                services=tuple(svc_names),
-                json_output=json_output,
-            )
+        Builds ctx per env (folding build_rc and continuing on failure), then
+        calls ``orchestrator.status_env_document``.  Collects the returned
+        dicts in iteration order; catches ``OrchestratorError`` per env (rc=1,
+        env omitted from the output).
+        """
+        rc = current_rc
+        docs: list[dict] = []  # type: ignore[type-arg]
+        for env, svc_names in env_services.items():
+            ctx, build_rc = self._build_ctx(env, workspace_root)
+            if ctx is None:
+                rc = build_rc
+                continue
+            try:
+                docs.append(self._orchestrator.status_env_document(ctx, services=tuple(svc_names)))
+            except OrchestratorError as exc:
+                print(f"orchestrate: env '{env}': {exc}", file=self._err)
+                rc = 1
+        return docs, rc
 
-        return self._run_for_target(env_services, workspace_root, _invoke, current_rc=current_rc)
+    def collect_status_all_envs(
+        self,
+        envs: list[str],
+        workspace_root: Path | None,
+        *,
+        current_rc: int = 0,
+    ) -> tuple[list[dict], int]:  # type: ignore[type-arg]
+        """Collect a status document for every env in *envs*."""
+        return self._collect_for_target(
+            {env: [] for env in envs},
+            workspace_root,
+            current_rc=current_rc,
+        )
 
-    def status_workspace(
+    def collect_status_env_services(
+        self,
+        env_services: dict[str, list[str]],
+        workspace_root: Path | None,
+        *,
+        current_rc: int = 0,
+    ) -> tuple[list[dict], int]:  # type: ignore[type-arg]
+        """Collect a status document for each env → [services] mapping."""
+        return self._collect_for_target(env_services, workspace_root, current_rc=current_rc)
+
+    def collect_status_workspace(
         self,
         selector: SelectorService,
         workspace_pats: list[str],
         workspace_root: Path | None,
         action: str,
         *,
-        json_output: bool = False,
         current_rc: int = 0,
-    ) -> int:
-        """Handle status for workspace-scoped patterns.
+    ) -> tuple[list[dict], int]:  # type: ignore[type-arg]
+        """Collect the workspace-scope status document for workspace patterns.
 
         Builds the workspace context once, expands svc-globs against workspace
-        services, and calls orchestrator.status with the matched subset.
+        services, and calls ``orchestrator.status_env_document`` with the
+        matched subset.  Returns ``([], 1)`` on a dead pattern.
         """
         ctx, build_rc = self._build_workspace_ctx(workspace_root, action)
         if ctx is None:
-            return build_rc
+            return [], build_rc
 
         all_ws_names = [svc.name for svc in ctx.services]
         matched, dead = selector.expand_workspace_patterns(workspace_pats, all_ws_names)
@@ -238,21 +258,21 @@ class DispatchService:
                     f"orchestrate: {action}: pattern '{pat}' matched no services",
                     file=self._err,
                 )
-            return 1
+            return [], 1
 
         rc = current_rc
+        docs: list[dict] = []  # type: ignore[type-arg]
         try:
-            result = self._orchestrator.status(
-                ctx,
-                services=tuple(matched) if matched else (),
-                json_output=json_output,
+            docs.append(
+                self._orchestrator.status_env_document(
+                    ctx,
+                    services=tuple(matched) if matched else (),
+                )
             )
-            if result != 0:
-                rc = result
         except OrchestratorError as exc:
             print(f"orchestrate: {action}: workspace: {exc}", file=self._err)
             rc = 1
-        return rc
+        return docs, rc
 
     # ------------------------------------------------------------------
     # restart

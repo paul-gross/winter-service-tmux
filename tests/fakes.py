@@ -69,15 +69,18 @@ class FakeOrchestrator:
         self.down_calls.append(ctx)
         return self._service_rc
 
-    def status(
-        self,
-        ctx: SessionContext,
-        services: tuple[str, ...] = (),
-        *,
-        json_output: bool = False,
-    ) -> int:
+    def status(self, ctx: SessionContext, services: tuple[str, ...] = ()) -> int:
         self.status_calls.append((ctx, services))
         return self._service_rc
+
+    def status_env_document(self, ctx: SessionContext, services: tuple[str, ...] = ()) -> dict:  # type: ignore[type-arg]
+        self.status_calls.append((ctx, services))
+        return {
+            "env": ctx.env,
+            "session": ctx.session,
+            "port_base": None,
+            "services": [],
+        }
 
     def restart(self, ctx: SessionContext, service_name: str) -> int:
         self.restart_calls.append((ctx, service_name))

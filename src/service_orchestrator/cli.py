@@ -30,6 +30,7 @@ exit code, as required by the contract.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -44,24 +45,27 @@ from service_orchestrator.modules.orchestrate.session_context_builder import (
     WORKSPACE_TARGET,
     build_for_target,
 )
+from service_orchestrator.modules.orchestrate.status_report import build_status_document
 
 
-def _run_status(
+def _collect_status_docs(
     container: Container,
     patterns: list[str],
     workspace_root: Path | None,
-    json_output: bool,
-) -> int:
-    """Handle status action: 0 or more patterns."""
+) -> tuple[list[dict], int]:  # type: ignore[type-arg]
+    """Collect per-env status document fragments for the requested *patterns*.
+
+    Returns ``(env_docs, rc)``.  Diagnostics go to stderr; the caller owns
+    serialising the aggregate document to stdout exactly once.
+    """
     selector = container.selector
     dispatch = container.dispatch
 
     if not patterns:
-        # 0 patterns → status all running envs
+        # 0 patterns → status all running envs.
         sessions = container.tmux.list_sessions()
         if not sessions:
-            print("No running sessions.")
-            return 0
+            return [], 0
 
         # Derive prefix from the first session to enumerate envs.
         # Prefer a non-workspace seed for prefix resolution (workspace ctx
@@ -80,28 +84,27 @@ def _run_status(
             )
         except Exception as exc:
             print(f"orchestrate: could not read manifest: {exc}", file=sys.stderr)
-            return 1
+            return [], 1
 
         prefix = seed_ctx.session_prefix
         envs = running_envs(container.tmux, prefix)
-        return dispatch.status_all_envs(envs, workspace_root, json_output=json_output)
+        return dispatch.collect_status_all_envs(envs, workspace_root)
 
     # N patterns → split workspace vs env patterns.
     workspace_pats, env_pats = selector.split_workspace_patterns(patterns)
 
+    docs: list[dict] = []  # type: ignore[type-arg]
     rc = 0
 
     if workspace_pats:
-        rc = dispatch.status_workspace(
+        ws_docs, rc = dispatch.collect_status_workspace(
             selector,
             workspace_pats,
             workspace_root,
             "status",
-            json_output=json_output,
             current_rc=rc,
         )
-        if rc != 0 and not env_pats:
-            return rc
+        docs.extend(ws_docs)
 
     if env_pats:
         manifest_info = selector.read_manifest_context(env_pats, workspace_root)
@@ -111,7 +114,7 @@ def _run_status(
                     f"orchestrate: status: pattern '{pat}' matched no services",
                     file=sys.stderr,
                 )
-            return 1
+            return docs, 1
 
         prefix, services_list = manifest_info
         env_services, dead_patterns = selector.expand_env_patterns(env_pats, services_list, prefix, workspace_root)
@@ -122,10 +125,30 @@ def _run_status(
                     f"orchestrate: status: pattern '{pat}' matched no services",
                     file=sys.stderr,
                 )
-            return 1
+            return docs, 1
 
-        rc = dispatch.status_env_services(env_services, workspace_root, json_output=json_output, current_rc=rc)
+        env_docs, rc = dispatch.collect_status_env_services(env_services, workspace_root, current_rc=rc)
+        docs.extend(env_docs)
 
+    return docs, rc
+
+
+def _run_status(
+    container: Container,
+    patterns: list[str],
+    workspace_root: Path | None,
+) -> int:
+    """Handle status action: 0 or more patterns.
+
+    Per the winter ``status`` wire contract, the orchestrator **always** emits
+    a single schema-valid env-keyed JSON document on stdout — unconditionally,
+    regardless of any flag — aggregating every env in scope.  Winter owns
+    rendering (human table by default, raw JSON under ``--json``).  Diagnostics
+    are written to stderr; only the JSON document reaches stdout.
+    """
+    docs, rc = _collect_status_docs(container, patterns, workspace_root)
+    sys.stdout.write(json.dumps(build_status_document(docs), ensure_ascii=False) + "\n")
+    sys.stdout.flush()
     return rc
 
 
@@ -246,8 +269,7 @@ def main(argv: list[str]) -> int:
     # status: 0 or more patterns
     # ------------------------------------------------------------------
     if action == "status":
-        json_output = os.environ.get("WINTER_STATUS_JSON") == "1"
-        return _run_status(container, request.patterns, workspace_root, json_output)
+        return _run_status(container, request.patterns, workspace_root)
 
     # ------------------------------------------------------------------
     # restart: 1 or more patterns required

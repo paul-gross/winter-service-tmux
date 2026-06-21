@@ -8,7 +8,6 @@ delegated to the injected Protocol seams.
 
 from __future__ import annotations
 
-import json
 import os
 import sys
 from typing import IO
@@ -22,8 +21,9 @@ from service_orchestrator.modules.orchestrate.log_repository import ILogReposito
 from service_orchestrator.modules.orchestrate.reaper import IProcessReaper
 from service_orchestrator.modules.orchestrate.session_context import SessionContext
 from service_orchestrator.modules.orchestrate.status_report import (
+    build_env_status,
     build_launch_line,
-    build_status_json,
+    build_service_status,
     last_non_blank_line,
     truncate_status_line,
 )
@@ -205,8 +205,83 @@ class OrchestratorService:
         self._stdout.flush()
         return 0
 
-    def status(self, ctx: SessionContext, services: tuple[str, ...] = (), *, json_output: bool = False) -> int:
-        """Print service status for *ctx.env*.
+    def status_env_document(self, ctx: SessionContext, services: tuple[str, ...] = ()) -> dict:  # type: ignore[type-arg]
+        """Build winter's per-env status object for *ctx.env* — no output.
+
+        Returns the env-scoped fragment of winter's env-keyed ``status``
+        document (see the ``status`` wire contract in winter's
+        ``ai/winter-cli/usage/service.md``).  The winter service entrypoint
+        (``cli.py``) aggregates one of these per env into the top-level
+        ``{"envs": [...]}`` document and serialises it once; this method writes
+        nothing to stdout.
+
+        Service ``state`` is derived from live tmux panes: ``"running"`` when
+        the pane has child processes, ``"stopped"`` when it has none, and
+        ``"stopped"`` when the pane is absent or the session is not running (a
+        declared-but-unstarted service reads as stopped, not unknown).
+        ``handle`` is the pane address (``<session>:<window>.<pane>``) when a
+        live pane backs the service, else ``None``.  ``log_path`` is the
+        captured-log path for file-logged services (resolvable from the
+        manifest regardless of whether the session is up), else ``None``.
+        ``health``/``ports``/``since`` are unpopulated per the shape-stability
+        rule (no probe/port tracking in tmux yet).
+
+        Args:
+            ctx: The resolved environment context.
+            services: Optional tuple of service names to include.  Empty tuple
+                (the default) includes every service declared in the manifest.
+        """
+        in_scope = ctx.services
+        if services:
+            requested = set(services)
+            in_scope = tuple(s for s in in_scope if s.name in requested)
+
+        session_running = self._tmux.has_session(ctx.session)
+        pane_map: dict[str, int] = {}
+        if session_running:
+            pane_map = {p.target: p.pid for p in self._tmux.list_panes(ctx.session)}
+
+        svc_docs: list[dict] = []  # type: ignore[type-arg]
+        for svc in in_scope:
+            target = f"{svc.target.window}.{svc.target.pane}"
+            if target in pane_map:
+                running = self._reaper.has_children(pane_map[target])
+                state = "running" if running else "stopped"
+                handle: str | None = f"{ctx.session}:{target}"
+            else:
+                state = "stopped"
+                handle = None
+
+            captured = bool(svc.command) and svc.log == LogMode.FILE
+            log_path = str(self._log_repo.log_path(ctx.worktree_dir, svc.name)) if captured else None
+
+            svc_docs.append(build_service_status(svc.name, state, handle=handle, log_path=log_path))
+
+        return build_env_status(ctx.env, ctx.session, self._port_base(ctx), svc_docs)
+
+    @staticmethod
+    def _port_base(ctx: SessionContext) -> int | None:
+        """Resolve the env's port base from ``WINTER_PORT_BASE`` in the env file.
+
+        Returns ``None`` when unset or non-integer (e.g. the workspace scope,
+        which has no port base).
+        """
+        env_vars = ctx.env_vars or {}
+        raw = env_vars.get("WINTER_PORT_BASE")
+        if raw is None:
+            return None
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return None
+
+    def status(self, ctx: SessionContext, services: tuple[str, ...] = ()) -> int:
+        """Print human-readable service status for *ctx.env*.
+
+        This is the direct-human entrypoint used by the env-root ``./status``
+        door (``env_cli.py``).  The winter service entrypoint (``cli.py``) does
+        NOT render here — it calls ``status_env_document`` and lets winter own
+        the table/JSON rendering.
 
         Renders the manifest's declarative status URLs as a header (with
         ``${VAR}`` placeholders interpolated against ``ctx.env_vars``), then
@@ -216,35 +291,10 @@ class OrchestratorService:
             ctx: The resolved environment context.
             services: Optional tuple of service names to show.  Empty tuple
                 (the default) shows all services declared in the manifest.
-            json_output: Emit a JSON verdict object instead of human-readable
-                text (see below).
-
-        When *json_output* is ``True``, emits a single JSON object to stdout
-        instead of human-readable text::
-
-            {
-              "env": "alpha",
-              "session": "mp-alpha",
-              "running": true,
-              "services": [
-                {"name": "backend", "verdict": "running"},
-                {"name": "frontend", "verdict": "stopped"},
-                {"name": "shell", "verdict": "missing"}
-              ]
-            }
-
-        ``verdict`` is one of ``"running"``, ``"stopped"``, or ``"missing"``.
-        ``running`` at the top level is ``true`` iff the tmux session exists.
-        The *services* filter applies to both output modes.
         """
         if not self._tmux.has_session(ctx.session):
-            if json_output:
-                doc = build_status_json(ctx.env, ctx.session, session_running=False, services=[])
-                self._stdout.write(json.dumps(doc, ensure_ascii=False) + "\n")
-                self._stdout.flush()
-            else:
-                self._stdout.write(f"No {ctx.session} session running.\n")
-                self._stdout.flush()
+            self._stdout.write(f"No {ctx.session} session running.\n")
+            self._stdout.flush()
             return 0
 
         pane_infos = self._tmux.list_panes(ctx.session)
@@ -254,21 +304,6 @@ class OrchestratorService:
         if services:
             requested = set(services)
             in_scope = tuple(s for s in in_scope if s.name in requested)
-
-        if json_output:
-            svc_verdicts: list[dict[str, str]] = []
-            for svc in in_scope:
-                target = f"{svc.target.window}.{svc.target.pane}"
-                if target not in pane_map:
-                    verdict = "missing"
-                else:
-                    pane_pid = pane_map[target]
-                    verdict = "running" if self._reaper.has_children(pane_pid) else "stopped"
-                svc_verdicts.append({"name": svc.name, "verdict": verdict})
-            doc = build_status_json(ctx.env, ctx.session, session_running=True, services=svc_verdicts)
-            self._stdout.write(json.dumps(doc, ensure_ascii=False) + "\n")
-            self._stdout.flush()
-            return 0
 
         self._stdout.write(f"=== {ctx.env} ===\n")
 

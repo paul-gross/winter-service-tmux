@@ -15,7 +15,10 @@ from pathlib import Path
 import pytest
 
 from service_orchestrator.modules.orchestrate.status_report import (
+    build_env_status,
     build_launch_line,
+    build_service_status,
+    build_status_document,
     last_non_blank_line,
     logwriter_path,
     truncate_status_line,
@@ -244,3 +247,48 @@ def test_truncate_status_line_empty() -> None:
 
 def test_truncate_status_line_custom_width() -> None:
     assert truncate_status_line("abcde", width=3) == "abc"
+
+
+# ---------------------------------------------------------------------------
+# winter status document builders — shape stability
+# ---------------------------------------------------------------------------
+
+
+def test_build_service_status_is_shape_stable() -> None:
+    svc = build_service_status("api", "running", handle="mp-alpha:0.0", log_path="/abs/api.log")
+    assert svc == {
+        "name": "api",
+        "state": "running",
+        "health": "unknown",
+        "ports": [],
+        "handle": "mp-alpha:0.0",
+        "log_path": "/abs/api.log",
+        "since": None,
+    }
+
+
+def test_build_service_status_null_handle_and_log_path() -> None:
+    svc = build_service_status("api", "stopped", handle=None, log_path=None)
+    assert svc["handle"] is None
+    assert svc["log_path"] is None
+    assert svc["ports"] == []
+    assert svc["since"] is None
+
+
+def test_build_env_status_carries_session_and_port_base() -> None:
+    env = build_env_status("alpha", "mp-alpha", 4020, [])
+    assert env == {"env": "alpha", "session": "mp-alpha", "port_base": 4020, "services": []}
+
+
+def test_build_env_status_null_port_base() -> None:
+    env = build_env_status("workspace", "mp-workspace", None, [])
+    assert env["port_base"] is None
+
+
+def test_build_status_document_wraps_env_list() -> None:
+    env = build_env_status("alpha", "mp-alpha", 4020, [])
+    assert build_status_document([env]) == {"envs": [env]}
+
+
+def test_build_status_document_empty_is_valid() -> None:
+    assert build_status_document([]) == {"envs": []}

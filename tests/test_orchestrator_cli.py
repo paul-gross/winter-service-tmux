@@ -28,6 +28,7 @@ from service_manifest.modules.manifest.errors import ManifestError
 from service_manifest.modules.manifest.model import Service, ServiceManifest, Target
 from service_orchestrator.cli import main
 from service_orchestrator.modules.orchestrate.dispatch_service import DispatchService
+from service_orchestrator.modules.orchestrate.errors import OrchestratorError
 from service_orchestrator.modules.orchestrate.log_query import LogQuery
 from service_orchestrator.modules.orchestrate.selector_service import SelectorService
 from service_orchestrator.modules.orchestrate.session_context import SessionContext
@@ -657,16 +658,64 @@ def test_main_no_winter_workspace_dir_passes_none_for_up(
 
 
 # ---------------------------------------------------------------------------
-# Exit-code passthrough for status
+# status entrypoint always emits a single env-keyed JSON document on stdout
 # ---------------------------------------------------------------------------
 
 
-def test_main_status_passthrough_nonzero(
+def test_main_status_emits_envs_document(
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    _install(monkeypatch, _FakeContainer(sessions=["mp-alpha"], service_rc=1))
+    """The status entrypoint emits exactly one ``{"envs": [...]}`` document on
+    stdout, aggregating every env in scope, regardless of any flag."""
+    import json
+
+    _install(monkeypatch, _FakeContainer(sessions=["mp-alpha", "mp-beta"]))
+    rc = main(["status"])
+    assert rc == 0
+
+    out_lines = [ln for ln in capsys.readouterr().out.splitlines() if ln.strip()]
+    assert len(out_lines) == 1
+    doc = json.loads(out_lines[0])
+    assert [e["env"] for e in doc["envs"]] == ["alpha", "beta"]
+
+
+def test_main_status_no_sessions_emits_empty_envs_document(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """No running sessions → a valid, non-error ``{"envs": []}`` document, rc 0."""
+    import json
+
+    _install(monkeypatch, _FakeContainer(sessions=[]))
+    rc = main(["status"])
+    assert rc == 0
+    doc = json.loads(capsys.readouterr().out)
+    assert doc == {"envs": []}
+
+
+def test_main_status_orchestrator_error_folds_rc_but_still_emits_document(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An OrchestratorError while collecting a doc folds rc=1, yet stdout still
+    carries a conformant document (winter never hits graceful degradation)."""
+    import json
+
+    fake = _install(monkeypatch, _FakeContainer(sessions=["mp-alpha"]))
+
+    def _raise(ctx: SessionContext, services: tuple[str, ...] = ()) -> dict:
+        raise OrchestratorError("session gone")
+
+    fake.orchestrator.status_env_document = _raise  # type: ignore[method-assign]
+
     rc = main(["status", "alpha/backend"])
     assert rc == 1
+
+    captured = capsys.readouterr()
+    doc = json.loads(captured.out)
+    assert doc == {"envs": []}
+    assert "session gone" in captured.err
 
 
 # ---------------------------------------------------------------------------

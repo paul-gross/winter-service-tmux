@@ -1140,57 +1140,56 @@ def test_segments_to_prune_skips_vanished_segment() -> None:
 
 
 # ---------------------------------------------------------------------------
-# status --json — structured per-service verdict
+# status_env_document — winter's env-keyed status fragment
 # ---------------------------------------------------------------------------
 
 
-def test_status_json_session_not_running() -> None:
-    """When no session exists, JSON output has running=false and empty services."""
-    import json
+def test_status_env_document_session_not_running() -> None:
+    """No session → every declared service is 'stopped' with no live handle.
 
+    The session name is still reported (a stable identity), and log_path is
+    still resolvable from the manifest even when nothing is running.
+    """
     tmux = FakeTmuxRepository()
     reaper = FakeProcessReaper()
     ctx = _make_ctx()
     out = io.StringIO()
     svc = _make_service(tmux=tmux, reaper=reaper, stdout=out)
 
-    result = svc.status(ctx, json_output=True)
+    doc = svc.status_env_document(ctx)
 
-    assert result == 0
-    doc = json.loads(out.getvalue())
     assert doc["env"] == "alpha"
     assert doc["session"] == "mp-alpha"
-    assert doc["running"] is False
-    assert doc["services"] == []
+    states = {s["name"]: s["state"] for s in doc["services"]}
+    assert states == {"backend": "stopped", "frontend": "stopped"}
+    handles = {s["name"]: s["handle"] for s in doc["services"]}
+    assert handles == {"backend": None, "frontend": None}
+    log_paths = {s["name"]: s["log_path"] for s in doc["services"]}
+    assert log_paths["backend"] == str(_WORKTREE / ".winter" / "logs" / "backend.log")
 
 
-def test_status_json_running_and_stopped_verdicts() -> None:
-    """JSON output includes per-service verdicts: 'running' when pane has children,
-    'stopped' when it does not, 'missing' when the pane is absent."""
-    import json
-
+def test_status_env_document_running_and_stopped_states() -> None:
+    """state='running' when the pane has children, 'stopped' when it does not;
+    handle is the live pane address."""
     tmux = FakeTmuxRepository()
-    # backend (0.0, pid=10) has children → running; frontend (0.1, pid=20) does not → stopped
+    # backend (0.0, pid=10) has children → running; frontend (0.1, pid=20) → stopped
     tmux.seed_session("mp-alpha", {"0.0": 10, "0.1": 20})
     reaper = FakeProcessReaper(children_set={10})  # only pid 10 has children
     ctx = _make_ctx()
     out = io.StringIO()
     svc = _make_service(tmux=tmux, reaper=reaper, stdout=out)
 
-    result = svc.status(ctx, json_output=True)
+    doc = svc.status_env_document(ctx)
 
-    assert result == 0
-    doc = json.loads(out.getvalue())
-    assert doc["running"] is True
-    verdicts = {s["name"]: s["verdict"] for s in doc["services"]}
-    assert verdicts["backend"] == "running"
-    assert verdicts["frontend"] == "stopped"
+    by_name = {s["name"]: s for s in doc["services"]}
+    assert by_name["backend"]["state"] == "running"
+    assert by_name["backend"]["handle"] == "mp-alpha:0.0"
+    assert by_name["frontend"]["state"] == "stopped"
+    assert by_name["frontend"]["handle"] == "mp-alpha:0.1"
 
 
-def test_status_json_missing_pane_verdict() -> None:
-    """A pane absent from the session reports verdict='missing' in JSON output."""
-    import json
-
+def test_status_env_document_missing_pane_is_stopped() -> None:
+    """A pane absent from a running session reports state='stopped', handle=None."""
     tmux = FakeTmuxRepository()
     # Only pane 0.0 present; manifest declares both 0.0 (backend) and 0.1 (frontend)
     tmux.seed_session("mp-alpha", {"0.0": 10})
@@ -1199,18 +1198,59 @@ def test_status_json_missing_pane_verdict() -> None:
     out = io.StringIO()
     svc = _make_service(tmux=tmux, reaper=reaper, stdout=out)
 
-    result = svc.status(ctx, json_output=True)
+    doc = svc.status_env_document(ctx)
 
-    assert result == 0
-    doc = json.loads(out.getvalue())
-    verdicts = {s["name"]: s["verdict"] for s in doc["services"]}
-    assert verdicts["frontend"] == "missing"
+    frontend = next(s for s in doc["services"] if s["name"] == "frontend")
+    assert frontend["state"] == "stopped"
+    assert frontend["handle"] is None
 
 
-def test_status_json_does_not_emit_human_text() -> None:
-    """json_output=True must not emit the human-readable header or service lines."""
-    import json
+def test_status_env_document_shape_stability() -> None:
+    """Every contract field is present; unknown enums/scalars use 'unknown'/null/[]."""
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 10, "0.1": 20})
+    reaper = FakeProcessReaper(children_set={10})
+    ctx = _make_ctx()
+    svc = _make_service(tmux=tmux, reaper=reaper, stdout=io.StringIO())
 
+    doc = svc.status_env_document(ctx)
+
+    assert set(doc.keys()) == {"env", "session", "port_base", "services"}
+    for s in doc["services"]:
+        assert set(s.keys()) == {"name", "state", "health", "ports", "handle", "log_path", "since"}
+        assert s["health"] == "unknown"
+        assert s["ports"] == []
+        assert s["since"] is None
+
+
+def test_status_env_document_port_base_from_env_vars() -> None:
+    """port_base is parsed from WINTER_PORT_BASE in the env vars; None when absent."""
+    tmux = FakeTmuxRepository()
+    reaper = FakeProcessReaper()
+    svc = _make_service(tmux=tmux, reaper=reaper, stdout=io.StringIO())
+
+    doc_with = svc.status_env_document(_make_ctx(env_vars={"WINTER_PORT_BASE": "4020"}))
+    assert doc_with["port_base"] == 4020
+
+    doc_without = svc.status_env_document(_make_ctx())
+    assert doc_without["port_base"] is None
+
+
+def test_status_env_document_services_filter() -> None:
+    """The services filter narrows the document to the requested names."""
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 10, "0.1": 20})
+    reaper = FakeProcessReaper(children_set={10})
+    ctx = _make_ctx()
+    svc = _make_service(tmux=tmux, reaper=reaper, stdout=io.StringIO())
+
+    doc = svc.status_env_document(ctx, services=("backend",))
+
+    assert [s["name"] for s in doc["services"]] == ["backend"]
+
+
+def test_status_env_document_writes_nothing_to_stdout() -> None:
+    """status_env_document is pure of stdout — the entrypoint serialises."""
     tmux = FakeTmuxRepository()
     tmux.seed_session("mp-alpha", {"0.0": 10, "0.1": 20})
     reaper = FakeProcessReaper()
@@ -1218,13 +1258,9 @@ def test_status_json_does_not_emit_human_text() -> None:
     out = io.StringIO()
     svc = _make_service(tmux=tmux, reaper=reaper, stdout=out)
 
-    svc.status(ctx, json_output=True)
+    svc.status_env_document(ctx)
 
-    # Must be parseable as exactly one JSON object — no stray human-readable text.
-    lines = [ln for ln in out.getvalue().splitlines() if ln.strip()]
-    assert len(lines) == 1
-    doc = json.loads(lines[0])
-    assert "env" in doc
+    assert out.getvalue() == ""
 
 
 # ---------------------------------------------------------------------------

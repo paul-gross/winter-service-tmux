@@ -254,7 +254,6 @@ def _handle_status(
 ) -> int:
     show_all = False
     patterns: list[str] = []
-    json_output = os.environ.get("WINTER_STATUS_JSON") == "1"
     for arg in argv:
         if arg in ("--all", "all"):
             show_all = True
@@ -282,7 +281,7 @@ def _handle_status(
     if not patterns:
         # No patterns — show all services in this env.
         try:
-            return container.orchestrator.status(ctx, json_output=json_output)
+            return container.orchestrator.status(ctx)
         except OrchestratorError as exc:
             print(f"status: env '{env}': {exc}", file=sys.stderr)
             return 1
@@ -303,7 +302,7 @@ def _handle_status(
                 matched.append(name)
 
     try:
-        return container.orchestrator.status(ctx, services=tuple(matched), json_output=json_output)
+        return container.orchestrator.status(ctx, services=tuple(matched))
     except OrchestratorError as exc:
         print(f"status: env '{env}': {exc}", file=sys.stderr)
         return 1

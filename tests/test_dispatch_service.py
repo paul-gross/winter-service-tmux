@@ -220,25 +220,24 @@ def test_down_workspace_routes_to_build_workspace() -> None:
 
 
 # ---------------------------------------------------------------------------
-# status_all_envs: rc aggregation, error handling
+# collect_status_all_envs: doc collection, rc aggregation, error handling
 # ---------------------------------------------------------------------------
 
 
-def test_status_all_envs_rc_passthrough() -> None:
-    svc, _b, _o, _ls, _err = _make_dispatch(service_rc=2)
-    rc = svc.status_all_envs(["alpha", "beta"], _WORKSPACE)
-    assert rc == 2
+def test_collect_status_all_envs_collects_one_doc_per_env() -> None:
+    svc, _b, _o, _ls, _err = _make_dispatch()
+    docs, rc = svc.collect_status_all_envs(["alpha", "beta"], _WORKSPACE)
+    assert rc == 0
     assert len(_o.status_calls) == 2
+    assert [d["env"] for d in docs] == ["alpha", "beta"]
 
 
-def test_status_all_envs_build_error_folds_rc() -> None:
-    """Build error for one env → rc=1, continues to next env."""
+def test_collect_status_all_envs_build_error_folds_rc() -> None:
+    """Build error for one env → rc=1, env omitted, continues to next env."""
     err = StringIO()
-    call_count = [0]
 
     class _FlakeyBuilder:
         def build(self, env: str, *, workspace_root=None) -> SessionContext:
-            call_count[0] += 1
             if env == "alpha":
                 raise OrchestratorError("session not found")
             return _make_ctx(env)
@@ -246,59 +245,60 @@ def test_status_all_envs_build_error_folds_rc() -> None:
         def build_workspace(self, *, workspace_root=None) -> SessionContext:
             return _make_workspace_ctx()
 
-    o = FakeOrchestrator(service_rc=0)
+    o = FakeOrchestrator()
     svc = DispatchService(builder=_FlakeyBuilder(), orchestrator=o, log_service=FakeLogService(), err_sink=err)  # type: ignore[arg-type]
-    rc = svc.status_all_envs(["alpha", "beta"], _WORKSPACE)
-    # alpha fails (rc=1), beta succeeds (rc stays at 1 — last-non-zero-wins)
+    docs, rc = svc.collect_status_all_envs(["alpha", "beta"], _WORKSPACE)
+    # alpha build fails (rc=1); beta still collected.
     assert rc == 1
-    assert len(o.status_calls) == 1  # only beta succeeded
+    assert [d["env"] for d in docs] == ["beta"]
+    assert len(o.status_calls) == 1  # only beta reached the orchestrator
     assert "alpha" in err.getvalue()
 
 
-def test_status_all_envs_last_nonzero_wins() -> None:
-    """RC follows last-non-zero-wins: if the last result is non-zero, that value wins."""
+def test_collect_status_all_envs_orchestrator_error_folds_rc_and_omits_env() -> None:
+    """OrchestratorError from one env → rc=1, that env omitted from docs."""
     err = StringIO()
 
-    class _VariableOrchestrator:
-        def __init__(self) -> None:
-            self._envs_seen: list[str] = []
+    class _ErrOnAlpha:
+        def status_env_document(self, ctx: SessionContext, services: tuple[str, ...] = ()) -> dict:
+            if ctx.env == "alpha":
+                raise OrchestratorError("session gone")
+            return {"env": ctx.env, "session": ctx.session, "port_base": None, "services": []}
 
-        def status(self, ctx: SessionContext, services: tuple[str, ...] = (), *, json_output: bool = False) -> int:
-            self._envs_seen.append(ctx.env)
-            # alpha → 1, beta → 2 (last-non-zero-wins should give 2)
-            return 1 if ctx.env == "alpha" else 2
-
-    o = _VariableOrchestrator()
-    svc = DispatchService(builder=_FakeBuilder(), orchestrator=o, log_service=FakeLogService(), err_sink=err)  # type: ignore[arg-type]
-    rc = svc.status_all_envs(["alpha", "beta"], _WORKSPACE)
-    assert rc == 2  # last non-zero is 2
+    svc = DispatchService(_FakeBuilder(), _ErrOnAlpha(), FakeLogService(), err)  # type: ignore[arg-type]
+    docs, rc = svc.collect_status_all_envs(["alpha", "beta"], _WORKSPACE)
+    assert rc == 1
+    assert [d["env"] for d in docs] == ["beta"]
+    assert "orchestrate: env 'alpha':" in err.getvalue()
 
 
 # ---------------------------------------------------------------------------
-# status_env_services: per-env service tuple passed through
+# collect_status_env_services: per-env service tuple passed through
 # ---------------------------------------------------------------------------
 
 
-def test_status_env_services_passes_svc_tuple() -> None:
+def test_collect_status_env_services_passes_svc_tuple() -> None:
     svc, _b, _o, _ls, _err = _make_dispatch()
-    rc = svc.status_env_services({"alpha": ["backend"]}, _WORKSPACE)
+    docs, rc = svc.collect_status_env_services({"alpha": ["backend"]}, _WORKSPACE)
     assert rc == 0
     assert len(_o.status_calls) == 1
     ctx, svcs = _o.status_calls[0]
     assert ctx.env == "alpha"
     assert svcs == ("backend",)
+    assert [d["env"] for d in docs] == ["alpha"]
 
 
-def test_status_env_services_orchestrator_error_prints_env_line() -> None:
+def test_collect_status_env_services_orchestrator_error_prints_env_line() -> None:
     err = StringIO()
 
     class _ErrOrchestrator:
-        def status(self, ctx: SessionContext, services: tuple[str, ...] = (), *, json_output: bool = False) -> int:
+        def status_env_document(self, ctx: SessionContext, services: tuple[str, ...] = ()) -> dict:
             raise OrchestratorError("session gone")
 
     svc = DispatchService(_FakeBuilder(), _ErrOrchestrator(), FakeLogService(), err)  # type: ignore[arg-type]
-    rc = svc.status_env_services({"alpha": ["backend"]}, _WORKSPACE)
+    docs, rc = svc.collect_status_env_services({"alpha": ["backend"]}, _WORKSPACE)
     assert rc == 1
+    assert docs == []
     assert "orchestrate: env 'alpha':" in err.getvalue()
 
 
@@ -341,16 +341,17 @@ def test_restart_env_services_orchestrator_error_prints_env_line() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_status_env_services_carries_workspace_rc() -> None:
+def test_collect_status_env_services_carries_workspace_rc() -> None:
     """Workspace stage returns non-zero; env stage all-zero → final rc = workspace rc.
 
-    This test FAILS before Fix 1 (status_env_services re-seeds rc=0 internally)
-    and PASSES after Fix 1 (current_rc parameter seeds rc instead).
+    The env stage must seed rc from ``current_rc`` (the workspace stage's rc)
+    rather than re-seeding rc=0 internally, so a workspace failure survives a
+    clean env stage.
     """
     svc, _b, _o, _ls, _err = _make_dispatch(service_rc=0)
     # Call with current_rc=3 (simulating workspace stage returning 3) and env stage
-    # returning 0 for every env.
-    rc = svc.status_env_services({"alpha": ["backend"]}, _WORKSPACE, current_rc=3)
+    # succeeding for every env.
+    _docs, rc = svc.collect_status_env_services({"alpha": ["backend"]}, _WORKSPACE, current_rc=3)
     assert rc == 3, f"Expected workspace rc=3 to be carried; got {rc}"
 
 
@@ -368,27 +369,29 @@ def test_restart_env_services_carries_workspace_rc() -> None:
 
 
 # ---------------------------------------------------------------------------
-# status_workspace: workspace routing
+# collect_status_workspace: workspace routing
 # ---------------------------------------------------------------------------
 
 
-def test_status_workspace_routes_build_workspace() -> None:
+def test_collect_status_workspace_routes_build_workspace() -> None:
     svc, _b, _o, _ls, _err = _make_dispatch()
     tmux = FakeTmuxRepository()
     selector = SelectorService(tmux, _b)  # type: ignore[arg-type]
-    rc = svc.status_workspace(selector, ["workspace"], _WORKSPACE, "status")
+    docs, rc = svc.collect_status_workspace(selector, ["workspace"], _WORKSPACE, "status")
     assert rc == 0
     assert len(_b.build_workspace_calls) == 1
     assert WORKSPACE_TARGET not in _b.build_calls
+    assert [d["env"] for d in docs] == [WORKSPACE_TARGET]
 
 
-def test_status_workspace_expands_svc_glob() -> None:
+def test_collect_status_workspace_expands_svc_glob() -> None:
     """workspace/ws-* expands against workspace services."""
     svc, _b, _o, _ls, _err = _make_dispatch()
     tmux = FakeTmuxRepository()
     selector = SelectorService(tmux, _b)  # type: ignore[arg-type]
-    rc = svc.status_workspace(selector, ["workspace/ws-*"], _WORKSPACE, "status")
+    docs, rc = svc.collect_status_workspace(selector, ["workspace/ws-*"], _WORKSPACE, "status")
     assert rc == 0
+    assert len(docs) == 1
     assert len(_o.status_calls) == 1
     _, svcs = _o.status_calls[0]
     assert "ws-backend" in svcs
@@ -397,12 +400,13 @@ def test_status_workspace_expands_svc_glob() -> None:
     assert "backend" not in svcs
 
 
-def test_status_workspace_dead_pattern_returns_1() -> None:
+def test_collect_status_workspace_dead_pattern_returns_1() -> None:
     svc, _b, _o, _ls, _err = _make_dispatch()
     tmux = FakeTmuxRepository()
     selector = SelectorService(tmux, _b)  # type: ignore[arg-type]
-    rc = svc.status_workspace(selector, ["workspace/nonexistent"], _WORKSPACE, "status")
+    docs, rc = svc.collect_status_workspace(selector, ["workspace/nonexistent"], _WORKSPACE, "status")
     assert rc == 1
+    assert docs == []
     msg = _err.getvalue()
     assert "workspace/nonexistent" in msg
 

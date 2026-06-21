@@ -93,34 +93,65 @@ def build_launch_line(
     return line
 
 
-def build_status_json(
-    env: str,
-    session: str,
+def build_service_status(
+    name: str,
+    state: str,
     *,
-    session_running: bool,
-    services: list[dict[str, str]],
+    handle: str | None,
+    log_path: str | None,
 ) -> dict:  # type: ignore[type-arg]
-    """Build the structured JSON status document for one env.
+    """Build one service entry for winter's env-keyed status document.
 
-    Returns a plain dict suitable for ``json.dumps``.  Shape::
+    Shape-stable per the winter ``status`` wire contract: every field is always
+    present.  ``health`` is always ``"unknown"`` — the tmux orchestrator has no
+    probe support yet — and ``ports``/``since`` are likewise unpopulated (``[]``
+    / ``None``) because tmux does not track them.
 
-        {
-          "env": "<env>",
-          "session": "<session>",
-          "running": <bool>,
-          "services": [{"name": "<svc>", "verdict": "running|stopped|missing"}, ...]
-        }
+    Args:
+        name: Service name.
+        state: One of ``"running"`` | ``"stopped"`` | ``"unknown"``.
+        handle: The tmux pane address (``<session>:<window>.<pane>``) or
+            ``None`` when no live pane backs the service.
+        log_path: Absolute path to the captured log file, or ``None`` when the
+            service is not file-logged.
+    """
+    return {
+        "name": name,
+        "state": state,
+        "health": "unknown",
+        "ports": [],
+        "handle": handle,
+        "log_path": log_path,
+        "since": None,
+    }
 
-    *services* is a list of ``{"name": ..., "verdict": ...}`` dicts assembled
-    by the caller (``OrchestratorService.status``).  When the session is not
-    running the list is empty.
+
+def build_env_status(
+    env: str,
+    session: str | None,
+    port_base: int | None,
+    services: list[dict],  # type: ignore[type-arg]
+) -> dict:  # type: ignore[type-arg]
+    """Build one env's entry in winter's env-keyed status document.
+
+    ``session``/``port_base`` are ``None`` when undeterminable, per the
+    shape-stability rule.
     """
     return {
         "env": env,
         "session": session,
-        "running": session_running,
+        "port_base": port_base,
         "services": services,
     }
+
+
+def build_status_document(env_docs: list[dict]) -> dict:  # type: ignore[type-arg]
+    """Build the top-level env-keyed status document: ``{"envs": [...]}``.
+
+    An empty *env_docs* yields ``{"envs": []}``, a valid non-error document
+    (no services currently visible).
+    """
+    return {"envs": env_docs}
 
 
 def last_non_blank_line(text: str) -> str:
