@@ -41,11 +41,27 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
 from service_manifest.container import Container
 from service_manifest.modules.manifest.errors import ManifestError
+
+_EXT_CONFIG_DIR_VAR = "WINTER_EXT_CONFIG_DIR"
+_EXT_FALLBACK_SUBPATH = Path(".winter") / "config" / "winter-service-tmux"
+
+
+def _resolve_config_dir(workspace_dir: Path) -> Path:
+    """Resolve the extension config directory.
+
+    Returns ``WINTER_EXT_CONFIG_DIR`` when set; otherwise the fallback
+    ``<workspace_dir>/.winter/config/winter-service-tmux``.
+    """
+    env_val = os.environ.get(_EXT_CONFIG_DIR_VAR)
+    if env_val:
+        return Path(env_val)
+    return workspace_dir / _EXT_FALLBACK_SUBPATH
 
 
 def _validate(workspace_dir: Path, *, use_json: bool) -> int:
@@ -56,9 +72,10 @@ def _validate(workspace_dir: Path, *, use_json: bool) -> int:
     only place in the package that catches it.
     """
     container = Container()
+    config_dir = _resolve_config_dir(workspace_dir)
 
     try:
-        manifest = container.manifest_reader.read(workspace_dir)
+        manifest = container.manifest_reader.read(config_dir)
     except ManifestError as exc:
         if use_json:
             print(json.dumps({"ok": False, "violations": [f"read error: {exc}"]}))
@@ -92,7 +109,7 @@ def main(argv: list[str] | None = None) -> None:
     """CLI entry point.  Parses *argv* (defaults to ``sys.argv[1:]``) and exits."""
     parser = argparse.ArgumentParser(
         prog="python -m service_manifest.cli",
-        description="Validate a winter-service-tmux manifest (setup-tmux.toml).",
+        description="Validate a winter-service-tmux manifest (config.toml).",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -103,7 +120,11 @@ def main(argv: list[str] | None = None) -> None:
     validate_parser.add_argument(
         "workspace_dir",
         metavar="WORKSPACE_DIR",
-        help="Path to the workspace or worktree root containing ai/project/setup-tmux.toml.",
+        help=(
+            "Path to the workspace root. The manifest is read from "
+            "WINTER_EXT_CONFIG_DIR (when set) or "
+            "<WORKSPACE_DIR>/.winter/config/winter-service-tmux/config.toml."
+        ),
     )
     validate_parser.add_argument(
         "--json",

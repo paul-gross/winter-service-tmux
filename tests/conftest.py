@@ -195,17 +195,22 @@ class FakeWorkspaceLocator:
     """In-memory IWorkspaceLocator.
 
     Returns the supplied *root* from ``workspace_root()``; ``worktree_dir``
-    joins the env name under *root*.
+    joins the env name under *root*.  ``config_dir`` returns *config_dir* when
+    supplied, otherwise ``<root>/.winter/config/winter-service-tmux``.
     """
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, config_dir: Path | None = None) -> None:
         self._root = root
+        self._config_dir = config_dir if config_dir is not None else root / ".winter" / "config" / "winter-service-tmux"
 
     def workspace_root(self) -> Path:
         return self._root
 
     def worktree_dir(self, env: str) -> Path:
         return self._root / env
+
+    def config_dir(self) -> Path:
+        return self._config_dir
 
 
 def _conforms_fake_workspace_locator(x: FakeWorkspaceLocator) -> IWorkspaceLocator:

@@ -29,6 +29,7 @@ from tests.conftest import FakeFollowClock, FakeLogRepository, FakeTmuxRepositor
 # ---------------------------------------------------------------------------
 
 _WORKSPACE = Path("/fake/workspace")
+_CONFIG_DIR = _WORKSPACE / ".winter" / "config" / "winter-service-tmux"
 _WORKTREE = _WORKSPACE / "alpha"
 
 
@@ -50,6 +51,7 @@ def _make_ctx(manifest: ServiceManifest) -> SessionContext:
         env="alpha",
         workspace_root=_WORKSPACE,
         worktree_dir=_WORKTREE,
+        config_dir=_CONFIG_DIR,
         session_prefix=manifest.session_prefix,
         services=manifest.services,
         layout_hook=manifest.layout_hook,
@@ -883,6 +885,7 @@ def _make_ctx_env(env: str, manifest: ServiceManifest) -> SessionContext:
         env=env,
         workspace_root=Path("/fake/workspace"),
         worktree_dir=worktree,
+        config_dir=_CONFIG_DIR,
         session_prefix=manifest.session_prefix,
         services=manifest.services,
         layout_hook=manifest.layout_hook,

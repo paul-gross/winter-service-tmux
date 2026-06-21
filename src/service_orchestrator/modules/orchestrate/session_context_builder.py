@@ -5,8 +5,10 @@ Both ``cli.py`` (name-addressed) and ``env_cli.py`` (env-root symlink) call
 file → compute session.  Factoring this here keeps both doors thin and the
 logic testable in isolation.
 
-Resolution decisions (see ``00-plan.md`` resolved decisions #1, #2):
-- Manifest is always read from the **workspace root** (single shared config).
+Resolution decisions (see ``00-plan.md`` resolved decisions #1, #2, R1):
+- Manifest is read from the **config dir** (``locator.config_dir()``).
+- ``layout_hook`` / ``workspace_layout_hook`` are resolved relative to the
+  **config dir** — they are bare filenames in the manifest.
 - Env file path is resolved relative to the **worktree dir** (per-env file).
 - ``env_vars=None`` / ``env_file_path=None`` are the "local" mode signals.
 """
@@ -69,8 +71,9 @@ class SessionContextBuilder:
                 (the "local" mode used by ``env_cli.py``).
         """
         ws_root = workspace_root if workspace_root is not None else self._locator.workspace_root()
+        cfg_dir = self._locator.config_dir()
         worktree_dir = ws_root / env
-        manifest = self._manifest_reader.read(ws_root)
+        manifest = self._manifest_reader.read(cfg_dir)
 
         if skip_env_file:
             env_file_path: Path | None = None
@@ -87,6 +90,7 @@ class SessionContextBuilder:
             env=env,
             workspace_root=ws_root,
             worktree_dir=worktree_dir,
+            config_dir=cfg_dir,
             session_prefix=manifest.session_prefix,
             services=manifest.services,
             layout_hook=manifest.layout_hook,
@@ -116,11 +120,13 @@ class SessionContextBuilder:
         (``env_vars=None``, ``env_file_path=None``).
         """
         ws_root = workspace_root if workspace_root is not None else self._locator.workspace_root()
-        manifest = self._manifest_reader.read(ws_root)
+        cfg_dir = self._locator.config_dir()
+        manifest = self._manifest_reader.read(cfg_dir)
         return SessionContext(
             env=WORKSPACE_TARGET,
             workspace_root=ws_root,
             worktree_dir=ws_root,
+            config_dir=cfg_dir,
             session_prefix=manifest.session_prefix,
             services=manifest.workspace_services,
             layout_hook=manifest.workspace_layout_hook,

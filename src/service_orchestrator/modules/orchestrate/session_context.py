@@ -35,11 +35,15 @@ class SessionContext:
         worktree_dir: Absolute path to the directory the session runs in — the
             per-env worktree (``workspace_root / env``) for a feature env, or
             ``workspace_root`` itself for the workspace session.
+        config_dir: Absolute path to the extension config directory containing
+            ``config.toml`` and (optionally) ``config.local.toml``.  Also used
+            to resolve ``layout_hook`` and ``workspace_layout_hook`` — those
+            values are bare filenames relative to this directory.
         session_prefix: Tmux session-name prefix; the session is
             ``<session_prefix>-<env>``.
         services: The services to run in this session, in declaration order.
-        layout_hook: Optional bash layout hook for this session (relative to the
-            workspace root), or ``None``.
+        layout_hook: Optional bash layout hook for this session (bare filename,
+            resolved relative to ``config_dir``), or ``None``.
         status_urls: Status-header URLs for this session (empty for the
             workspace session).
         logs: Log-capture configuration.
@@ -52,6 +56,7 @@ class SessionContext:
     env: str
     workspace_root: Path
     worktree_dir: Path
+    config_dir: Path
     session_prefix: str
     services: tuple[Service, ...]
     layout_hook: str | None

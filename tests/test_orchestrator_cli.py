@@ -36,6 +36,7 @@ from service_orchestrator.modules.orchestrate.session_context_builder import WOR
 # ---------------------------------------------------------------------------
 
 _WORKSPACE = Path("/fake/workspace")
+_CONFIG_DIR = _WORKSPACE / ".winter" / "config" / "winter-service-tmux"
 
 # Two services so glob tests can distinguish subset matches
 _MANIFEST = ServiceManifest(
@@ -59,6 +60,7 @@ def _make_ctx(env: str = "alpha") -> SessionContext:
         env=env,
         workspace_root=_WORKSPACE,
         worktree_dir=_WORKSPACE / env,
+        config_dir=_CONFIG_DIR,
         session_prefix=_MANIFEST.session_prefix,
         services=_MANIFEST.services,
         layout_hook=_MANIFEST.layout_hook,
@@ -76,6 +78,7 @@ def _make_workspace_ctx() -> SessionContext:
         env=WORKSPACE_TARGET,
         workspace_root=_WORKSPACE,
         worktree_dir=_WORKSPACE,  # NOT _WORKSPACE/workspace
+        config_dir=_CONFIG_DIR,
         session_prefix=_MANIFEST.session_prefix,
         services=_MANIFEST.workspace_services,
         layout_hook=_MANIFEST.workspace_layout_hook,

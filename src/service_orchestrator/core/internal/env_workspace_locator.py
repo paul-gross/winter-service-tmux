@@ -5,6 +5,8 @@ Resolution order:
 2. Walk up from *start_dir* (defaults to ``cwd``) looking for ``.winter/config.toml``.
 
 ``worktree_dir(env)`` returns ``workspace_root() / env``.
+``config_dir()`` returns ``WINTER_EXT_CONFIG_DIR`` when set; otherwise the
+fallback ``workspace_root() / ".winter/config/winter-service-tmux"``.
 """
 
 from __future__ import annotations
@@ -15,6 +17,8 @@ from pathlib import Path
 from service_orchestrator.core.workspace_locator import IWorkspaceLocator
 
 _MARKER = Path(".winter") / "config.toml"
+_EXT_CONFIG_DIR_VAR = "WINTER_EXT_CONFIG_DIR"
+_EXT_FALLBACK_SUBPATH = Path(".winter") / "config" / "winter-service-tmux"
 
 
 class EnvWorkspaceLocator:
@@ -54,6 +58,12 @@ class EnvWorkspaceLocator:
 
     def worktree_dir(self, env: str) -> Path:
         return self.workspace_root() / env
+
+    def config_dir(self) -> Path:
+        env_val = os.environ.get(_EXT_CONFIG_DIR_VAR)
+        if env_val:
+            return Path(env_val)
+        return self.workspace_root() / _EXT_FALLBACK_SUBPATH
 
 
 def _conforms_env_workspace_locator(x: EnvWorkspaceLocator) -> IWorkspaceLocator:

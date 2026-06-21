@@ -1,7 +1,7 @@
 """Layout hook runner seam.
 
 ``ILayoutHookRunner`` abstracts executing the optional bash layout hook
-declared in ``setup-tmux.toml`` (``layout_hook`` field).  The adapter lives in
+declared in ``config.toml`` (``layout_hook`` field).  The adapter lives in
 ``internal/subprocess_layout_hook_runner.py``.
 """
 

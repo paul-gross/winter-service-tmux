@@ -4,11 +4,13 @@ Tmux-based service orchestration for winter workspaces. Runs project services (b
 
 ## Feature environment setup steps
 
-This extension needs a project-specific `setup-tmux.toml` manifest to know which services to run in each feature environment. After `winter ws init` clones the extension, walk the user through [ai/workflow-setup.md](./ai/workflow-setup.md) to author `workspace:/ai/project/setup-tmux.toml` and its companion `workspace:/ai/project/layout-hook.sh`. Without these, `./up` errors out in any feature environment.
+This extension needs a project-specific `config.toml` manifest to know which services to run in each feature environment. After `winter ws init` clones the extension, walk the user through [ai/workflow-setup.md](./ai/workflow-setup.md) to author `workspace:/.winter/config/winter-service-tmux/config.toml` and its companion `layout-hook.sh` in the same directory. Without these, `./up` errors out in any feature environment.
 
-`setup-tmux.toml` is the single source of truth. It declares every service by name, tmux pane target, and start command — agents read service→target mappings directly from the `[[service]]` entries. An optional gitignored `setup-tmux.local.toml` overlay can supply per-machine overrides using the same key-based merge semantics (scalars replace; `[[service]]` and `[[status.url]]` merge keyed by `name`/`label`).
+`config.toml` is the single source of truth. It declares every service by name, tmux pane target, and start command — agents read service→target mappings directly from the `[[service]]` entries. An optional gitignored `config.local.toml` overlay can supply per-machine overrides using the same key-based merge semantics (scalars replace; `[[service]]` and `[[status.url]]` merge keyed by `name`/`label`).
 
-See `winter-service-tmux:/workflow/setup-tmux.toml.example` and `winter-service-tmux:/workflow/setup-tmux.local.toml.example` for annotated schema references. Validate with the bundled CLI:
+The manifest is resolved via `WINTER_EXT_CONFIG_DIR` (set by winter on every orchestrator dispatch) or falls back to `<workspace-root>/.winter/config/winter-service-tmux/` when that variable is unset (standalone validator, direct env-root invocations).
+
+See `winter-service-tmux:/workflow/config.toml.example` and `winter-service-tmux:/workflow/config.local.toml.example` for annotated schema references. Validate with the bundled CLI:
 
 ```bash
 PYTHONPATH=src python3 -m service_manifest.cli validate <workspace-root>
@@ -49,7 +51,7 @@ Once installed, the workspace conventions are:
   - `"memory"`: accepted and validated; not yet implemented — `logs` emits nothing for memory-mode services (future work).
   Services with an empty `command` (interactive panes) are always launched bare regardless of `log`.
 
-Tmux session names are `<SESSION_PREFIX>-<env>` — e.g. `mp-alpha`. The prefix is declared as `session_prefix` in `workspace:/ai/project/setup-tmux.toml`. A separate `<SESSION_PREFIX>-workspace` session holds workspace-scoped singleton services — see the next section.
+Tmux session names are `<SESSION_PREFIX>-<env>` — e.g. `mp-alpha`. The prefix is declared as `session_prefix` in `workspace:/.winter/config/winter-service-tmux/config.toml`. A separate `<SESSION_PREFIX>-workspace` session holds workspace-scoped singleton services — see the next section.
 
 ## Workspace-scoped singleton services
 
@@ -74,10 +76,10 @@ The `workspace` token is an exact reserved name — `work*` globs do NOT match i
 
 ### Declaring workspace services
 
-Add `scope = "workspace"` to a `[[service]]` entry in `workspace:/ai/project/setup-tmux.toml`. `scope` is the only field that distinguishes a workspace singleton from a per-env service — it defaults to `"project"` when omitted, and every other field (`name`/`target`/`command`/`log`) is identical:
+Add `scope = "workspace"` to a `[[service]]` entry in `workspace:/.winter/config/winter-service-tmux/config.toml`. `scope` is the only field that distinguishes a workspace singleton from a per-env service — it defaults to `"project"` when omitted, and every other field (`name`/`target`/`command`/`log`) is identical:
 
 ```toml
-workspace_layout_hook = "ai/project/workspace-layout-hook.sh"
+workspace_layout_hook = "workspace-layout-hook.sh"
 
 [[service]]
 name    = "db"
@@ -93,13 +95,13 @@ scope   = "workspace"
 ```
 
 Key points:
-- **`workspace_layout_hook`** — optional bash script invoked once after the workspace session is created, exactly like `layout_hook` for env sessions but run with `WINTER_TMUX_WORKTREE_DIR` set to the workspace root. See `winter-service-tmux:/workflow/layout-hook.sh.example` for the contract; the workspace hook follows the same constraints (layout only — no `send-keys`, no `source`, no `cd`).
+- **`workspace_layout_hook`** — optional bash script invoked once after the workspace session is created, exactly like `layout_hook` for env sessions but run with `WINTER_TMUX_WORKTREE_DIR` set to the workspace root. See `winter-service-tmux:/workflow/layout-hook.sh.example` for the contract; the workspace hook follows the same constraints (layout only — no `send-keys`, no `source`, no `cd`). The value is a bare filename resolved relative to the config dir (e.g. `workspace-layout-hook.sh`).
 - **Per-scope target namespaces** — a workspace service at `target = "0.0"` and a project service at `target = "0.0"` do NOT conflict (different tmux sessions; targets are validated per scope).
 - **Global name namespace** — names are unique across both scopes; a project and a workspace service may not share a name.
-- **Overlay merging** — `setup-tmux.local.toml` merges all `[[service]]` entries by `name` (any scope) using override-or-append; an override keeps/sets its own `scope`.
+- **Overlay merging** — `config.local.toml` merges all `[[service]]` entries by `name` (any scope) using override-or-append; an override keeps/sets its own `scope`.
 - **Validation** — the bundled validator checks for duplicate names (global) and duplicate targets (per scope). Run it with `PYTHONPATH=src python3 -m service_manifest.cli validate <workspace-root>`.
 
-See `winter-service-tmux:/workflow/setup-tmux.toml.example` and `winter-service-tmux:/workflow/setup-tmux.local.toml.example` for annotated schema references.
+See `winter-service-tmux:/workflow/config.toml.example` and `winter-service-tmux:/workflow/config.local.toml.example` for annotated schema references.
 
 ### Blocking-inline-pane lifecycle (best-effort shutdown)
 
@@ -109,7 +111,7 @@ Workspace services run **inline** (blocking) in their tmux pane — a `postgres 
 
 ## Log capture configuration
 
-File-mode log output lands at `<env>/.winter/logs/<service>.log`, persists across `down` and teardown, and is size-rotated. Log behavior is configured via the `[logs]` table in `workspace:/ai/project/setup-tmux.toml`; per-machine overrides go in the gitignored `setup-tmux.local.toml`. The full key/default table and overlay semantics are documented in `winter-service-tmux:/workflow/setup-tmux.toml.example` and `winter-service-tmux:/workflow/setup-tmux.local.toml.example`.
+File-mode log output lands at `<env>/.winter/logs/<service>.log`, persists across `down` and teardown, and is size-rotated. Log behavior is configured via the `[logs]` table in `workspace:/.winter/config/winter-service-tmux/config.toml`; per-machine overrides go in the gitignored `config.local.toml` in the same directory. The full key/default table and overlay semantics are documented in `winter-service-tmux:/workflow/config.toml.example` and `winter-service-tmux:/workflow/config.local.toml.example`.
 
 **Note on mixed-mode output:** pane-mode events carry no timestamp and sort before file-mode events in the merged stream. When `-n N` spans both file and pane services, N is an approximation across the mixed set.
 

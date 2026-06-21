@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Layout hook for winter-service-tmux — LAYOUT ONLY.
-# Copy this to workspace:/ai/project/layout-hook.sh and customize.
+# Copy this to workspace:/.winter/config/winter-service-tmux/layout-hook.sh and customize.
 #
 # =============================================================================
 # CONTRACT (load-bearing — read before editing)
@@ -9,17 +9,18 @@
 # INVOKED BY
 #   The Python orchestrator, once per `./up`, AFTER the tmux session has been
 #   created and BEFORE any service commands are sent. The field that activates
-#   this hook is `layout_hook` in setup-tmux.toml.
+#   this hook is `layout_hook` in config.toml (a bare filename resolved relative
+#   to the config dir: .winter/config/winter-service-tmux/).
 #
-# ENVIRONMENT PROVIDED (per-env hook — activated by layout_hook in setup-tmux.toml)
+# ENVIRONMENT PROVIDED (per-env hook — activated by layout_hook in config.toml)
 #   WINTER_TMUX_SESSION       — the fully-qualified tmux session name, e.g. "mp-alpha"
 #   WINTER_TMUX_WORKTREE_DIR  — absolute path to the worktree root
 #   WINTER_ENV                — env name (e.g. "alpha")
 #   WINTER_ENV_INDEX          — numeric env index (e.g. "1" for alpha)
 #   WINTER_PORT_BASE          — base port for this env (e.g. "4100")
 #
-# WORKSPACE HOOK (activated by workspace_layout_hook in setup-tmux.toml)
-#   A separate script (e.g. workspace:/ai/project/workspace-layout-hook.sh) is
+# WORKSPACE HOOK (activated by workspace_layout_hook in config.toml)
+#   A separate script (e.g. workspace-layout-hook.sh alongside config.toml) is
 #   invoked once when `winter service up workspace` creates the workspace session.
 #   It follows the same contract as this file (layout only; same CONSTRAINTS apply),
 #   but the orchestrator supplies a different environment:
@@ -48,7 +49,7 @@
 #     existing pane) and make layout changes harder to reason about.
 #
 # WINDOW/PANE TARGETS
-#   Must match the `target` fields declared in setup-tmux.toml exactly:
+#   Must match the `target` fields declared in config.toml exactly:
 #     "0.0"  — window 0, pane 0  (the initial pane, always exists after new-session)
 #     "0.1"  — window 0, pane 1  (first split of window 0)
 #     "1.0"  — window 1, pane 0  (first pane of a new window)
@@ -56,7 +57,7 @@
 #   orchestrator's pane address map is authoritative.
 #
 # EXAMPLE BELOW
-#   Matches the targets in workflow/setup-tmux.toml.example:
+#   Matches the targets in workflow/config.toml.example:
 #     backend   → 0.0  (initial pane in window 0)
 #     frontend  → 0.1  (vertical split of window 0)
 #     shell     → 1.0  (new window 1, pane 0)

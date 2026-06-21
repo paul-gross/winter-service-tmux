@@ -1,9 +1,9 @@
 # Machine-specific overrides for winter-service-tmux (TOML format). OPTIONAL.
-# Copy this to workspace:/ai/project/setup-tmux.local.toml and customize, then
-# keep it gitignored — it's a per-developer / per-machine override that should
-# never be committed.
+# Copy this to workspace:/.winter/config/winter-service-tmux/config.local.toml
+# and customize, then keep it gitignored — it's a per-developer / per-machine
+# override that should never be committed.
 #
-# This file is merged ON TOP of the committed setup-tmux.toml (overlay), so you
+# This file is merged ON TOP of the committed config.toml (overlay), so you
 # only redeclare what you want to change. Everything you don't touch keeps the
 # committed value. The reader always processes the committed file first, then
 # this overlay.

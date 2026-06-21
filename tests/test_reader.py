@@ -13,9 +13,11 @@ from tests.fakes import FakeFilesystemReader
 # Helpers
 # ---------------------------------------------------------------------------
 
-_MANIFEST_SUBPATH = Path("ai") / "project"
-_COMMITTED_PATH = _MANIFEST_SUBPATH / "setup-tmux.toml"
-_LOCAL_PATH = _MANIFEST_SUBPATH / "setup-tmux.local.toml"
+# The reader now accepts a config_dir directly (no _MANIFEST_DIR joining).
+# Tests pass absolute paths keyed to the fake config dir.
+_CONFIG_DIR = Path("/fake/workspace/.winter/config/winter-service-tmux")
+_COMMITTED_PATH = Path("config.toml")
+_LOCAL_PATH = Path("config.local.toml")
 
 _ROOT = Path("/fake/workspace")
 
@@ -23,15 +25,15 @@ _ROOT = Path("/fake/workspace")
 def _reader_with(files: dict[Path, str]) -> ManifestReader:
     """Build a ManifestReader over a FakeFilesystemReader seeded with *files*.
 
-    Keys in *files* are joined to the fake workspace root so callers can
+    Keys in *files* are joined to the fake config dir so callers can
     write relative paths like ``_COMMITTED_PATH``.
     """
-    abs_files = {_ROOT / k: v for k, v in files.items()}
+    abs_files = {_CONFIG_DIR / k: v for k, v in files.items()}
     return ManifestReader(FakeFilesystemReader(abs_files))
 
 
 def _read(files: dict[Path, str]) -> ServiceManifest:
-    return _reader_with(files).read(_ROOT)
+    return _reader_with(files).read(_CONFIG_DIR)
 
 
 # ---------------------------------------------------------------------------
@@ -43,7 +45,7 @@ def test_valid_full_manifest() -> None:
     content = """\
 session_prefix = "mp"
 env_file = ".winter.env"
-layout_hook = "ai/project/layout-hook.sh"
+layout_hook = "layout-hook.sh"
 
 [[service]]
 name = "backend"
@@ -73,7 +75,7 @@ url = "http://localhost:${FRONTEND_PORT}"
     assert isinstance(manifest, ServiceManifest)
     assert manifest.session_prefix == "mp"
     assert manifest.env_file == ".winter.env"
-    assert manifest.layout_hook == "ai/project/layout-hook.sh"
+    assert manifest.layout_hook == "layout-hook.sh"
 
     assert len(manifest.services) == 3
     assert manifest.services[0] == Service(name="backend", target=Target(window=0, pane=0), command="npm run start:dev")
@@ -266,15 +268,15 @@ env_file = ".winter.env"
 def test_overlay_overrides_layout_hook() -> None:
     committed = """\
 session_prefix = "mp"
-layout_hook = "ai/project/layout-hook.sh"
+layout_hook = "layout-hook.sh"
 """
     manifest = _read(
         {
             _COMMITTED_PATH: committed,
-            _LOCAL_PATH: 'layout_hook = "ai/project/layout-hook.local.sh"\n',
+            _LOCAL_PATH: 'layout_hook = "layout-hook.local.sh"\n',
         }
     )
-    assert manifest.layout_hook == "ai/project/layout-hook.local.sh"
+    assert manifest.layout_hook == "layout-hook.local.sh"
 
 
 def test_overlay_absent_scalar_uses_committed() -> None:
@@ -791,8 +793,8 @@ url = "http://localhost:3000"
 label = "Backend"
 url = "http://localhost:4100"
 """
-    abs_committed = _ROOT / _COMMITTED_PATH
-    abs_local = _ROOT / _LOCAL_PATH
+    abs_committed = _CONFIG_DIR / _COMMITTED_PATH
+    abs_local = _CONFIG_DIR / _LOCAL_PATH
     fake_fs = FakeFilesystemReader({abs_committed: committed_toml, abs_local: overlay_toml})
     reader = ManifestReader(fake_fs)
 
@@ -804,7 +806,7 @@ url = "http://localhost:4100"
     assert original_url == "http://localhost:3000"
 
     # Invoke reader.read() — internally calls _merge(committed, local).
-    reader.read(_ROOT)
+    reader.read(_CONFIG_DIR)
 
     # The committed_doc must be unchanged — no aliased mutation.
     assert committed_doc["status"]["url"][0]["url"] == "http://localhost:3000", (
@@ -934,12 +936,12 @@ def test_workspace_layout_hook_parsed() -> None:
     """workspace_layout_hook scalar is parsed independently of layout_hook."""
     content = """\
 session_prefix = "mp"
-layout_hook = "ai/project/layout-hook.sh"
-workspace_layout_hook = "ai/project/workspace-layout-hook.sh"
+layout_hook = "layout-hook.sh"
+workspace_layout_hook = "workspace-layout-hook.sh"
 """
     manifest = _read({_COMMITTED_PATH: content})
-    assert manifest.layout_hook == "ai/project/layout-hook.sh"
-    assert manifest.workspace_layout_hook == "ai/project/workspace-layout-hook.sh"
+    assert manifest.layout_hook == "layout-hook.sh"
+    assert manifest.workspace_layout_hook == "workspace-layout-hook.sh"
 
 
 def test_workspace_services_absent_defaults_empty() -> None:
@@ -1228,3 +1230,39 @@ scope = "workspace"
     assert manifest.services[0].target.pane == 0
     assert manifest.workspace_services[0].target.window == 0
     assert manifest.workspace_services[0].target.pane == 0
+
+
+# ---------------------------------------------------------------------------
+# read(config_dir) — config dir is passed directly; no _MANIFEST_DIR joining
+# ---------------------------------------------------------------------------
+
+
+def test_read_takes_config_dir_directly() -> None:
+    """read() receives the config dir directly — config.toml lives at the root of that dir."""
+    content = 'session_prefix = "mp"\n'
+    # The committed file is at _CONFIG_DIR / "config.toml" — no ai/project/ prefix.
+    abs_committed = _CONFIG_DIR / "config.toml"
+    fake_fs = FakeFilesystemReader({abs_committed: content})
+    reader = ManifestReader(fake_fs)
+    manifest = reader.read(_CONFIG_DIR)
+    assert manifest.session_prefix == "mp"
+
+
+def test_read_config_dir_missing_committed_raises() -> None:
+    """When config.toml is absent in the config dir, ManifestError is raised."""
+    fake_fs = FakeFilesystemReader({})  # nothing
+    reader = ManifestReader(fake_fs)
+    with pytest.raises(ManifestError, match="not found"):
+        reader.read(_CONFIG_DIR)
+
+
+def test_read_config_dir_reads_local_overlay() -> None:
+    """config.local.toml in the config dir is merged on top of config.toml."""
+    committed = 'session_prefix = "committed"\n'
+    local = 'session_prefix = "local"\n'
+    abs_committed = _CONFIG_DIR / "config.toml"
+    abs_local = _CONFIG_DIR / "config.local.toml"
+    fake_fs = FakeFilesystemReader({abs_committed: committed, abs_local: local})
+    reader = ManifestReader(fake_fs)
+    manifest = reader.read(_CONFIG_DIR)
+    assert manifest.session_prefix == "local"

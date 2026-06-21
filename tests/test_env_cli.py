@@ -44,6 +44,7 @@ from service_orchestrator.modules.orchestrate.session_context_builder import WOR
 # ---------------------------------------------------------------------------
 
 _WORKSPACE = Path("/fake/workspace")
+_CONFIG_DIR = _WORKSPACE / ".winter" / "config" / "winter-service-tmux"
 _MANIFEST = ServiceManifest(
     session_prefix="mp",
     env_file=".winter.env",
@@ -70,6 +71,7 @@ def _make_ctx(env: str = "alpha", manifest: ServiceManifest = _MANIFEST) -> Sess
         env=env,
         workspace_root=_WORKSPACE,
         worktree_dir=_WORKSPACE / env,
+        config_dir=_CONFIG_DIR,
         session_prefix=manifest.session_prefix,
         services=manifest.services,
         layout_hook=manifest.layout_hook,
@@ -86,6 +88,7 @@ def _make_workspace_ctx() -> SessionContext:
         env=WORKSPACE_TARGET,
         workspace_root=_WORKSPACE,
         worktree_dir=_WORKSPACE,  # NOT _WORKSPACE/workspace
+        config_dir=_CONFIG_DIR,
         session_prefix=_MANIFEST.session_prefix,
         services=_MANIFEST.workspace_services,
         layout_hook=_MANIFEST.workspace_layout_hook,

@@ -118,7 +118,7 @@ class OrchestratorService:
 
         hook_ok = True
         if ctx.layout_hook is not None:
-            hook_path = ctx.workspace_root / ctx.layout_hook
+            hook_path = ctx.config_dir / ctx.layout_hook
             hook_env = self._build_hook_env(ctx)
             try:
                 self._hook_runner.run(hook_path, hook_env, ctx.worktree_dir)

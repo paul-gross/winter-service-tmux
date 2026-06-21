@@ -16,7 +16,7 @@ These scripts are contributed by the `winter-service-tmux` extension. See `winte
 
 ## Setup
 
-At the start of each session, read `workspace:/ai/project/setup-tmux.toml` to learn the session prefix and the service → `<window>.<pane>` mapping for the current project. Each `[[service]]` entry declares the service `name`, its `target` (e.g. `"0.1"`), and optionally its `log` mode (`"file"`, `"pane"`, or `"memory"`) — the `log` mode determines which read path works. Default is `"file"`.
+At the start of each session, read `workspace:/.winter/config/winter-service-tmux/config.toml` to learn the session prefix and the service → `<window>.<pane>` mapping for the current project. Each `[[service]]` entry declares the service `name`, its `target` (e.g. `"0.1"`), and optionally its `log` mode (`"file"`, `"pane"`, or `"memory"`) — the `log` mode determines which read path works. Default is `"file"`.
 
 Also read each entry's `scope` field (`"project"` by default, or `"workspace"`). Per-env services (`scope = "project"` or omitted) run in the `<session_prefix>-<env>` session and are managed via `./up`/`./down`/`./status`/`./restart`. Workspace singletons (`scope = "workspace"`) run in the separate `<session_prefix>-workspace` session and are managed exclusively via `winter service … workspace` — they do not appear in `./status` and cannot be reached by `./restart`.
 
@@ -44,7 +44,7 @@ File-mode logs persist to `<env>/.winter/logs/<service>.log` on `up`, survive `d
 - `"pane"`: use `tmux capture-pane` (see below). No file persistence, no timestamps; requires a running session. Use for interactive panes or TTY-sensitive services.
 - `"memory"`: not yet implemented — `winter service logs` emits nothing. No read path currently works.
 
-If a service appears silent, check its `log` field in `setup-tmux.toml` before diagnosing a problem — a `pane` or `memory` service produces no file output by design.
+If a service appears silent, check its `log` field in `config.toml` before diagnosing a problem — a `pane` or `memory` service produces no file output by design.
 
 **Fallback — `tmux capture-pane`** (pane-mode services and interactive panes only):
 
@@ -74,7 +74,7 @@ Services with `scope = "workspace"` run in a shared `<session_prefix>-workspace`
 - **Prefer winter workspace service management.** Default to `./up`, `./down`, `./status`, `./restart` for per-env service lifecycle operations; use `winter service … workspace` for workspace-scoped singleton services (see **Workspace-scoped services** above).
 - If explicitly asked to run something outside of the workspace scripts (e.g., a raw `npm start` or `docker compose up`), that's fine — follow the request.
 - If generically asked to start an app or service that isn't one of the workspace-managed services, **ask the user first** (through the team lead if you were spawned by one) whether and how to run it. Don't guess.
-- **Never modify `setup-tmux.toml`** (or `setup-tmux.local.toml`) or any workspace configuration. You operate services, you don't configure them.
+- **Never modify `config.toml`** (or `config.local.toml`) or any workspace configuration. You operate services, you don't configure them.
 - **Run the env's own `./up`, `./down`, `./status`, `./restart`** (e.g. `alpha/up`, or `cd` into the env directory first) — each script resolves the env directory and workspace root from the symlink's own location, not from your current directory, so the invocation directory doesn't matter.
 - **Never modify code or create worktrees.** Your scope is service lifecycle only.
 - Be brief. The user wants status and answers, not narration.

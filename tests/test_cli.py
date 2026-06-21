@@ -15,14 +15,14 @@ from service_manifest.cli import main
 # Helpers
 # ---------------------------------------------------------------------------
 
-_MANIFEST_SUBPATH = Path("ai") / "project"
+_CONFIG_SUBPATH = Path(".winter") / "config" / "winter-service-tmux"
 
 
 def _write_manifest(tmp_path: Path, content: str) -> Path:
-    """Write *content* to ai/project/setup-tmux.toml and return the file path."""
-    d = tmp_path / _MANIFEST_SUBPATH
+    """Write *content* to .winter/config/winter-service-tmux/config.toml and return the file path."""
+    d = tmp_path / _CONFIG_SUBPATH
     d.mkdir(parents=True, exist_ok=True)
-    p = d / "setup-tmux.toml"
+    p = d / "config.toml"
     p.write_text(content, encoding="utf-8")
     return p
 
@@ -167,7 +167,7 @@ command = "cmd"
 
 
 def test_missing_manifest_exit_1(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """No setup-tmux.toml at all → ManifestError → exit 1."""
+    """No config.toml at all → ManifestError → exit 1."""
     with pytest.raises(SystemExit) as exc_info:
         main(["validate", str(tmp_path)])
 

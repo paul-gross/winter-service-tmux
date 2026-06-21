@@ -62,7 +62,7 @@ def test_service_manifest_construction() -> None:
     manifest = ServiceManifest(
         session_prefix="mp",
         env_file=".winter.env",
-        layout_hook="ai/project/layout-hook.sh",
+        layout_hook="layout-hook.sh",
         services=(
             Service(name="backend", target=Target(0, 0), command="npm run start:dev"),
             Service(name="frontend", target=Target(0, 1), command="npm run dev"),
@@ -72,7 +72,7 @@ def test_service_manifest_construction() -> None:
     )
     assert manifest.session_prefix == "mp"
     assert manifest.env_file == ".winter.env"
-    assert manifest.layout_hook == "ai/project/layout-hook.sh"
+    assert manifest.layout_hook == "layout-hook.sh"
     assert len(manifest.services) == 3
     assert len(manifest.status_urls) == 1
 
@@ -211,7 +211,7 @@ def test_service_manifest_workspace_fields_default() -> None:
     manifest = ServiceManifest(
         session_prefix="mp",
         env_file=None,
-        layout_hook="ai/project/layout-hook.sh",
+        layout_hook="layout-hook.sh",
         services=(Service(name="backend", target=Target(0, 0), command="cmd"),),
         status_urls=(StatusUrl(label="BE", url="http://localhost:4020"),),
     )

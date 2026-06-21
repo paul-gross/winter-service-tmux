@@ -81,3 +81,34 @@ def test_worktree_dir_arbitrary_env_name(monkeypatch, tmp_path):
     monkeypatch.setenv("WINTER_WORKSPACE_DIR", str(tmp_path))
     locator = EnvWorkspaceLocator()
     assert locator.worktree_dir("my-feature") == tmp_path / "my-feature"
+
+
+# ---------------------------------------------------------------------------
+# config_dir — WINTER_EXT_CONFIG_DIR env var + fallback
+# ---------------------------------------------------------------------------
+
+
+def test_config_dir_honors_env_var(monkeypatch, tmp_path):
+    custom = tmp_path / "custom" / "config"
+    monkeypatch.setenv("WINTER_WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setenv("WINTER_EXT_CONFIG_DIR", str(custom))
+    locator = EnvWorkspaceLocator()
+    assert locator.config_dir() == custom
+
+
+def test_config_dir_fallback_when_env_var_unset(monkeypatch, tmp_path):
+    monkeypatch.setenv("WINTER_WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.delenv("WINTER_EXT_CONFIG_DIR", raising=False)
+    locator = EnvWorkspaceLocator()
+    assert locator.config_dir() == tmp_path / ".winter" / "config" / "winter-service-tmux"
+
+
+def test_config_dir_env_var_takes_priority_over_fallback(monkeypatch, tmp_path):
+    """When WINTER_EXT_CONFIG_DIR is set, the fallback dir is NOT used."""
+    override = tmp_path / "ext-override"
+    monkeypatch.setenv("WINTER_WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setenv("WINTER_EXT_CONFIG_DIR", str(override))
+    locator = EnvWorkspaceLocator()
+    result = locator.config_dir()
+    assert result == override
+    assert result != tmp_path / ".winter" / "config" / "winter-service-tmux"

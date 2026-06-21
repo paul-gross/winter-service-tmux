@@ -30,7 +30,7 @@ def test_container_resolves_orchestrator_with_fakes() -> None:
 
     # Build an in-memory service_manifest container so no filesystem is touched.
     toml = 'session_prefix = "mp"\n'
-    fake_fs = FakeFilesystemReader({Path("/fake/workspace/ai/project/setup-tmux.toml"): toml})
+    fake_fs = FakeFilesystemReader({Path("/fake/workspace/.winter/config/winter-service-tmux/config.toml"): toml})
     sm = sm_container_mod.Container(fs=fake_fs)
 
     log_repo = FakeLogRepository()

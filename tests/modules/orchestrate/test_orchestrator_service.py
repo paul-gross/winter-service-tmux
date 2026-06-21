@@ -32,14 +32,16 @@ from tests.fakes import FakeFilesystemReader
 # ---------------------------------------------------------------------------
 
 _WORKSPACE = Path("/fake/workspace")
+_CONFIG_DIR = _WORKSPACE / ".winter" / "config" / "winter-service-tmux"
 _WORKTREE = _WORKSPACE / "alpha"
 _ENV_FILE = _WORKTREE / ".winter.env"
 
 # A two-service manifest (backend 0.0, frontend 0.1) with a layout hook.
+# layout_hook is a bare filename — resolved relative to config_dir at runtime.
 _MANIFEST_TOML = """\
 session_prefix = "mp"
 env_file = ".winter.env"
-layout_hook = "ai/project/layout-hook.sh"
+layout_hook = "layout-hook.sh"
 
 [[service]]
 name = "backend"
@@ -56,20 +58,20 @@ label = "Backend"
 url = "http://localhost:${BACKEND_PORT}"
 """
 
-_MANIFEST_COMMITTED_PATH = Path("ai/project/setup-tmux.toml")
+_MANIFEST_COMMITTED_PATH = Path("config.toml")
 _ENV_FILE_REL = Path(".winter.env")
 
 
 def _make_sm_container(toml_content: str = _MANIFEST_TOML) -> sm_container_mod.Container:
     """Build a service_manifest.Container seeded with an in-memory TOML."""
-    abs_toml_path = _WORKSPACE / _MANIFEST_COMMITTED_PATH
+    abs_toml_path = _CONFIG_DIR / _MANIFEST_COMMITTED_PATH
     fake_fs = FakeFilesystemReader({abs_toml_path: toml_content})
     return sm_container_mod.Container(fs=fake_fs)
 
 
 def _make_manifest(toml_content: str = _MANIFEST_TOML) -> ServiceManifest:
     sm = _make_sm_container(toml_content)
-    return sm.manifest_reader.read(_WORKSPACE)
+    return sm.manifest_reader.read(_CONFIG_DIR)
 
 
 def _make_ctx(
@@ -83,6 +85,7 @@ def _make_ctx(
         env="alpha",
         workspace_root=_WORKSPACE,
         worktree_dir=_WORKTREE,
+        config_dir=_CONFIG_DIR,
         session_prefix=manifest.session_prefix,
         services=manifest.services,
         layout_hook=manifest.layout_hook,
@@ -144,7 +147,7 @@ def test_up_creates_session_and_runs_hook() -> None:
     assert "mp-alpha" in tmux._sessions
     assert len(hook.calls) == 1
     hook_path, hook_env, hook_cwd = hook.calls[0]
-    assert hook_path == _WORKSPACE / "ai/project/layout-hook.sh"
+    assert hook_path == _CONFIG_DIR / "layout-hook.sh"
     assert hook_env["WINTER_TMUX_SESSION"] == "mp-alpha"
     assert hook_env["WINTER_TMUX_WORKTREE_DIR"] == str(_WORKTREE)
     assert hook_env["WINTER_ENV"] == "alpha"
@@ -249,6 +252,26 @@ def test_up_send_keys_exact_launch_line_without_env_file() -> None:
         f"--rotate-size {rotate_size} --max-rotations {max_rot}"
     )
     assert backend_line == expected
+
+
+def test_up_hook_path_is_config_dir_relative() -> None:
+    """layout_hook is resolved relative to config_dir, NOT workspace_root."""
+    tmux = FakeTmuxRepository()
+    hook = FakeLayoutHookRunner()
+    ctx = _make_ctx()
+    svc = _make_service(tmux=tmux, hook_runner=hook)
+
+    def _add_panes() -> None:
+        tmux.seed_session("mp-alpha", {"0.0": 100, "0.1": 101})
+
+    hook._side_effect = _add_panes
+
+    svc.up(ctx)
+
+    hook_path, _, _ = hook.calls[0]
+    # Must resolve to config_dir / bare-filename, not workspace_root / path
+    assert hook_path == _CONFIG_DIR / "layout-hook.sh"
+    assert hook_path != _WORKSPACE / "layout-hook.sh"
 
 
 def test_up_no_hook_when_layout_hook_is_none() -> None:
@@ -856,6 +879,7 @@ def _make_prune_ctx(retention_seconds: int = 604800) -> SessionContext:
         env="alpha",
         workspace_root=_WORKSPACE,
         worktree_dir=_WORKTREE,
+        config_dir=_CONFIG_DIR,
         session_prefix=manifest.session_prefix,
         services=manifest.services,
         layout_hook=manifest.layout_hook,

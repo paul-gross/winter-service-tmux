@@ -7,7 +7,7 @@
 #
 # Four checks:
 #   1. tmux binary on PATH
-#   2. setup-tmux.toml manifest present and valid (required — this is now live config)
+#   2. config.toml manifest present and valid (required — this is now live config)
 #   3. session-name collision with foreign tmux sessions sharing the prefix
 #   4. layout_hook exists and is executable (when declared in the manifest)
 #
@@ -61,21 +61,31 @@ else
     "Install tmux (e.g. \`dnf install tmux\`, \`brew install tmux\`)."
 fi
 
-# ---- Probe 2: setup-tmux.toml manifest ----------------------------------------
+# ---- Probe 2: config.toml manifest ----------------------------------------
 #
 # The manifest is now live config (not optional). A missing or invalid manifest
 # is a real finding (fail). Validates via the service_manifest CLI (stdlib-only,
 # python3 required). Populates session_prefix for probe 3.
+#
+# Config dir is resolved via WINTER_EXT_CONFIG_DIR (set by winter on every
+# orchestrator dispatch) or falls back to
+# <workspace-root>/.winter/config/winter-service-tmux/.
 
-MANIFEST_PATH="$WORKSPACE_DIR/ai/project/setup-tmux.toml"
+if [[ -n "${WINTER_EXT_CONFIG_DIR:-}" ]]; then
+  CONFIG_DIR="$WINTER_EXT_CONFIG_DIR"
+else
+  CONFIG_DIR="$WORKSPACE_DIR/.winter/config/winter-service-tmux"
+fi
+
+MANIFEST_PATH="$CONFIG_DIR/config.toml"
 
 manifest_ok=false
 session_prefix=""
 
 if [[ ! -f "$MANIFEST_PATH" ]]; then
-  emit "setup-tmux.toml manifest" fail \
-    "no setup-tmux.toml found at ai/project/" \
-    "Create ai/project/setup-tmux.toml — see winter-service-tmux:/workflow/setup-tmux.toml.example."
+  emit "config.toml manifest" fail \
+    "no config.toml found at $CONFIG_DIR" \
+    "Create $MANIFEST_PATH — see winter-service-tmux:/workflow/config.toml.example."
 else
   # Locate a python interpreter.
   PY=""
@@ -86,7 +96,7 @@ else
   fi
 
   if [[ -z "$PY" ]]; then
-    emit "setup-tmux.toml manifest" warn "skipped: python3 not found"
+    emit "config.toml manifest" warn "skipped: python3 not found"
   else
     # Run the validator; capture stdout and exit code.
     cli_out=$(PYTHONPATH="$EXT_SRC" "$PY" -m service_manifest.cli validate "$WORKSPACE_DIR" --json 2>/dev/null)
@@ -94,7 +104,7 @@ else
 
     if [[ $cli_exit -ne 0 ]] && ! printf '%s' "$cli_out" | grep -q '"ok"'; then
       # Non-zero exit with no parseable JSON — likely Python < 3.11 / import failure.
-      emit "setup-tmux.toml manifest" warn \
+      emit "config.toml manifest" warn \
         "skipped: manifest validation unavailable (Python 3.11+ required)"
     else
       # Parse the JSON output with python to avoid whitespace/quoting fragility.
@@ -113,11 +123,11 @@ print("; ".join(violations))
 
       if [[ "$ok_val" == "true" ]]; then
         manifest_ok=true
-        emit "setup-tmux.toml manifest" pass "setup-tmux.toml valid"
+        emit "config.toml manifest" pass "config.toml valid"
       else
-        emit "setup-tmux.toml manifest" fail \
+        emit "config.toml manifest" fail \
           "${vcount} violation(s): ${violations_msg}" \
-          "Fix ai/project/setup-tmux.toml, then re-run \`winter doctor\`."
+          "Fix $MANIFEST_PATH, then re-run \`winter doctor\`."
       fi
     fi
 
@@ -135,7 +145,7 @@ if [[ "$tmux_ok" != true ]]; then
 elif [[ "$manifest_ok" != true ]]; then
   emit "session-name collision" warn "skipped: manifest absent or invalid"
 elif [[ -z "$session_prefix" ]]; then
-  emit "session-name collision" warn "skipped: session_prefix not found in setup-tmux.toml"
+  emit "session-name collision" warn "skipped: session_prefix not found in config.toml"
 else
   # `tmux ls` exits non-zero when no tmux server is running; treat that as
   # "no collision possible" rather than an error.
@@ -164,33 +174,36 @@ else
     else
       emit "session-name collision" warn \
         "foreign tmux sessions match \`${session_prefix}-*\`: ${conflicting[*]}" \
-        "Rename session_prefix in setup-tmux.toml or stop the foreign sessions."
+        "Rename session_prefix in config.toml or stop the foreign sessions."
     fi
   fi
 fi
 
 # ---- Probe 4: layout_hook exists and is executable ----------------------------
 #
-# Reads the committed setup-tmux.toml only. The gitignored
-# setup-tmux.local.toml overlay may declare a different layout_hook; that
-# override is not seen by this bash sub-check.
+# Reads the committed config.toml only. The gitignored config.local.toml overlay
+# may declare a different layout_hook; that override is not seen by this bash
+# sub-check.
+#
+# layout_hook is a bare filename resolved relative to CONFIG_DIR (alongside
+# config.toml), not relative to the workspace root.
 
 if [[ -f "$MANIFEST_PATH" ]]; then
   layout_hook_val=$(grep -E '^[[:space:]]*layout_hook[[:space:]]*=' "$MANIFEST_PATH" \
     | sed 's/.*=[[:space:]]*//' | tr -d '"'"'"' ')
 
   if [[ -n "$layout_hook_val" ]]; then
-    hook_path="$WORKSPACE_DIR/$layout_hook_val"
+    hook_path="$CONFIG_DIR/$layout_hook_val"
     if [[ -x "$hook_path" ]]; then
-      emit "setup-tmux.toml layout_hook" pass "layout_hook exists and is executable: $layout_hook_val"
+      emit "config.toml layout_hook" pass "layout_hook exists and is executable: $layout_hook_val"
     elif [[ -f "$hook_path" ]]; then
-      emit "setup-tmux.toml layout_hook" warn \
+      emit "config.toml layout_hook" warn \
         "layout_hook file exists but is not executable: $layout_hook_val" \
         "Run: chmod +x $hook_path"
     else
-      emit "setup-tmux.toml layout_hook" warn \
+      emit "config.toml layout_hook" warn \
         "layout_hook file not found: $layout_hook_val" \
-        "Create the file at $hook_path or remove layout_hook from setup-tmux.toml."
+        "Create the file at $hook_path or remove layout_hook from config.toml."
     fi
   fi
 fi

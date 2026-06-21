@@ -1,4 +1,4 @@
-"""TOML manifest reader — parses setup-tmux.toml + optional overlay → ServiceManifest.
+"""TOML manifest reader — parses config.toml + optional overlay → ServiceManifest.
 
 All TOML parsing is confined here.  Callers receive a fully-constructed
 ``ServiceManifest`` or a ``ManifestError``; they never see ``tomllib`` or I/O
@@ -14,25 +14,22 @@ from service_manifest.core.filesystem import IFilesystemReader
 from service_manifest.modules.manifest.errors import ManifestError
 from service_manifest.modules.manifest.model import LogConfig, LogMode, Service, ServiceManifest, StatusUrl, Target
 
-# Relative path from the workspace/worktree root to the manifest directory.
-# Mirrors the bash resolution in winter-service-tmux.sh:
-#   local project_dir="$1/ai/project"
-_MANIFEST_DIR = Path("ai") / "project"
-_COMMITTED_NAME = "setup-tmux.toml"
-_LOCAL_NAME = "setup-tmux.local.toml"
+# File names within the config dir (resolved by the locator / CLI before calling read()).
+# The entrypoint is workflow/orchestrate, which delegates to the locator for the dir.
+_COMMITTED_NAME = "config.toml"
+_LOCAL_NAME = "config.local.toml"
 
 # Allowed values for a ``[[service]]`` entry's config-only ``scope`` discriminator.
 _VALID_SCOPES = ("project", "workspace")
 
 
 class ManifestReader:
-    """Reads ``setup-tmux.toml`` (+ optional ``setup-tmux.local.toml`` overlay)
-    from a workspace root directory and constructs a ``ServiceManifest``.
+    """Reads ``config.toml`` (+ optional ``config.local.toml`` overlay)
+    from a config directory and constructs a ``ServiceManifest``.
 
     ALL TOML parsing is confined here.
 
-    Overlay merge semantics (mirrors the bash committed→local overlay in
-    ``winter-service-tmux.sh``):
+    Overlay merge semantics:
 
     * **Scalars** (``session_prefix``, ``env_file``, ``layout_hook``,
       ``workspace_layout_hook``): the overlay value replaces the committed
@@ -53,18 +50,23 @@ class ManifestReader:
     # Public API
     # ------------------------------------------------------------------
 
-    def read(self, workspace_root: Path) -> ServiceManifest:
+    def read(self, config_dir: Path) -> ServiceManifest:
         """Parse the committed manifest (+ overlay if present) and return a
         ``ServiceManifest``.
+
+        Args:
+            config_dir: Directory containing ``config.toml`` (committed) and
+                optionally ``config.local.toml`` (per-machine overlay).
+                Resolved by the caller — typically ``IWorkspaceLocator.config_dir()``
+                or the ``WINTER_EXT_CONFIG_DIR`` env var.
 
         Raises ``ManifestError`` on: committed file absent, file unreadable,
         malformed TOML, missing required ``session_prefix``, a ``[[service]]``
         missing ``name`` or ``target``, or a ``target`` that cannot be split
         into two integers.
         """
-        project_dir = workspace_root / _MANIFEST_DIR
-        committed_path = project_dir / _COMMITTED_NAME
-        local_path = project_dir / _LOCAL_NAME
+        committed_path = config_dir / _COMMITTED_NAME
+        local_path = config_dir / _LOCAL_NAME
 
         committed = self._load_toml(committed_path, required=True)
         local = self._load_toml(local_path, required=False)

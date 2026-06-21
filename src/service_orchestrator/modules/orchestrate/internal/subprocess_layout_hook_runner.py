@@ -1,7 +1,7 @@
 """Bash layout hook runner adapter.  Subprocess call confined here.
 
 Runs the optional bash hook script declared as ``layout_hook`` in
-``setup-tmux.toml``.  The hook is given the environment vars and cwd
+``config.toml``.  The hook is given the environment vars and cwd
 supplied by the caller (typically the orchestrator service, which sets
 ``WINTER_TMUX_SESSION``, ``WINTER_TMUX_WORKTREE_DIR``, ``WINTER_ENV``, etc.).
 """

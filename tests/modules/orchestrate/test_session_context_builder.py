@@ -51,7 +51,8 @@ from tests.fakes import FakeFilesystemReader
 # ---------------------------------------------------------------------------
 
 _WORKSPACE = Path("/fake/workspace")
-_MANIFEST_COMMITTED_PATH = Path("ai/project/setup-tmux.toml")
+_CONFIG_DIR = _WORKSPACE / ".winter" / "config" / "winter-service-tmux"
+_MANIFEST_COMMITTED_PATH = Path("config.toml")
 
 # A minimal TOML manifest with env services only.  These tests populate
 # workspace_services / workspace_layout_hook directly via the model (rather than
@@ -59,7 +60,7 @@ _MANIFEST_COMMITTED_PATH = Path("ai/project/setup-tmux.toml")
 _MANIFEST_TOML_ENV_ONLY = """\
 session_prefix = "mp"
 env_file = ".winter.env"
-layout_hook = "ai/project/layout-hook.sh"
+layout_hook = "layout-hook.sh"
 
 [[service]]
 name = "backend"
@@ -81,12 +82,12 @@ _WS_SERVICES = (
     Service(name="monitor", target=Target(window=0, pane=0), command="python -m monitor"),
     Service(name="proxy", target=Target(window=0, pane=1), command="nginx -g 'daemon off;'"),
 )
-_WS_LAYOUT_HOOK = "ai/project/workspace-layout-hook.sh"
+_WS_LAYOUT_HOOK = "workspace-layout-hook.sh"
 
 
 def _make_sm_container(toml_content: str = _MANIFEST_TOML_ENV_ONLY) -> sm_container_mod.Container:
     """Build a service_manifest.Container seeded with in-memory TOML."""
-    abs_toml_path = _WORKSPACE / _MANIFEST_COMMITTED_PATH
+    abs_toml_path = _CONFIG_DIR / _MANIFEST_COMMITTED_PATH
     fake_fs = FakeFilesystemReader({abs_toml_path: toml_content})
     return sm_container_mod.Container(fs=fake_fs)
 
@@ -139,6 +140,7 @@ def _make_workspace_ctx(
         env=WORKSPACE_TARGET,
         workspace_root=_WORKSPACE,
         worktree_dir=_WORKSPACE,
+        config_dir=_CONFIG_DIR,
         session_prefix=manifest.session_prefix,
         services=manifest.workspace_services,
         layout_hook=manifest.workspace_layout_hook,
@@ -173,6 +175,25 @@ def test_workspace_target_constant_is_workspace() -> None:
 
 
 # ---------------------------------------------------------------------------
+# build() and build_workspace() — config_dir threaded through
+# ---------------------------------------------------------------------------
+
+
+def test_build_config_dir_from_locator() -> None:
+    """build() sets ctx.config_dir from locator.config_dir()."""
+    builder = _make_builder()
+    ctx = builder.build("alpha")
+    assert ctx.config_dir == _CONFIG_DIR
+
+
+def test_build_workspace_config_dir_from_locator() -> None:
+    """build_workspace() sets ctx.config_dir from locator.config_dir()."""
+    builder = _make_builder()
+    ctx = builder.build_workspace()
+    assert ctx.config_dir == _CONFIG_DIR
+
+
+# ---------------------------------------------------------------------------
 # build_workspace — SessionContext field assertions
 # ---------------------------------------------------------------------------
 
@@ -198,16 +219,15 @@ def test_build_workspace_workspace_root_resolved_from_locator() -> None:
 
 
 def test_build_workspace_workspace_root_override() -> None:
-    """workspace_root kwarg overrides the locator."""
+    """workspace_root kwarg overrides the workspace_root/worktree_dir but not config_dir."""
     override = Path("/other/root")
-    abs_toml_path = override / _MANIFEST_COMMITTED_PATH
-    fake_fs = FakeFilesystemReader({abs_toml_path: _MANIFEST_TOML_ENV_ONLY})
-    sm_override = sm_container_mod.Container(fs=fake_fs)
-    locator = FakeWorkspaceLocator(_WORKSPACE)  # locator points elsewhere
+    # Manifest is read from locator.config_dir() (_CONFIG_DIR), not from override.
+    locator = FakeWorkspaceLocator(_WORKSPACE)
+    sm = _make_sm_container()
     builder = SessionContextBuilder(
         locator=locator,
-        manifest_reader=sm_override.manifest_reader,
-        env_reader=sm_override.env_reader,
+        manifest_reader=sm.manifest_reader,
+        env_reader=sm.env_reader,
     )
     ctx = builder.build_workspace(workspace_root=override)
     assert ctx.workspace_root == override
@@ -261,7 +281,7 @@ def test_build_workspace_selects_workspace_fields() -> None:
     """
     toml = """\
 session_prefix = "mp"
-workspace_layout_hook = "ai/project/workspace-layout-hook.sh"
+workspace_layout_hook = "workspace-layout-hook.sh"
 
 [[service]]
 name = "backend"
@@ -281,7 +301,7 @@ url = "http://localhost:3000"
     builder = _make_builder(toml)
     ctx = builder.build_workspace()
     assert [s.name for s in ctx.services] == ["monitor"]
-    assert ctx.layout_hook == "ai/project/workspace-layout-hook.sh"
+    assert ctx.layout_hook == "workspace-layout-hook.sh"
     assert ctx.status_urls == ()
     assert ctx.session_prefix == "mp"
 
@@ -306,15 +326,14 @@ def test_build_for_target_env_name_calls_build() -> None:
 
 
 def test_build_for_target_workspace_root_forwarded_to_build_workspace() -> None:
+    # workspace_root override propagates; manifest is still read from locator.config_dir().
     override = Path("/other/root")
-    abs_toml_path = override / _MANIFEST_COMMITTED_PATH
-    fake_fs = FakeFilesystemReader({abs_toml_path: _MANIFEST_TOML_ENV_ONLY})
-    sm_override = sm_container_mod.Container(fs=fake_fs)
     locator = FakeWorkspaceLocator(_WORKSPACE)
+    sm = _make_sm_container()
     builder = SessionContextBuilder(
         locator=locator,
-        manifest_reader=sm_override.manifest_reader,
-        env_reader=sm_override.env_reader,
+        manifest_reader=sm.manifest_reader,
+        env_reader=sm.env_reader,
     )
     ctx = build_for_target(builder, WORKSPACE_TARGET, workspace_root=override)
     assert ctx.workspace_root == override
@@ -324,14 +343,12 @@ def test_build_for_target_workspace_root_forwarded_to_build_workspace() -> None:
 def test_build_for_target_workspace_root_forwarded_to_build() -> None:
     """workspace_root kwarg reaches build() for non-workspace targets."""
     override = Path("/other/root")
-    abs_toml_path = override / _MANIFEST_COMMITTED_PATH
-    fake_fs = FakeFilesystemReader({abs_toml_path: _MANIFEST_TOML_ENV_ONLY})
-    sm_override = sm_container_mod.Container(fs=fake_fs)
     locator = FakeWorkspaceLocator(_WORKSPACE)
+    sm = _make_sm_container()
     builder = SessionContextBuilder(
         locator=locator,
-        manifest_reader=sm_override.manifest_reader,
-        env_reader=sm_override.env_reader,
+        manifest_reader=sm.manifest_reader,
+        env_reader=sm.env_reader,
     )
     ctx = build_for_target(builder, "beta", workspace_root=override)
     assert ctx.workspace_root == override
@@ -387,7 +404,7 @@ def test_e2e_up_runs_workspace_layout_hook_with_ws_root_cwd() -> None:
     assert hook_env["WINTER_TMUX_SESSION"] == "mp-workspace"
     assert hook_env["WINTER_TMUX_WORKTREE_DIR"] == str(_WORKSPACE)
     assert hook_env["WINTER_ENV"] == "workspace"
-    assert hook_path == _WORKSPACE / _WS_LAYOUT_HOOK
+    assert hook_path == _CONFIG_DIR / _WS_LAYOUT_HOOK
 
 
 def test_e2e_up_sends_workspace_service_commands() -> None:
