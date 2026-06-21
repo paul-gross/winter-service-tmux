@@ -59,7 +59,8 @@
 #   Matches the targets in workflow/setup-tmux.toml.example:
 #     backend   → 0.0  (initial pane in window 0)
 #     frontend  → 0.1  (vertical split of window 0)
-#     shell     → 1.0  (new window 1, single pane)
+#     shell     → 1.0  (new window 1, pane 0)
+#     watcher   → 1.1  (vertical split of window 1)
 # =============================================================================
 
 set -euo pipefail
@@ -94,6 +95,11 @@ tmux split-window -v \
 # -c                        : initial cwd
 tmux new-window \
   -t "$WINTER_TMUX_SESSION" \
+  -c "$WINTER_TMUX_WORKTREE_DIR"
+
+# Pane 1.1: watcher — split window 1 vertically (top/bottom halves).
+tmux split-window -v \
+  -t "$WINTER_TMUX_SESSION:1.0" \
   -c "$WINTER_TMUX_WORKTREE_DIR"
 
 # ---------------------------------------------------------------------------
