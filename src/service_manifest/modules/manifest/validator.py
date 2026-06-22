@@ -16,7 +16,7 @@ DATA (the caller decides fatality), not control flow.  See
 
 from __future__ import annotations
 
-from service_manifest.modules.manifest.env import interpolate
+from service_manifest.modules.manifest.env import interpolate, referenced_vars
 from service_manifest.modules.manifest.model import Service, ServiceManifest
 
 
@@ -77,10 +77,15 @@ class ManifestValidator:
         self._check_duplicate_targets(manifest.workspace_services, "workspace service", violations)
         self._check_target_non_negative(manifest.services, "service", violations)
         self._check_target_non_negative(manifest.workspace_services, "workspace service", violations)
+        self._check_health_config(manifest.services, "service", violations)
+        self._check_health_config(manifest.workspace_services, "workspace service", violations)
+        self._check_workspace_health_has_no_vars(manifest.workspace_services, violations)
         self._check_log_config(manifest, violations)
 
         if env is not None:
             self._check_status_url_vars(manifest, env, violations)
+            self._check_health_vars(manifest.services, "service", env, violations)
+            self._check_health_vars(manifest.workspace_services, "workspace service", env, violations)
 
         return violations
 
@@ -153,6 +158,28 @@ class ManifestValidator:
             violations.append(f"[logs] 'retention_seconds' must be non-negative, got {logs.retention_seconds}")
 
     @staticmethod
+    def _check_health_config(services: tuple[Service, ...], label: str, violations: list[str]) -> None:
+        for service in services:
+            health = service.health
+            if health is None:
+                continue
+            if not health.target.strip():
+                violations.append(f"{label} '{service.name}': health.target must be non-empty")
+            if health.timeout is not None and health.timeout <= 0:
+                violations.append(f"{label} '{service.name}': health.timeout must be positive, got {health.timeout:g}")
+
+    @staticmethod
+    def _check_workspace_health_has_no_vars(services: tuple[Service, ...], violations: list[str]) -> None:
+        for service in services:
+            if service.health is None:
+                continue
+            for var in referenced_vars(service.health.target):
+                violations.append(
+                    f"workspace service '{service.name}' health: variable '${{{var}}}' is not supported "
+                    "because workspace services do not load an env_file"
+                )
+
+    @staticmethod
     def _check_status_url_vars(
         manifest: ServiceManifest,
         env: dict[str, str],
@@ -162,3 +189,17 @@ class ManifestValidator:
             _rendered, unresolved = interpolate(status_url.url, env)
             for var in unresolved:
                 violations.append(f"status url '{status_url.label}': unresolvable variable '${{{var}}}'")
+
+    @staticmethod
+    def _check_health_vars(
+        services: tuple[Service, ...],
+        label: str,
+        env: dict[str, str],
+        violations: list[str],
+    ) -> None:
+        for service in services:
+            if service.health is None:
+                continue
+            _rendered, unresolved = interpolate(service.health.target, env)
+            for var in unresolved:
+                violations.append(f"{label} '{service.name}' health: unresolvable variable '${{{var}}}'")

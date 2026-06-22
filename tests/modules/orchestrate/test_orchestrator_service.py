@@ -13,13 +13,14 @@ from pathlib import Path
 import pytest
 
 import service_manifest.container as sm_container_mod
-from service_manifest.modules.manifest.model import LogConfig, Service, ServiceManifest, Target
+from service_manifest.modules.manifest.model import Health, HealthType, LogConfig, Service, ServiceManifest, Target
 from service_orchestrator.modules.orchestrate.errors import OrchestratorError
 from service_orchestrator.modules.orchestrate.orchestrator_service import OrchestratorService, _segments_to_prune
 from service_orchestrator.modules.orchestrate.session_context import SessionContext
 from service_orchestrator.modules.orchestrate.status_report import logwriter_path
 from tests.conftest import (
     FakeFollowClock,
+    FakeHealthChecker,
     FakeLayoutHookRunner,
     FakeLogRepository,
     FakeProcessReaper,
@@ -101,6 +102,7 @@ def _make_service(
     reaper: FakeProcessReaper | None = None,
     hook_runner: FakeLayoutHookRunner | None = None,
     log_repo: FakeLogRepository | None = None,
+    health_checker: FakeHealthChecker | None = None,
     clock: FakeFollowClock | None = None,
     stdout: io.StringIO | None = None,
     stderr: io.StringIO | None = None,
@@ -118,6 +120,7 @@ def _make_service(
         reaper=reaper,
         hook_runner=hook_runner,
         log_repo=log_repo,
+        health_checker=health_checker,
         clock=clock,
         stdout=stdout,
         stderr=stderr,
@@ -539,6 +542,40 @@ def test_status_unresolved_var_left_literal() -> None:
     svc.status(ctx)
 
     assert "${BACKEND_PORT}" in out.getvalue()
+
+
+def test_status_renders_health_column_when_probe_declared() -> None:
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 10, "0.1": 20})
+    tmux.capture_text = {"0.0": "backend ready\n", "0.1": "frontend booted\n"}
+    manifest = ServiceManifest(
+        session_prefix="mp",
+        env_file=".winter.env",
+        layout_hook=None,
+        services=(
+            Service(
+                name="backend",
+                target=Target(0, 0),
+                command="cmd",
+                health=Health(type=HealthType.URL, target="http://localhost:${BACKEND_PORT}/health"),
+            ),
+            Service(name="frontend", target=Target(0, 1), command="cmd"),
+        ),
+        status_urls=(),
+    )
+    ctx = _make_ctx(manifest=manifest, env_vars={"BACKEND_PORT": "3000"})
+    health = FakeHealthChecker({"http://localhost:${BACKEND_PORT}/health": True})
+    out = io.StringIO()
+    svc = _make_service(tmux=tmux, reaper=FakeProcessReaper(children_set={10, 20}), health_checker=health, stdout=out)
+
+    result = svc.status(ctx)
+
+    assert result == 0
+    output = out.getvalue()
+    assert "backend:" in output
+    assert "healthy" in output
+    assert "frontend:" in output
+    assert "-" in output
 
 
 def test_status_no_session() -> None:
@@ -1221,6 +1258,136 @@ def test_status_env_document_shape_stability() -> None:
         assert s["health"] == "unknown"
         assert s["ports"] == []
         assert s["since"] is None
+
+
+def test_status_env_document_populates_declared_health() -> None:
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 10, "0.1": 20})
+    manifest = ServiceManifest(
+        session_prefix="mp",
+        env_file=".winter.env",
+        layout_hook=None,
+        services=(
+            Service(
+                name="backend",
+                target=Target(0, 0),
+                command="cmd",
+                health=Health(type=HealthType.URL, target="http://localhost:${BACKEND_PORT}/health"),
+            ),
+            Service(
+                name="frontend",
+                target=Target(0, 1),
+                command="cmd",
+                health=Health(type=HealthType.CMD, target="pgrep -f frontend"),
+            ),
+            Service(name="shell", target=Target(1, 0), command=""),
+        ),
+        status_urls=(),
+    )
+    ctx = _make_ctx(manifest=manifest, env_vars={"BACKEND_PORT": "3000"})
+    health = FakeHealthChecker(
+        {
+            "http://localhost:${BACKEND_PORT}/health": True,
+            "pgrep -f frontend": False,
+        }
+    )
+    svc = _make_service(tmux=tmux, reaper=FakeProcessReaper(children_set={10, 20}), health_checker=health, stdout=io.StringIO())
+
+    doc = svc.status_env_document(ctx)
+
+    by_name = {s["name"]: s for s in doc["services"]}
+    assert by_name["backend"]["health"] == "healthy"
+    assert by_name["frontend"]["health"] == "unhealthy"
+    assert by_name["shell"]["health"] == "unknown"
+    assert health.calls == [
+        ("http://localhost:${BACKEND_PORT}/health", {"BACKEND_PORT": "3000"}, _WORKTREE),
+        ("pgrep -f frontend", {"BACKEND_PORT": "3000"}, _WORKTREE),
+    ]
+
+
+def test_status_env_document_declared_health_is_unhealthy_without_running_service() -> None:
+    manifest = ServiceManifest(
+        session_prefix="mp",
+        env_file=".winter.env",
+        layout_hook=None,
+        services=(
+            Service(
+                name="backend",
+                target=Target(0, 0),
+                command="cmd",
+                health=Health(type=HealthType.URL, target="http://localhost:${BACKEND_PORT}/health"),
+            ),
+        ),
+        status_urls=(),
+    )
+    ctx = _make_ctx(manifest=manifest, env_vars={"BACKEND_PORT": "3000"})
+    health = FakeHealthChecker({"http://localhost:${BACKEND_PORT}/health": True})
+    svc = _make_service(tmux=FakeTmuxRepository(), reaper=FakeProcessReaper(), health_checker=health)
+
+    doc = svc.status_env_document(ctx)
+
+    service = doc["services"][0]
+    assert service["state"] == "stopped"
+    assert service["health"] == "unhealthy"
+    assert health.calls == []
+
+
+def test_status_env_document_declared_health_is_unhealthy_for_stopped_pane() -> None:
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 10})
+    manifest = ServiceManifest(
+        session_prefix="mp",
+        env_file=".winter.env",
+        layout_hook=None,
+        services=(
+            Service(
+                name="backend",
+                target=Target(0, 0),
+                command="cmd",
+                health=Health(type=HealthType.CMD, target="true"),
+            ),
+        ),
+        status_urls=(),
+    )
+    ctx = _make_ctx(manifest=manifest)
+    health = FakeHealthChecker({"true": True})
+    svc = _make_service(tmux=tmux, reaper=FakeProcessReaper(children_set=set()), health_checker=health)
+
+    doc = svc.status_env_document(ctx)
+
+    service = doc["services"][0]
+    assert service["state"] == "stopped"
+    assert service["health"] == "unhealthy"
+    assert health.calls == []
+
+
+def test_status_env_document_declared_health_is_unhealthy_for_missing_pane() -> None:
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {})
+    manifest = ServiceManifest(
+        session_prefix="mp",
+        env_file=".winter.env",
+        layout_hook=None,
+        services=(
+            Service(
+                name="backend",
+                target=Target(0, 0),
+                command="cmd",
+                health=Health(type=HealthType.CMD, target="true"),
+            ),
+        ),
+        status_urls=(),
+    )
+    ctx = _make_ctx(manifest=manifest)
+    health = FakeHealthChecker({"true": True})
+    svc = _make_service(tmux=tmux, reaper=FakeProcessReaper(children_set={10}), health_checker=health)
+
+    doc = svc.status_env_document(ctx)
+
+    service = doc["services"][0]
+    assert service["state"] == "stopped"
+    assert service["health"] == "unhealthy"
+    assert health.calls == []
 
 
 def test_status_env_document_port_base_from_env_vars() -> None:

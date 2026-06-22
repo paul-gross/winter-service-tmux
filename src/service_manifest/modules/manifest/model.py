@@ -25,6 +25,27 @@ class LogMode(StrEnum):
     MEMORY = "memory"
 
 
+class HealthType(StrEnum):
+    """Supported service readiness probe types."""
+
+    URL = "url"
+    CMD = "cmd"
+
+
+@dataclass(frozen=True)
+class Health:
+    """Optional readiness probe for a declared service.
+
+    ``target`` may contain ``${VAR}`` placeholders resolved against the env file
+    before the probe runs.  ``timeout`` is seconds; ``None`` means use the probe
+    runner's default timeout.
+    """
+
+    type: HealthType
+    target: str
+    timeout: float | None = None
+
+
 @dataclass(frozen=True)
 class LogConfig:
     """Log-capture configuration for the manifest.
@@ -80,12 +101,15 @@ class Service:
             ``tmux capture-pane`` (no file persistence, no timestamps, requires
             a running session).  ``LogMode.MEMORY`` is accepted but not yet
             implemented (stub).
+        health: Optional readiness probe. Services without a probe report
+            ``health = "unknown"`` in winter's status document.
     """
 
     name: str
     target: Target
     command: str
     log: LogMode = LogMode.FILE
+    health: Health | None = None
 
 
 @dataclass(frozen=True)

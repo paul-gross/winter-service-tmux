@@ -5,7 +5,16 @@ from pathlib import Path
 import pytest
 
 from service_manifest.modules.manifest.errors import ManifestError
-from service_manifest.modules.manifest.model import LogConfig, LogMode, Service, ServiceManifest, StatusUrl, Target
+from service_manifest.modules.manifest.model import (
+    Health,
+    HealthType,
+    LogConfig,
+    LogMode,
+    Service,
+    ServiceManifest,
+    StatusUrl,
+    Target,
+)
 from service_manifest.modules.manifest.reader import ManifestReader
 from tests.fakes import FakeFilesystemReader
 
@@ -111,6 +120,47 @@ command = "echo hi"
     assert manifest.services[0].target == Target(window=2, pane=3)
 
 
+def test_service_health_parsed() -> None:
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "backend"
+target = "0.0"
+command = "npm run start:dev"
+
+[service.health]
+type = "url"
+target = "http://localhost:${BACKEND_PORT}/health"
+timeout = 2
+"""
+    manifest = _read({_COMMITTED_PATH: content})
+
+    assert manifest.services[0].health == Health(
+        type=HealthType.URL,
+        target="http://localhost:${BACKEND_PORT}/health",
+        timeout=2.0,
+    )
+
+
+def test_service_health_cmd_parsed_without_timeout() -> None:
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "worker"
+target = "0.0"
+command = "npm run worker"
+
+[service.health]
+type = "cmd"
+target = "pgrep -f worker"
+"""
+    manifest = _read({_COMMITTED_PATH: content})
+
+    assert manifest.services[0].health == Health(type=HealthType.CMD, target="pgrep -f worker")
+
+
 def test_missing_optional_fields_are_none() -> None:
     content = """\
 session_prefix = "proj"
@@ -166,6 +216,37 @@ name = "backend"
 command = "npm start"
 """
     with pytest.raises(ManifestError, match="target"):
+        _read({_COMMITTED_PATH: content})
+
+
+def test_service_health_unknown_type_raises() -> None:
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "backend"
+target = "0.0"
+
+[service.health]
+type = "tcp"
+target = "localhost:3000"
+"""
+    with pytest.raises(ManifestError, match=r"health\.type"):
+        _read({_COMMITTED_PATH: content})
+
+
+def test_service_health_missing_target_raises() -> None:
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "backend"
+target = "0.0"
+
+[service.health]
+type = "url"
+"""
+    with pytest.raises(ManifestError, match=r"health\.target"):
         _read({_COMMITTED_PATH: content})
 
 
@@ -335,6 +416,32 @@ command = "cmd"
 """
     manifest = _read({_COMMITTED_PATH: committed, _LOCAL_PATH: overlay})
     assert manifest.services[0].target == Target(window=1, pane=0)
+
+
+def test_overlay_service_overrides_health_by_name() -> None:
+    committed = """\
+session_prefix = "mp"
+
+[[service]]
+name = "backend"
+target = "0.0"
+command = "cmd"
+
+[service.health]
+type = "url"
+target = "http://localhost:${BACKEND_PORT}/health"
+"""
+    overlay = """\
+[[service]]
+name = "backend"
+
+[service.health]
+type = "cmd"
+target = "pgrep -f backend"
+timeout = 1
+"""
+    manifest = _read({_COMMITTED_PATH: committed, _LOCAL_PATH: overlay})
+    assert manifest.services[0].health == Health(type=HealthType.CMD, target="pgrep -f backend", timeout=1.0)
 
 
 # ---------------------------------------------------------------------------

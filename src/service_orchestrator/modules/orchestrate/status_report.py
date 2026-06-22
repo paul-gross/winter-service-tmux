@@ -97,15 +97,16 @@ def build_service_status(
     name: str,
     state: str,
     *,
+    health: str = "unknown",
     handle: str | None,
     log_path: str | None,
 ) -> dict:  # type: ignore[type-arg]
     """Build one service entry for winter's env-keyed status document.
 
     Shape-stable per the winter ``status`` wire contract: every field is always
-    present.  ``health`` is always ``"unknown"`` — the tmux orchestrator has no
-    probe support yet — and ``ports``/``since`` are likewise unpopulated (``[]``
-    / ``None``) because tmux does not track them.
+    present.  ``health`` is ``"healthy"``/``"unhealthy"`` when a service declares
+    a readiness probe and ``"unknown"`` otherwise.  ``ports``/``since`` are
+    unpopulated (``[]`` / ``None``) because tmux does not track them.
 
     Args:
         name: Service name.
@@ -118,7 +119,7 @@ def build_service_status(
     return {
         "name": name,
         "state": state,
-        "health": "unknown",
+        "health": health,
         "ports": [],
         "handle": handle,
         "log_path": log_path,

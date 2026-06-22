@@ -12,7 +12,16 @@ from pathlib import Path
 
 from service_manifest.core.filesystem import IFilesystemReader
 from service_manifest.modules.manifest.errors import ManifestError
-from service_manifest.modules.manifest.model import LogConfig, LogMode, Service, ServiceManifest, StatusUrl, Target
+from service_manifest.modules.manifest.model import (
+    Health,
+    HealthType,
+    LogConfig,
+    LogMode,
+    Service,
+    ServiceManifest,
+    StatusUrl,
+    Target,
+)
 
 # File names within the config dir (resolved by the locator / CLI before calling read()).
 # The entrypoint is workflow/orchestrate, which delegates to the locator for the dir.
@@ -248,13 +257,40 @@ class ManifestReader:
                     f"allowed values are {', '.join(repr(v) for v in _allowed)}"
                 )
             log_mode = LogMode(log_raw)
+            health_raw = raw.get("health")
+            health: Health | None = None
+            if health_raw is not None:
+                if not isinstance(health_raw, dict):
+                    raise ManifestError(f"service '{name}': 'health' must be a table, got {type(health_raw).__name__}")
+                type_raw = health_raw.get("type")
+                if not isinstance(type_raw, str):
+                    raise ManifestError(f"service '{name}': health.type must be a string")
+                target_raw = health_raw.get("target")
+                if not isinstance(target_raw, str):
+                    raise ManifestError(f"service '{name}': health.target must be a string")
+                timeout_raw = health_raw.get("timeout")
+                timeout: float | None = None
+                if timeout_raw is not None:
+                    if not isinstance(timeout_raw, int | float):
+                        raise ManifestError(
+                            f"service '{name}': health.timeout must be a number, got {type(timeout_raw).__name__}"
+                        )
+                    timeout = float(timeout_raw)
+                try:
+                    health_type = HealthType(type_raw)
+                except ValueError as exc:
+                    allowed = ", ".join(repr(t.value) for t in HealthType)
+                    raise ManifestError(
+                        f"service '{name}': health.type value {type_raw!r} is not valid; allowed values are {allowed}"
+                    ) from exc
+                health = Health(type=health_type, target=target_raw, timeout=timeout)
             scope = raw.get("scope", "project")
             if scope not in _VALID_SCOPES:
                 raise ManifestError(
                     f"service '{name}': invalid scope {scope!r}; "
                     f"allowed values are {', '.join(repr(s) for s in _VALID_SCOPES)}"
                 )
-            parsed.append((Service(name=name, target=target, command=command, log=log_mode), scope))
+            parsed.append((Service(name=name, target=target, command=command, log=log_mode, health=health), scope))
         return parsed
 
     @staticmethod

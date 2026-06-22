@@ -13,9 +13,10 @@ import sys
 from typing import IO
 
 from service_manifest.modules.manifest.env import interpolate
-from service_manifest.modules.manifest.model import LogMode
+from service_manifest.modules.manifest.model import Health, LogMode
 from service_orchestrator.modules.orchestrate.errors import OrchestratorError
 from service_orchestrator.modules.orchestrate.follow_clock import IFollowClock
+from service_orchestrator.modules.orchestrate.health_checker import IHealthChecker
 from service_orchestrator.modules.orchestrate.layout_hook_runner import ILayoutHookRunner
 from service_orchestrator.modules.orchestrate.log_repository import ILogRepository
 from service_orchestrator.modules.orchestrate.reaper import IProcessReaper
@@ -71,6 +72,7 @@ class OrchestratorService:
         reaper: IProcessReaper,
         hook_runner: ILayoutHookRunner,
         log_repo: ILogRepository,
+        health_checker: IHealthChecker | None = None,
         clock: IFollowClock | None = None,
         stdout: IO[str] | None = None,
         stderr: IO[str] | None = None,
@@ -79,6 +81,7 @@ class OrchestratorService:
         self._reaper = reaper
         self._hook_runner = hook_runner
         self._log_repo = log_repo
+        self._health_checker = health_checker
         self._clock = clock
         self._stdout: IO[str] = stdout if stdout is not None else sys.stdout
         self._stderr: IO[str] = stderr if stderr is not None else sys.stderr
@@ -223,8 +226,9 @@ class OrchestratorService:
         live pane backs the service, else ``None``.  ``log_path`` is the
         captured-log path for file-logged services (resolvable from the
         manifest regardless of whether the session is up), else ``None``.
-        ``health``/``ports``/``since`` are unpopulated per the shape-stability
-        rule (no probe/port tracking in tmux yet).
+        ``health`` is populated from declared readiness probes and remains
+        ``"unknown"`` when no probe is declared. ``ports``/``since`` are
+        unpopulated per the shape-stability rule (no port tracking in tmux yet).
 
         Args:
             ctx: The resolved environment context.
@@ -255,7 +259,8 @@ class OrchestratorService:
             captured = bool(svc.command) and svc.log == LogMode.FILE
             log_path = str(self._log_repo.log_path(ctx.worktree_dir, svc.name)) if captured else None
 
-            svc_docs.append(build_service_status(svc.name, state, handle=handle, log_path=log_path))
+            health = self._service_health(svc.health, state, ctx)
+            svc_docs.append(build_service_status(svc.name, state, health=health, handle=handle, log_path=log_path))
 
         return build_env_status(ctx.env, ctx.session, self._port_base(ctx), svc_docs)
 
@@ -313,24 +318,42 @@ class OrchestratorService:
                 rendered_url, _ = interpolate(status_url.url, env_vars)
                 self._stdout.write(f"  {status_url.label}: {rendered_url}\n")
 
+        show_health = any(svc.health is not None for svc in in_scope)
+
         for svc in in_scope:
             target = f"{svc.target.window}.{svc.target.pane}"
             if target not in pane_map:
-                self._stdout.write(f"  {svc.name}:".ljust(16) + "missing\n")
+                health_text = self._service_health(svc.health, "stopped", ctx) if svc.health is not None else "-"
+                if show_health:
+                    self._stdout.write(f"  {svc.name + ':':<14} {'missing':<8}  {health_text:<9}\n")
+                else:
+                    self._stdout.write(f"  {svc.name}:".ljust(16) + "missing\n")
                 continue
 
             pane_pid = pane_map[target]
             running = self._reaper.has_children(pane_pid)
             status_str = "running" if running else "stopped"
+            health = self._service_health(svc.health, status_str, ctx)
+            health_text = health if svc.health is not None else "-"
 
             captured = self._tmux.capture_pane(ctx.session, target)
             last_line = truncate_status_line(last_non_blank_line(captured))
 
-            self._stdout.write(f"  {svc.name + ':':<14} {status_str:<8}  {last_line}\n")
+            if show_health:
+                self._stdout.write(f"  {svc.name + ':':<14} {status_str:<8}  {health_text:<9}  {last_line}\n")
+            else:
+                self._stdout.write(f"  {svc.name + ':':<14} {status_str:<8}  {last_line}\n")
 
         self._stdout.write("\n")
         self._stdout.flush()
         return 0
+
+    def _service_health(self, health: Health | None, state: str, ctx: SessionContext) -> str:
+        if health is None or self._health_checker is None:
+            return "unknown"
+        if state != "running":
+            return "unhealthy"
+        return "healthy" if self._health_checker.is_healthy(health, ctx.env_vars, ctx.worktree_dir) else "unhealthy"
 
     def restart(self, ctx: SessionContext, service_name: str) -> int:
         """Restart a single named service in the running session.

@@ -1,0 +1,90 @@
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+
+from service_manifest.modules.manifest.model import Health, HealthType
+from service_orchestrator.modules.orchestrate.internal.subprocess_health_checker import SubprocessHealthChecker
+
+
+class _FakeResponse:
+    def __init__(self, status: int) -> None:
+        self.status = status
+
+    def __enter__(self) -> _FakeResponse:
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        return None
+
+
+def test_url_health_success_status_is_healthy(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    calls = []
+
+    def _urlopen(url: str, timeout: float) -> _FakeResponse:
+        calls.append((url, timeout))
+        return _FakeResponse(204)
+
+    monkeypatch.setattr("urllib.request.urlopen", _urlopen)
+
+    checker = SubprocessHealthChecker()
+
+    assert checker.is_healthy(
+        Health(type=HealthType.URL, target="http://localhost:${PORT}/health", timeout=1),
+        {"PORT": "3000"},
+    )
+    assert calls == [("http://localhost:3000/health", 1.0)]
+
+
+def test_url_health_failure_status_is_unhealthy(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    def _urlopen(url: str, timeout: float) -> _FakeResponse:
+        return _FakeResponse(500)
+
+    monkeypatch.setattr("urllib.request.urlopen", _urlopen)
+
+    checker = SubprocessHealthChecker()
+
+    assert not checker.is_healthy(Health(type=HealthType.URL, target="http://localhost/health"))
+
+
+def test_cmd_health_exit_zero_is_healthy(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    calls = []
+
+    def _run(*args, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append((args, kwargs))
+        return subprocess.CompletedProcess(args=args, returncode=0)
+
+    monkeypatch.setattr("subprocess.run", _run)
+    checker = SubprocessHealthChecker()
+
+    cwd = Path("/fake/worktree")
+    assert checker.is_healthy(Health(type=HealthType.CMD, target="pgrep -f worker", timeout=2), cwd=cwd)
+    assert calls[0][0] == ("pgrep -f worker",)
+    assert calls[0][1]["shell"] is True
+    assert calls[0][1]["timeout"] == 2.0
+    assert calls[0][1]["cwd"] == cwd
+
+
+def test_cmd_health_nonzero_is_unhealthy(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    def _run(*args, **kwargs):  # type: ignore[no-untyped-def]
+        return subprocess.CompletedProcess(args=args, returncode=1)
+
+    monkeypatch.setattr("subprocess.run", _run)
+    checker = SubprocessHealthChecker()
+
+    assert not checker.is_healthy(Health(type=HealthType.CMD, target="false"))
+
+
+def test_unresolved_variable_is_unhealthy_without_running_probe(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    called = False
+
+    def _run(*args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal called
+        called = True
+        return subprocess.CompletedProcess(args=args, returncode=0)
+
+    monkeypatch.setattr("subprocess.run", _run)
+    checker = SubprocessHealthChecker()
+
+    assert not checker.is_healthy(Health(type=HealthType.CMD, target="check ${MISSING}"), {})
+    assert called is False

@@ -1,6 +1,14 @@
 """Tests for service_manifest.modules.manifest.validator — semantic checks over ServiceManifest."""
 
-from service_manifest.modules.manifest.model import LogConfig, Service, ServiceManifest, StatusUrl, Target
+from service_manifest.modules.manifest.model import (
+    Health,
+    HealthType,
+    LogConfig,
+    Service,
+    ServiceManifest,
+    StatusUrl,
+    Target,
+)
 from service_manifest.modules.manifest.validator import ManifestValidator
 
 # ---------------------------------------------------------------------------
@@ -32,6 +40,10 @@ def _make_manifest(
 
 def _service(name: str, window: int = 0, pane: int = 0, command: str = "cmd") -> Service:
     return Service(name=name, target=Target(window=window, pane=pane), command=command)
+
+
+def _service_with_health(name: str, health: Health, window: int = 0, pane: int = 0) -> Service:
+    return Service(name=name, target=Target(window=window, pane=pane), command="cmd", health=health)
 
 
 def _status_url(label: str, url: str) -> StatusUrl:
@@ -233,6 +245,67 @@ def test_unresolvable_var_names_status_label_and_var() -> None:
     assert len(violations) == 1
     assert "Frontend" in violations[0]
     assert "FRONTEND_PORT" in violations[0]
+
+
+def test_unresolvable_var_in_service_health_with_env_is_violation() -> None:
+    manifest = _make_manifest(
+        services=(
+            _service_with_health(
+                "backend",
+                Health(type=HealthType.URL, target="http://localhost:${BACKEND_PORT}/health"),
+            ),
+        ),
+    )
+    violations = _validator.validate(manifest, env={})
+
+    assert len(violations) == 1
+    assert "backend" in violations[0]
+    assert "BACKEND_PORT" in violations[0]
+
+
+def test_resolvable_var_in_service_health_no_violation() -> None:
+    manifest = _make_manifest(
+        services=(
+            _service_with_health(
+                "backend",
+                Health(type=HealthType.URL, target="http://localhost:${BACKEND_PORT}/health"),
+            ),
+        ),
+    )
+
+    assert _validator.validate(manifest, env={"BACKEND_PORT": "3000"}) == []
+
+
+def test_service_health_blank_target_is_violation() -> None:
+    manifest = _make_manifest(services=(_service_with_health("backend", Health(type=HealthType.CMD, target=" ")),))
+    violations = _validator.validate(manifest)
+
+    assert any("health.target" in v for v in violations)
+
+
+def test_service_health_non_positive_timeout_is_violation() -> None:
+    manifest = _make_manifest(
+        services=(_service_with_health("backend", Health(type=HealthType.CMD, target="true", timeout=0)),)
+    )
+    violations = _validator.validate(manifest)
+
+    assert any("health.timeout" in v for v in violations)
+
+
+def test_workspace_service_health_var_is_violation() -> None:
+    manifest = _make_manifest(
+        workspace_services=(
+            _service_with_health(
+                "docker",
+                Health(type=HealthType.URL, target="http://localhost:${DOCKER_PORT}/health"),
+            ),
+        ),
+    )
+    violations = _validator.validate(manifest, env={"DOCKER_PORT": "5000"})
+
+    assert len(violations) == 1
+    assert "workspace service 'docker' health" in violations[0]
+    assert "DOCKER_PORT" in violations[0]
 
 
 # ---------------------------------------------------------------------------

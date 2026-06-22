@@ -19,6 +19,8 @@
 #     after all committed services. The per-entry "scope" ("project" default,
 #     or "workspace") travels inside the entry: an override omitting "scope"
 #     keeps the committed scope, and a new entry sets its own.
+#     Nested [service.health] tables are atomic: if you override health locally,
+#     restate the whole health table (type, target, and optional timeout).
 #
 #   [[status.url]] — keyed by "label":
 #     Same override-or-append rule as [[service]], keyed by "label".
@@ -37,10 +39,17 @@ rotate_size_bytes = 52428800  # 50 MiB (committed default is 10 MiB)
 # The orchestrator will use "npm run start:debug" as the command for this pane
 # instead of the committed "npm run start:dev", keeping name and target.
 # log can also be overridden per-service: "file" (default), "pane", or "memory".
+# [service.health] is atomic in overlays, so changing only timeout still requires
+# restating type and target under the matching [[service]].
 [[service]]
 name = "backend"
 command = "npm run start:debug"
 log = "pane"
+
+[service.health]
+type = "url"
+target = "http://localhost:${LOCAL_BACKEND_PORT}/health"
+timeout = 1
 
 # Append a personal service that isn't in the committed manifest.
 # The layout hook (or setup_tmux for now) must also be updated locally to

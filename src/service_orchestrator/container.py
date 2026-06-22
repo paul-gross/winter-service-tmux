@@ -19,10 +19,12 @@ from service_orchestrator.core.internal.env_workspace_locator import EnvWorkspac
 from service_orchestrator.core.workspace_locator import IWorkspaceLocator
 from service_orchestrator.modules.orchestrate.dispatch_service import DispatchService
 from service_orchestrator.modules.orchestrate.follow_clock import IFollowClock
+from service_orchestrator.modules.orchestrate.health_checker import IHealthChecker
 from service_orchestrator.modules.orchestrate.internal.cli_tmux_repository import CliTmuxRepository
 from service_orchestrator.modules.orchestrate.internal.local_log_repository import LocalLogRepository
 from service_orchestrator.modules.orchestrate.internal.pgrep_process_reaper import PgrepProcessReaper
 from service_orchestrator.modules.orchestrate.internal.real_follow_clock import RealFollowClock
+from service_orchestrator.modules.orchestrate.internal.subprocess_health_checker import SubprocessHealthChecker
 from service_orchestrator.modules.orchestrate.internal.subprocess_layout_hook_runner import (
     SubprocessLayoutHookRunner,
 )
@@ -53,6 +55,7 @@ class Container:
         locator: IWorkspaceLocator | None = None,
         manifest: sm_container_mod.Container | None = None,
         log_repo: ILogRepository | None = None,
+        health_checker: IHealthChecker | None = None,
         follow_clock: IFollowClock | None = None,
         log_sink: IO[str] | None = None,
         out_sink: IO[str] | None = None,
@@ -65,6 +68,7 @@ class Container:
         self.hook_runner: ILayoutHookRunner = hook_runner or SubprocessLayoutHookRunner()
         self.locator: IWorkspaceLocator = locator or EnvWorkspaceLocator()
         self.log_repo: ILogRepository = log_repo or LocalLogRepository()
+        self.health_checker: IHealthChecker = health_checker or SubprocessHealthChecker()
         self.follow_clock: IFollowClock = follow_clock or RealFollowClock()
 
         self._sm: sm_container_mod.Container = manifest or sm_container_mod.Container()
@@ -76,6 +80,7 @@ class Container:
             reaper=self.reaper,
             hook_runner=self.hook_runner,
             log_repo=self.log_repo,
+            health_checker=self.health_checker,
             clock=self.follow_clock,
             stdout=out_sink,
             stderr=err_sink,

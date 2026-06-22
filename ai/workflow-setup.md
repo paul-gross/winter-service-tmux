@@ -88,7 +88,7 @@ When the subagent reports back, present the findings to the user and ask **"Use 
 
 ### 3. Identify services
 
-**Explain first:** "Each service becomes one tmux pane. For each one I need three things: the start command, the directory it runs from, and any env vars it depends on from `.winter.env`. We'll go service by service — one at a time."
+**Explain first:** "Each service becomes one tmux pane. For each one I need four things: the start command, the directory it runs from, any env vars it depends on from `.winter.env`, and whether it has a readiness probe. We'll go service by service — one at a time."
 
 Ask **one** question:
 
@@ -99,6 +99,7 @@ Once the user lists them, **for each service** ask in turn (one question per tur
 1. **"What's the start command for `<service>`?"** (e.g. `npm run dev`, `cargo run`, `python manage.py runserver`)
 2. **"Which directory does it run from?"** (relative to the worktree root, e.g. `apps/backend`)
 3. **"Which env vars from `.winter.env` does it need?"** (e.g. `$BACKEND_PORT`, `$DATABASE_URL`) — accept "none" as an answer.
+4. **"Does `<service>` have a status health probe?"** Accept "none". This is reported by `status`; it does not make `./up` wait. For HTTP health checks, record `type = "url"` and the health URL (e.g. `http://localhost:${BACKEND_PORT}/health`). For shell checks, record `type = "cmd"` and the command that should exit 0 when ready (e.g. `pgrep -f my-worker`, run from the worktree root). Ask for a timeout only if the user wants a non-default value; otherwise omit it and use the default 5 seconds.
 
 The start command and run directory combine into one `command` field in the manifest: a service that runs from the worktree root is just its command (`command = "npm run dev"`); a service in a subdirectory prepends a *relative* `cd` (`command = "cd apps/backend && npm run dev"`). Keep that `cd` relative — the orchestrator resets each pane to the worktree root before running, so the same command works on both `./up` and `./restart`.
 
@@ -123,13 +124,13 @@ Record the confirmed value as `session_prefix`.
 
 ### 5. Environment file
 
-**Explain first:** "If any service needs vars from `.winter.env` (the seeded `WINTER_PORT_BASE`, or anything `project-setup.md` appends), the orchestrator can source it before launching each pane. If no service references env vars, `env_file` can be left unset and panes start in a clean shell."
+**Explain first:** "If any service command or status health probe needs vars from `.winter.env` (the seeded `WINTER_PORT_BASE`, or anything `project-setup.md` appends), the orchestrator can source it before launching each pane and use it for health probe interpolation. If neither commands nor probes reference env vars, `env_file` can be left unset and panes start in a clean shell."
 
-Look back at the env vars collected for each service. If **any** service answered with a non-"none" env var dependency, tell the user: "At least one service uses `.winter.env` — I'll set `env_file = \".winter.env\"`." and continue.
+Look back at the env vars collected for each service command and health probe target. If **any** service answered with a non-"none" env var dependency, tell the user: "At least one service command or health probe uses `.winter.env` — I'll set `env_file = \".winter.env\"`." and continue.
 
-If **no** service uses env vars, ask **one** question:
+If **no** service command or health probe uses env vars, ask **one** question:
 
-**"No service declared env-var dependencies. Set `env_file = \".winter.env\"` anyway (so worktree-managed vars like `$WINTER_PORT_BASE` are available in the shell pane), or leave it unset?"**
+**"No service command or health probe declared env-var dependencies. Set `env_file = \".winter.env\"` anyway (so worktree-managed vars like `$WINTER_PORT_BASE` are available in the shell pane), or leave it unset?"**
 
 - "set" / "yes": record `env_file = ".winter.env"`.
 - "unset" / "no": omit `env_file`.
@@ -172,6 +173,7 @@ Then write the file. Read `config.toml.example` and reproduce its structure, sub
 - `env_file` ← `".winter.env"` if the env-file step recorded one; omit the key otherwise.
 - `layout_hook` ← `"layout-hook.sh"` (the bare filename — resolved relative to the config dir where this file lives).
 - `[[service]]` entries ← one table per service, with `name`, `target`, and `command`. Empty command (`command = ""`) for interactive panes.
+- `[service.health]` subtables ← only for services that declared a status health probe. Place each subtable immediately after its matching `[[service]]`, before the next `[[service]]`. Use `type = "url"` or `type = "cmd"`, `target = "..."`, and optional `timeout = <seconds>`. `${VAR}` placeholders in `target` are resolved from `env_file`, the same way `[[status.url]]` entries are; bare `$VAR` is not interpolated.
 - `[[status.url]]` entries ← one table per URL from the status-URLs step (omit section if none).
 
 Confirm: "`config.toml` written at `workspace:/.winter/config/winter-service-tmux/config.toml`."

@@ -82,6 +82,17 @@ retention_seconds = 604800    # 7 days
 #   scope    (optional, default "project") — "project" runs the service in the
 #              per-env <session_prefix>-<env> session; "workspace" makes it a
 #              workspace-scoped singleton (see the workspace section below).
+#   [service.health] (optional) — readiness probe reported in the status
+#              document's health field and the env-root ./status output. It is
+#              observability only: ./up does not wait for this probe.
+#              type = "url" sends an HTTP GET to target and passes on 2xx/3xx.
+#              type = "cmd" runs target as a shell command from the worktree
+#              root and passes on exit 0.
+#              target may contain ${VAR} placeholders resolved from env_file;
+#              bare $VAR is not interpolated.
+#              Workspace-scoped services do not load env_file, so their health
+#              targets must not contain ${VAR} placeholders.
+#              timeout is optional seconds; default is 5.
 #
 # Targets must be unique across all services in the SAME scope. The layout hook
 # is responsible for creating the windows/panes named here; the orchestrator
@@ -92,10 +103,19 @@ name = "backend"
 target = "0.0"
 command = "npm run start:dev"
 
+[service.health]
+type = "url"
+target = "http://localhost:${BACKEND_PORT}/health"
+timeout = 5
+
 [[service]]
 name = "frontend"
 target = "0.1"
 command = "npm run dev"
+
+[service.health]
+type = "cmd"
+target = "pgrep -f 'npm run dev'"
 
 [[service]]
 # Interactive pane — command is empty; the pane gets the env sourced and a

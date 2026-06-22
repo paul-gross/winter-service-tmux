@@ -16,6 +16,7 @@ from pathlib import Path
 from service_orchestrator.core.workspace_locator import IWorkspaceLocator
 from service_orchestrator.modules.orchestrate.errors import OrchestratorError
 from service_orchestrator.modules.orchestrate.follow_clock import IFollowClock
+from service_orchestrator.modules.orchestrate.health_checker import IHealthChecker
 from service_orchestrator.modules.orchestrate.layout_hook_runner import ILayoutHookRunner
 from service_orchestrator.modules.orchestrate.log_repository import ILogRepository
 from service_orchestrator.modules.orchestrate.reaper import IProcessReaper
@@ -146,6 +147,28 @@ class FakeProcessReaper:
 
 def _conforms_fake_process_reaper(x: FakeProcessReaper) -> IProcessReaper:
     """Typecheck-time sentinel: FakeProcessReaper satisfies IProcessReaper."""
+    return x
+
+
+# ---------------------------------------------------------------------------
+# FakeHealthChecker
+# ---------------------------------------------------------------------------
+
+
+class FakeHealthChecker:
+    """In-memory IHealthChecker keyed by raw health target."""
+
+    def __init__(self, results: dict[str, bool] | None = None) -> None:
+        self._results = dict(results or {})
+        self.calls: list[tuple[str, dict[str, str] | None, Path | None]] = []
+
+    def is_healthy(self, health, env: dict[str, str] | None = None, cwd: Path | None = None) -> bool:  # type: ignore[no-untyped-def]
+        self.calls.append((health.target, env, cwd))
+        return self._results.get(health.target, False)
+
+
+def _conforms_fake_health_checker(x: FakeHealthChecker) -> IHealthChecker:
+    """Typecheck-time sentinel: FakeHealthChecker satisfies IHealthChecker."""
     return x
 
 

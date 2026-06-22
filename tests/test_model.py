@@ -2,7 +2,16 @@
 
 from dataclasses import FrozenInstanceError
 
-from service_manifest.modules.manifest.model import LogConfig, LogMode, Service, ServiceManifest, StatusUrl, Target
+from service_manifest.modules.manifest.model import (
+    Health,
+    HealthType,
+    LogConfig,
+    LogMode,
+    Service,
+    ServiceManifest,
+    StatusUrl,
+    Target,
+)
 
 
 def test_target_construction_and_equality() -> None:
@@ -33,6 +42,17 @@ def test_service_empty_command_is_legal() -> None:
     """An empty command represents an interactive pane — this must not be rejected."""
     svc = Service(name="shell", target=Target(window=1, pane=0), command="")
     assert svc.command == ""
+
+
+def test_service_health_is_optional() -> None:
+    svc = Service(name="backend", target=Target(window=0, pane=0), command="cmd")
+    assert svc.health is None
+
+
+def test_service_can_have_health_probe() -> None:
+    health = Health(type=HealthType.URL, target="http://localhost:${BACKEND_PORT}/health", timeout=2)
+    svc = Service(name="backend", target=Target(window=0, pane=0), command="cmd", health=health)
+    assert svc.health == health
 
 
 def test_service_is_frozen() -> None:
