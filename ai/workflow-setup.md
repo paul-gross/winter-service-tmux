@@ -88,7 +88,7 @@ When the subagent reports back, present the findings to the user and ask **"Use 
 
 ### 3. Identify services
 
-**Explain first:** "Each service becomes one tmux pane. For each one I need four things: the start command, the directory it runs from, any env vars it depends on from `.winter.env`, and whether it has a readiness probe. We'll go service by service — one at a time."
+**Explain first:** "Each service becomes one tmux pane. For each one I need five things: the start command, the directory it runs from, any env vars it depends on from `.winter.env`, whether it has a readiness probe, and whether it should be retried if it crashes on boot. We'll go service by service — one at a time."
 
 Ask **one** question:
 
@@ -100,6 +100,7 @@ Once the user lists them, **for each service** ask in turn (one question per tur
 2. **"Which directory does it run from?"** (relative to the worktree root, e.g. `apps/backend`)
 3. **"Which env vars from `.winter.env` does it need?"** (e.g. `$BACKEND_PORT`, `$DATABASE_URL`) — accept "none" as an answer.
 4. **"Does `<service>` have a status health probe?"** Accept "none". This is reported by `status`; it does not make `./up` wait. For HTTP health checks, record `type = "url"` and the health URL (e.g. `http://localhost:${BACKEND_PORT}/health`). For shell checks, record `type = "cmd"` and the command that should exit 0 when ready (e.g. `pgrep -f my-worker`, run from the worktree root). Ask for a timeout only if the user wants a non-default value; otherwise omit it and use the default 5 seconds.
+5. **"Should `<service>` be re-launched if it dies immediately on boot?"** Accept "no". If yes, record `retries` (e.g. 3) and ask whether a non-default retry delay is needed (default is 2 seconds); otherwise omit `retry_delay`. This startup retry policy is honored by `winter service up`; the env-root `./up` symlink is a thin no-retry door and does not honor it.
 
 The start command and run directory combine into one `command` field in the manifest: a service that runs from the worktree root is just its command (`command = "npm run dev"`); a service in a subdirectory prepends a *relative* `cd` (`command = "cd apps/backend && npm run dev"`). Keep that `cd` relative — the orchestrator resets each pane to the worktree root before running, so the same command works on both `./up` and `./restart`.
 
@@ -174,6 +175,7 @@ Then write the file. Read `config.toml.example` and reproduce its structure, sub
 - `layout_hook` ← `"layout-hook.sh"` (the bare filename — resolved relative to the config dir where this file lives).
 - `[[service]]` entries ← one table per service, with `name`, `target`, and `command`. Empty command (`command = ""`) for interactive panes.
 - `[service.health]` subtables ← only for services that declared a status health probe. Place each subtable immediately after its matching `[[service]]`, before the next `[[service]]`. Use `type = "url"` or `type = "cmd"`, `target = "..."`, and optional `timeout = <seconds>`. `${VAR}` placeholders in `target` are resolved from `env_file`, the same way `[[status.url]]` entries are; bare `$VAR` is not interpolated.
+- `[service.startup]` subtables ← only for services that declared a startup retry policy. Place each subtable immediately after its matching `[[service]]` (and after any `[service.health]`), before the next `[[service]]`. Use `retries = <int>` and optional `retry_delay = <seconds>`.
 - `[[status.url]]` entries ← one table per URL from the status-URLs step (omit section if none).
 
 Confirm: "`config.toml` written at `workspace:/.winter/config/winter-service-tmux/config.toml`."

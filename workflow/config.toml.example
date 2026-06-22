@@ -93,6 +93,25 @@ retention_seconds = 604800    # 7 days
 #              Workspace-scoped services do not load env_file, so their health
 #              targets must not contain ${VAR} placeholders.
 #              timeout is optional seconds; default is 5.
+#   [service.startup] (optional) — opt-in per-service startup retry policy.
+#              When winter service up launches a service and its process exits
+#              within a short settle window, up re-launches it up to retries
+#              times, sleeping retry_delay seconds between attempts. Process-exit
+#              detection only — not a health probe; composes with but is
+#              independent of [service.health].
+#              retries      optional int, default 0 — max re-launch attempts
+#                           after the first failure; 0 means no retry (default,
+#                           so the feature is opt-in per service).
+#              retry_delay  optional number (seconds), default 2 — sleep between
+#                           attempts.
+#              Honored by `winter service up`; the env-root ./up symlink is a
+#              thin no-retry door and does not honor this policy.
+#              Requires a non-empty command: a retries > 0 policy on an
+#              interactive (empty-command) pane never fires and the validator
+#              rejects it.
+#              After exhausting retries, `winter service up` exits non-zero and
+#              names every service that failed to stay up; surviving services are
+#              unaffected.
 #
 # Targets must be unique across all services in the SAME scope. The layout hook
 # is responsible for creating the windows/panes named here; the orchestrator
@@ -107,6 +126,10 @@ command = "npm run start:dev"
 type = "url"
 target = "http://localhost:${BACKEND_PORT}/health"
 timeout = 5
+
+[service.startup]
+retries = 3      # re-launch up to 3 times if the process dies on boot
+retry_delay = 2  # seconds between attempts
 
 [[service]]
 name = "frontend"

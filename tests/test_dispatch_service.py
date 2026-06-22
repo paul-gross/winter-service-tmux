@@ -180,7 +180,7 @@ def test_up_orchestrator_error_prints_env_line() -> None:
     o = FakeOrchestrator()
 
     # Patch orchestrator.up to raise OrchestratorError
-    def _raising_up(ctx: SessionContext) -> int:
+    def _raising_up(ctx: SessionContext, *, retry: bool = False) -> int:
         raise OrchestratorError("tmux failed")
 
     o.up = _raising_up  # type: ignore[method-assign]
@@ -564,3 +564,17 @@ def test_logs_follow_calls_follow_streams_with_pairs() -> None:
     ctx, query = streams[0]
     assert ctx.env == "alpha"
     assert set(query.services) == {"backend", "worker"}
+
+
+# ---------------------------------------------------------------------------
+# up: retry=True wired through DispatchService
+# ---------------------------------------------------------------------------
+
+
+def test_up_passes_retry_true_to_orchestrator() -> None:
+    """DispatchService.up invokes orchestrator.up with retry=True."""
+    svc, _b, _o, _ls, _err = _make_dispatch()
+    rc = svc.up("alpha", _WORKSPACE)
+    assert rc == 0
+    assert len(_o.up_calls) == 1
+    assert _o.last_up_retry is True

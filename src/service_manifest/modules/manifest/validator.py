@@ -66,6 +66,10 @@ class ManifestValidator:
         - ``logs.rotate_size_bytes`` is positive (> 0).
         - ``logs.max_rotations`` is non-negative (>= 0).
         - ``logs.retention_seconds`` is non-negative (>= 0).
+        - Each service's ``startup.retries`` is non-negative (both lists).
+        - Each service's ``startup.retry_delay`` is non-negative (both lists).
+        - A ``startup`` policy with ``retries > 0`` is not declared on an
+          interactive (empty-command) service, where it would never fire.
         - When *env* is provided: every ``${VAR}`` in a ``status.url`` template
           resolves against *env*; unresolvable vars are reported per-label.
         """
@@ -80,6 +84,8 @@ class ManifestValidator:
         self._check_health_config(manifest.services, "service", violations)
         self._check_health_config(manifest.workspace_services, "workspace service", violations)
         self._check_workspace_health_has_no_vars(manifest.workspace_services, violations)
+        self._check_startup_config(manifest.services, "service", violations)
+        self._check_startup_config(manifest.workspace_services, "workspace service", violations)
         self._check_log_config(manifest, violations)
 
         if env is not None:
@@ -167,6 +173,26 @@ class ManifestValidator:
                 violations.append(f"{label} '{service.name}': health.target must be non-empty")
             if health.timeout is not None and health.timeout <= 0:
                 violations.append(f"{label} '{service.name}': health.timeout must be positive, got {health.timeout:g}")
+
+    @staticmethod
+    def _check_startup_config(services: tuple[Service, ...], label: str, violations: list[str]) -> None:
+        for service in services:
+            startup = service.startup
+            if startup is None:
+                continue
+            if startup.retries < 0:
+                violations.append(
+                    f"{label} '{service.name}': startup.retries must be non-negative, got {startup.retries}"
+                )
+            if startup.retry_delay < 0:
+                violations.append(
+                    f"{label} '{service.name}': startup.retry_delay must be non-negative, got {startup.retry_delay:g}"
+                )
+            if startup.retries > 0 and not service.command.strip():
+                violations.append(
+                    f"{label} '{service.name}': startup retry policy has no effect on an "
+                    "interactive (empty-command) service"
+                )
 
     @staticmethod
     def _check_workspace_health_has_no_vars(services: tuple[Service, ...], violations: list[str]) -> None:

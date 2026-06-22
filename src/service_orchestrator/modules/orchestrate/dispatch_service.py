@@ -151,7 +151,7 @@ class DispatchService:
         if ctx is None:
             return rc
         try:
-            return self._orchestrator.up(ctx)
+            return self._orchestrator.up(ctx, retry=True)
         except OrchestratorError as exc:
             print(f"orchestrate: env '{env}': {exc}", file=self._err)
             return 1

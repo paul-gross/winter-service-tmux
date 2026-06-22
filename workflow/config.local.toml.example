@@ -21,6 +21,9 @@
 #     keeps the committed scope, and a new entry sets its own.
 #     Nested [service.health] tables are atomic: if you override health locally,
 #     restate the whole health table (type, target, and optional timeout).
+#     Nested [service.startup] tables are atomic in the same way: if you
+#     override startup locally, restate the whole startup table (retries and
+#     optional retry_delay).
 #
 #   [[status.url]] — keyed by "label":
 #     Same override-or-append rule as [[service]], keyed by "label".
@@ -41,6 +44,8 @@ rotate_size_bytes = 52428800  # 50 MiB (committed default is 10 MiB)
 # log can also be overridden per-service: "file" (default), "pane", or "memory".
 # [service.health] is atomic in overlays, so changing only timeout still requires
 # restating type and target under the matching [[service]].
+# [service.startup] is atomic in overlays too: overriding startup requires
+# restating the whole startup table under the matching [[service]].
 [[service]]
 name = "backend"
 command = "npm run start:debug"
@@ -50,6 +55,14 @@ log = "pane"
 type = "url"
 target = "http://localhost:${LOCAL_BACKEND_PORT}/health"
 timeout = 1
+
+# Override the startup retry policy for a committed service — e.g. disable
+# retries locally when debugging a crash-on-boot (retries = 0 opts out).
+[[service]]
+name = "frontend"
+
+[service.startup]
+retries = 0  # disable retries locally; committed value had retries = 3
 
 # Append a personal service that isn't in the committed manifest.
 # The layout hook (or setup_tmux for now) must also be updated locally to

@@ -910,3 +910,34 @@ def test_status_all_includes_workspace_session(
     for call in container.session_context_builder.build.call_args_list:
         env_arg = call.args[0] if call.args else None
         assert env_arg != WORKSPACE_TARGET, "build('workspace', ...) was called — this is the Risk #1 bug"
+
+
+# ---------------------------------------------------------------------------
+# up: no-retry door — env_cli passes no retry kwarg
+# ---------------------------------------------------------------------------
+
+
+def test_env_cli_up_does_not_pass_retry(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """env_cli 'up alpha' calls orchestrator.up(ctx) with no retry kwarg.
+
+    The env-root ./up is the no-retry door; retry is only honored by
+    'winter service up' (cli.py → DispatchService.up).
+    """
+    ws = tmp_path
+    env_dir = ws / "alpha"
+    env_dir.mkdir(parents=True)
+    script = env_dir / "up"
+    script.write_text("#!/bin/sh\n")
+
+    ctx = _make_ctx("alpha")
+    container = _make_mock_container(ctx, service_rc=0)
+    _patch_container_and_argv0(monkeypatch, container, str(script))
+
+    rc = main(["up"])
+
+    assert rc == 0
+    # Exactly one call with ctx as the sole positional arg, no keyword args.
+    container.orchestrator.up.assert_called_once_with(ctx)

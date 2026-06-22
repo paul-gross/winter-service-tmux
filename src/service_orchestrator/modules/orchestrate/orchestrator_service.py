@@ -13,7 +13,7 @@ import sys
 from typing import IO
 
 from service_manifest.modules.manifest.env import interpolate
-from service_manifest.modules.manifest.model import Health, LogMode
+from service_manifest.modules.manifest.model import Health, LogMode, Service
 from service_orchestrator.modules.orchestrate.errors import OrchestratorError
 from service_orchestrator.modules.orchestrate.follow_clock import IFollowClock
 from service_orchestrator.modules.orchestrate.health_checker import IHealthChecker
@@ -32,6 +32,10 @@ from service_orchestrator.modules.orchestrate.tmux_repository import ITmuxReposi
 
 _TMUX_WIDTH = 200
 _TMUX_HEIGHT = 50
+
+# Post-launch settle window before the first liveness check in _await_startup.
+# Gives the pane shell a moment to fork the service process after send_keys.
+_STARTUP_SETTLE_SECONDS = 0.5
 
 
 def _segments_to_prune(
@@ -90,13 +94,20 @@ class OrchestratorService:
     # Public actions
     # ------------------------------------------------------------------
 
-    def up(self, ctx: SessionContext) -> int:
+    def up(self, ctx: SessionContext, *, retry: bool = False) -> int:
         """Start services for *ctx.env*.
 
         Idempotent: if the session already exists, prints a message and
         returns 0.  On hook failure the session is salvaged when more than
         one window exists; otherwise it is torn down and ``OrchestratorError``
         is raised.
+
+        When *retry* is True, services that declare a ``[service.startup]``
+        policy with ``retries > 0`` are monitored after launch: if a service
+        exits within the settle window it is re-launched up to ``retries``
+        times.  Services without a policy (or ``retries == 0``) are unaffected.
+        When *retry* is False (the default, used by the env-root ``./up`` door),
+        behaviour is byte-for-byte identical to before.
         """
         if self._tmux.has_session(ctx.session):
             self._stdout.write(f"Session '{ctx.session}' is already running.\n")
@@ -158,36 +169,105 @@ class OrchestratorService:
                 f"manifest targets not found in session '{ctx.session}' after hook: " + ", ".join(missing_targets)
             )
 
+        # Build a {target: pid} map for the retry loop (populated before the
+        # send loop so we capture pane PIDs as they existed after the hook).
+        pane_pids: dict[str, int] = {p.target: p.pid for p in pane_infos}
+
         # Ensure the log directory exists before starting any captured services.
         self._log_repo.ensure_log_dir(ctx.worktree_dir)
 
         for svc in ctx.services:
             target = f"{svc.target.window}.{svc.target.pane}"
-            # A service is captured iff it has a non-empty command AND log=FILE.
-            captured = bool(svc.command) and svc.log == LogMode.FILE
-            if captured:
-                logfile = self._log_repo.log_path(ctx.worktree_dir, svc.name)
-                line = build_launch_line(
-                    ctx.worktree_dir,
-                    ctx.env_file_path,
-                    svc.name,
-                    svc.command,
-                    logfile=logfile,
-                    rotate_size_bytes=ctx.logs.rotate_size_bytes,
-                    max_rotations=ctx.logs.max_rotations,
-                )
-            else:
-                line = build_launch_line(
-                    ctx.worktree_dir,
-                    ctx.env_file_path,
-                    svc.name,
-                    svc.command,
-                )
+            line = self._launch_line_for(ctx, svc)
             self._tmux.send_keys(ctx.session, target, line)
 
         self._stdout.write(f"Started services in tmux session '{ctx.session}'\n")
         self._stdout.flush()
+
+        if retry:
+            failed = self._await_startup(ctx, pane_pids)
+            if failed:
+                self._stderr.write(f"Services failed to stay up after retries: {', '.join(failed)}\n")
+                self._stderr.flush()
+                return 1
+
         return 0 if hook_ok else 1
+
+    def _launch_line_for(self, ctx: SessionContext, svc: Service) -> str:
+        """Return the captured-vs-bare launch line for *svc*.
+
+        Captured: non-empty command AND log=FILE → writer-wrapped.
+        Bare: empty command OR log!=FILE → plain launch line.
+        """
+        captured = bool(svc.command) and svc.log == LogMode.FILE
+        if captured:
+            logfile = self._log_repo.log_path(ctx.worktree_dir, svc.name)
+            return build_launch_line(
+                ctx.worktree_dir,
+                ctx.env_file_path,
+                svc.name,
+                svc.command,
+                logfile=logfile,
+                rotate_size_bytes=ctx.logs.rotate_size_bytes,
+                max_rotations=ctx.logs.max_rotations,
+            )
+        return build_launch_line(
+            ctx.worktree_dir,
+            ctx.env_file_path,
+            svc.name,
+            svc.command,
+        )
+
+    def _await_startup(self, ctx: SessionContext, pane_pids: dict[str, int]) -> list[str]:
+        """Monitor startup candidates and re-launch those that die within retries.
+
+        Returns the list of service names that never stayed up after all retries.
+        Returns [] immediately when there are no candidates or when the clock
+        seam is unavailable.
+        """
+        candidates = [
+            svc
+            for svc in ctx.services
+            if bool(svc.command)
+            and svc.startup is not None
+            and svc.startup.retries > 0
+            and f"{svc.target.window}.{svc.target.pane}" in pane_pids
+        ]
+        if not candidates or self._clock is None:
+            return []
+
+        self._clock.sleep(_STARTUP_SETTLE_SECONDS)
+
+        failed: list[str] = []
+        for svc in candidates:
+            target = f"{svc.target.window}.{svc.target.pane}"
+            pid = pane_pids[target]
+            if self._reaper.has_children(pid):
+                # Already alive after the settle window — no retry needed.
+                continue
+            # Service is dead; attempt retries.
+            assert svc.startup is not None  # guaranteed by candidates filter
+            retries = svc.startup.retries
+            line = self._launch_line_for(ctx, svc)
+            alive = False
+            for attempt in range(1, retries + 1):
+                # Reap any descendants the dead launch may have orphaned before
+                # re-sending, mirroring restart/down: has_children sees only
+                # direct children, so a lingering grandchild or defunct process
+                # would otherwise let a second copy stack into the same pane.
+                self._reaper.reap_descendants([pid])
+                self._stdout.write(
+                    f"Retrying '{svc.name}' (attempt {attempt}/{retries}) in {ctx.session}:{target}\n"
+                )
+                self._stdout.flush()
+                self._tmux.send_keys(ctx.session, target, line)
+                self._clock.sleep(svc.startup.retry_delay)
+                if self._reaper.has_children(pid):
+                    alive = True
+                    break
+            if not alive:
+                failed.append(svc.name)
+        return failed
 
     def down(self, ctx: SessionContext) -> int:
         """Stop all services and kill the tmux session for *ctx.env*.

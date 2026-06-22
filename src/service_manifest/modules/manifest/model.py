@@ -47,6 +47,20 @@ class Health:
 
 
 @dataclass(frozen=True)
+class StartupPolicy:
+    """Optional startup retry policy for a declared service.
+
+    ``retries`` is the max re-launch attempts after the first failure (0 = no
+    retry).  ``retry_delay`` is seconds to wait between attempts; the default
+    applies when the field is omitted from TOML.  Honored by
+    ``winter service up``; the env-root ``./up`` does not retry.
+    """
+
+    retries: int = 0
+    retry_delay: float = 2.0
+
+
+@dataclass(frozen=True)
 class LogConfig:
     """Log-capture configuration for the manifest.
 
@@ -103,6 +117,8 @@ class Service:
             implemented (stub).
         health: Optional readiness probe. Services without a probe report
             ``health = "unknown"`` in winter's status document.
+        startup: Optional startup retry policy. ``None`` means no retry;
+            ``winter service up`` honors it, the env-root ``./up`` does not.
     """
 
     name: str
@@ -110,6 +126,7 @@ class Service:
     command: str
     log: LogMode = LogMode.FILE
     health: Health | None = None
+    startup: StartupPolicy | None = None
 
 
 @dataclass(frozen=True)

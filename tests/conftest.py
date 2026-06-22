@@ -119,6 +119,9 @@ class FakeProcessReaper:
 
     ``descendant_map`` seeds ``descendants(pid)`` → ``[child_pids]``.
     ``children_set`` seeds ``has_children(pid)`` → ``True/False``.
+    ``children_sequence`` seeds ``has_children(pid)`` with a per-pid sequence
+    of booleans; each call pops from the front of the list, falling back to
+    ``children_set`` membership when the list for that pid is exhausted.
     ``killed`` records every ``reap_descendants`` call's collected pid list.
     """
 
@@ -126,15 +129,22 @@ class FakeProcessReaper:
         self,
         descendant_map: dict[int, list[int]] | None = None,
         children_set: set[int] | None = None,
+        children_sequence: dict[int, list[bool]] | None = None,
     ) -> None:
         self._descendants: dict[int, list[int]] = dict(descendant_map or {})
         self._children: set[int] = set(children_set or set())
+        self._children_sequence: dict[int, list[bool]] = {
+            pid: list(seq) for pid, seq in (children_sequence or {}).items()
+        }
         self.killed: list[list[int]] = []
 
     def descendants(self, pid: int) -> list[int]:
         return list(self._descendants.get(pid, []))
 
     def has_children(self, pid: int) -> bool:
+        seq = self._children_sequence.get(pid)
+        if seq:
+            return seq.pop(0)
         return pid in self._children
 
     def reap_descendants(self, root_pids: list[int]) -> None:

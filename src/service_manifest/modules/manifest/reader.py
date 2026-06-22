@@ -19,6 +19,7 @@ from service_manifest.modules.manifest.model import (
     LogMode,
     Service,
     ServiceManifest,
+    StartupPolicy,
     StatusUrl,
     Target,
 )
@@ -284,13 +285,38 @@ class ManifestReader:
                         f"service '{name}': health.type value {type_raw!r} is not valid; allowed values are {allowed}"
                     ) from exc
                 health = Health(type=health_type, target=target_raw, timeout=timeout)
+            startup_raw = raw.get("startup")
+            startup: StartupPolicy | None = None
+            if startup_raw is not None:
+                if not isinstance(startup_raw, dict):
+                    raise ManifestError(
+                        f"service '{name}': 'startup' must be a table, got {type(startup_raw).__name__}"
+                    )
+                startup_kwargs: dict = {}  # type: ignore[type-arg]
+                retries_raw = startup_raw.get("retries")
+                if retries_raw is not None:
+                    if not isinstance(retries_raw, int):
+                        raise ManifestError(
+                            f"service '{name}': startup.retries must be an integer, got {type(retries_raw).__name__}"
+                        )
+                    startup_kwargs["retries"] = retries_raw
+                retry_delay_raw = startup_raw.get("retry_delay")
+                if retry_delay_raw is not None:
+                    if not isinstance(retry_delay_raw, int | float):
+                        raise ManifestError(
+                            f"service '{name}': startup.retry_delay must be a number, "
+                            f"got {type(retry_delay_raw).__name__}"
+                        )
+                    startup_kwargs["retry_delay"] = float(retry_delay_raw)
+                startup = StartupPolicy(**startup_kwargs)
             scope = raw.get("scope", "project")
             if scope not in _VALID_SCOPES:
                 raise ManifestError(
                     f"service '{name}': invalid scope {scope!r}; "
                     f"allowed values are {', '.join(repr(s) for s in _VALID_SCOPES)}"
                 )
-            parsed.append((Service(name=name, target=target, command=command, log=log_mode, health=health), scope))
+            svc = Service(name=name, target=target, command=command, log=log_mode, health=health, startup=startup)
+            parsed.append((svc, scope))
         return parsed
 
     @staticmethod

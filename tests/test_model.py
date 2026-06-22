@@ -9,6 +9,7 @@ from service_manifest.modules.manifest.model import (
     LogMode,
     Service,
     ServiceManifest,
+    StartupPolicy,
     StatusUrl,
     Target,
 )
@@ -252,3 +253,40 @@ def test_service_manifest_workspace_fields_explicit() -> None:
     )
     assert manifest.workspace_services == (ws_svc,)
     assert manifest.workspace_layout_hook == "ai/project/workspace-layout-hook.sh"
+
+
+# ---------------------------------------------------------------------------
+# StartupPolicy
+# ---------------------------------------------------------------------------
+
+
+def test_startup_policy_defaults() -> None:
+    """StartupPolicy has retries=0 and retry_delay=2.0 as defaults."""
+    policy = StartupPolicy()
+    assert policy.retries == 0
+    assert policy.retry_delay == 2.0
+
+
+def test_startup_policy_custom_values() -> None:
+    policy = StartupPolicy(retries=3, retry_delay=5.0)
+    assert policy.retries == 3
+    assert policy.retry_delay == 5.0
+
+
+def test_startup_policy_is_frozen() -> None:
+    import pytest
+
+    policy = StartupPolicy(retries=1, retry_delay=1.0)
+    with pytest.raises(FrozenInstanceError):
+        policy.retries = 99  # type: ignore[misc]
+
+
+def test_service_startup_defaults_to_none() -> None:
+    svc = Service(name="backend", target=Target(window=0, pane=0), command="cmd")
+    assert svc.startup is None
+
+
+def test_service_can_have_startup_policy() -> None:
+    policy = StartupPolicy(retries=3, retry_delay=2.0)
+    svc = Service(name="backend", target=Target(window=0, pane=0), command="cmd", startup=policy)
+    assert svc.startup == policy

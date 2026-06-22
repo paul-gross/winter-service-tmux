@@ -1108,3 +1108,12 @@ def test_up_normal_env_does_not_create_workspace_session(
         "the orchestrator must not auto-ensure the workspace session; "
         "that is winter-cli's responsibility (winter#65)"
     )
+
+
+def test_cli_up_passes_retry_true(monkeypatch: pytest.MonkeyPatch) -> None:
+    """cli.py 'up alpha' (the winter service up door) invokes orchestrator.up with retry=True."""
+    fake = _install(monkeypatch, _FakeContainer(service_rc=0))
+    rc = main(["up", "alpha"])
+    assert rc == 0
+    assert len(fake.orchestrator.up_calls) == 1
+    assert fake.orchestrator.last_up_retry is True

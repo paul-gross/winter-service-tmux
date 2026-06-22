@@ -6,6 +6,7 @@ from service_manifest.modules.manifest.model import (
     LogConfig,
     Service,
     ServiceManifest,
+    StartupPolicy,
     StatusUrl,
     Target,
 )
@@ -549,3 +550,68 @@ def test_same_name_across_scopes_with_shared_target_is_name_violation_only() -> 
     assert any("duplicate service name" in v and "shared" in v for v in violations)
     # The shared 0.0 target across scopes must NOT be reported as a duplicate target.
     assert not any("duplicate target" in v for v in violations)
+
+
+# ---------------------------------------------------------------------------
+# startup policy checks
+# ---------------------------------------------------------------------------
+
+
+def _service_with_startup(name: str, startup: StartupPolicy, window: int = 0, pane: int = 0) -> Service:
+    return Service(name=name, target=Target(window=window, pane=pane), command="cmd", startup=startup)
+
+
+def test_startup_negative_retries_is_violation() -> None:
+    manifest = _make_manifest(
+        services=(_service_with_startup("backend", StartupPolicy(retries=-1, retry_delay=2.0)),),
+    )
+    violations = _validator.validate(manifest)
+    assert any("startup.retries" in v and "-1" in v for v in violations)
+
+
+def test_startup_negative_retry_delay_is_violation() -> None:
+    manifest = _make_manifest(
+        services=(_service_with_startup("backend", StartupPolicy(retries=0, retry_delay=-0.5)),),
+    )
+    violations = _validator.validate(manifest)
+    assert any("startup.retry_delay" in v for v in violations)
+
+
+def test_startup_valid_policy_no_violation() -> None:
+    manifest = _make_manifest(
+        services=(_service_with_startup("backend", StartupPolicy(retries=3, retry_delay=2.0)),),
+    )
+    assert _validator.validate(manifest) == []
+
+
+def test_startup_zero_retries_and_zero_delay_no_violation() -> None:
+    """Zero is the minimum allowed value for both fields."""
+    manifest = _make_manifest(
+        services=(_service_with_startup("backend", StartupPolicy(retries=0, retry_delay=0.0)),),
+    )
+    assert _validator.validate(manifest) == []
+
+
+def test_startup_retries_on_empty_command_service_is_violation() -> None:
+    """A retry policy has no effect on an interactive (empty-command) pane."""
+    shell = Service(
+        name="shell",
+        target=Target(window=0, pane=0),
+        command="",
+        startup=StartupPolicy(retries=3, retry_delay=2.0),
+    )
+    manifest = _make_manifest(services=(shell,))
+    violations = _validator.validate(manifest)
+    assert any("shell" in v and "interactive (empty-command)" in v for v in violations)
+
+
+def test_startup_zero_retries_on_empty_command_service_is_clean() -> None:
+    """retries=0 (the opt-out default) on an interactive pane is harmless, not flagged."""
+    shell = Service(
+        name="shell",
+        target=Target(window=0, pane=0),
+        command="",
+        startup=StartupPolicy(retries=0, retry_delay=2.0),
+    )
+    manifest = _make_manifest(services=(shell,))
+    assert _validator.validate(manifest) == []

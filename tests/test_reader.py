@@ -12,6 +12,7 @@ from service_manifest.modules.manifest.model import (
     LogMode,
     Service,
     ServiceManifest,
+    StartupPolicy,
     StatusUrl,
     Target,
 )
@@ -159,6 +160,109 @@ target = "pgrep -f worker"
     manifest = _read({_COMMITTED_PATH: content})
 
     assert manifest.services[0].health == Health(type=HealthType.CMD, target="pgrep -f worker")
+
+
+def test_service_startup_parsed_with_both_keys() -> None:
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "backend"
+target = "0.0"
+command = "npm run start:dev"
+
+[service.startup]
+retries = 3
+retry_delay = 2
+"""
+    manifest = _read({_COMMITTED_PATH: content})
+    assert manifest.services[0].startup == StartupPolicy(retries=3, retry_delay=2.0)
+
+
+def test_service_startup_retry_delay_omitted_uses_default() -> None:
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "backend"
+target = "0.0"
+command = "npm run start:dev"
+
+[service.startup]
+retries = 5
+"""
+    manifest = _read({_COMMITTED_PATH: content})
+    assert manifest.services[0].startup == StartupPolicy(retries=5, retry_delay=2.0)
+
+
+def test_service_startup_retries_omitted_uses_default() -> None:
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "backend"
+target = "0.0"
+command = "npm run start:dev"
+
+[service.startup]
+retry_delay = 0.5
+"""
+    manifest = _read({_COMMITTED_PATH: content})
+    assert manifest.services[0].startup == StartupPolicy(retries=0, retry_delay=0.5)
+
+
+def test_service_startup_absent_is_none() -> None:
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "backend"
+target = "0.0"
+command = "npm run start:dev"
+"""
+    manifest = _read({_COMMITTED_PATH: content})
+    assert manifest.services[0].startup is None
+
+
+def test_overlay_service_startup_overrides_by_name() -> None:
+    committed = """\
+session_prefix = "mp"
+
+[[service]]
+name = "backend"
+target = "0.0"
+command = "npm run start:dev"
+
+[service.startup]
+retries = 2
+retry_delay = 1.0
+"""
+    overlay = """\
+[[service]]
+name = "backend"
+
+[service.startup]
+retries = 5
+retry_delay = 3.0
+"""
+    manifest = _read({_COMMITTED_PATH: committed, _LOCAL_PATH: overlay})
+    assert manifest.services[0].startup == StartupPolicy(retries=5, retry_delay=3.0)
+
+
+def test_service_startup_malformed_retries_raises() -> None:
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "backend"
+target = "0.0"
+command = "npm run start:dev"
+
+[service.startup]
+retries = "x"
+"""
+    with pytest.raises(ManifestError, match=r"startup\.retries"):
+        _read({_COMMITTED_PATH: content})
 
 
 def test_missing_optional_fields_are_none() -> None:

@@ -1507,3 +1507,259 @@ def test_prune_failure_warning_goes_through_stderr_seam() -> None:
 
     assert result == 0
     assert "prune failed" in err.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# Startup retry — _await_startup and up(retry=True/False)
+# ---------------------------------------------------------------------------
+
+_MANIFEST_WITH_STARTUP_TOML = """\
+session_prefix = "mp"
+
+[[service]]
+name = "backend"
+target = "0.0"
+command = "npm run start:dev"
+
+[service.startup]
+retries = 2
+retry_delay = 1.0
+"""
+
+
+def _make_startup_ctx(toml: str = _MANIFEST_WITH_STARTUP_TOML) -> SessionContext:
+    """Build a ctx from a manifest with a startup policy on backend."""
+    manifest = _make_manifest(toml)
+    return _make_ctx(manifest=manifest, env_file_path=None)
+
+
+def _up_with_panes(
+    toml: str,
+    pane_map: dict[str, int],
+    *,
+    reaper: FakeProcessReaper,
+    clock: FakeFollowClock,
+    retry: bool,
+) -> tuple[int, FakeTmuxRepository, io.StringIO, io.StringIO]:
+    """Run up(retry=*retry*) with the given pane map pre-seeded after new_session.
+
+    Manifests used here have no layout_hook, so real tmux would create the
+    default pane (0.0) during new_session.  We mimic that by patching
+    new_session to also seed the pane map.
+    """
+    tmux = FakeTmuxRepository()
+    out = io.StringIO()
+    err = io.StringIO()
+
+    _orig_new_session = tmux.new_session
+
+    def _new_session_with_panes(session: str, cwd: object, width: object, height: object) -> None:
+        _orig_new_session(session, cwd, width, height)  # type: ignore[arg-type]
+        tmux._sessions[session].update(pane_map)
+
+    tmux.new_session = _new_session_with_panes  # type: ignore[method-assign]
+
+    manifest = _make_manifest(toml)
+    ctx = _make_ctx(manifest=manifest, env_file_path=None)
+    svc = _make_service(tmux=tmux, reaper=reaper, clock=clock, stdout=out, stderr=err)
+    rc = svc.up(ctx, retry=retry)
+    return rc, tmux, out, err
+
+
+def test_up_retry_true_survives_settle_window_no_resend() -> None:
+    """retry=True, service alive after settle → no extra send_keys, rc 0."""
+    # backend pid=100 is alive on first has_children call
+    reaper = FakeProcessReaper(children_set={100})
+    clock = FakeFollowClock()
+
+    rc, tmux, _out, err = _up_with_panes(
+        _MANIFEST_WITH_STARTUP_TOML,
+        {"0.0": 100},
+        reaper=reaper,
+        clock=clock,
+        retry=True,
+    )
+
+    assert rc == 0
+    # Exactly one send_keys for the initial launch, no extra re-sends
+    assert len(tmux.sent) == 1
+    # Settle sleep recorded
+    assert clock.sleep_calls == [0.5]
+    assert err.getvalue() == ""
+
+
+def test_up_retry_true_dead_then_alive_after_one_retry() -> None:
+    """retry=True, dead on settle then alive after 1 retry → one extra send_keys, rc 0."""
+    # First has_children call → False (dead), second → True (alive)
+    reaper = FakeProcessReaper(children_sequence={100: [False, True]})
+    clock = FakeFollowClock()
+
+    rc, tmux, _out, err = _up_with_panes(
+        _MANIFEST_WITH_STARTUP_TOML,
+        {"0.0": 100},
+        reaper=reaper,
+        clock=clock,
+        retry=True,
+    )
+
+    assert rc == 0
+    # Initial send + one retry send
+    assert len(tmux.sent) == 2
+    # Settle sleep + one retry_delay sleep (1.0)
+    assert clock.sleep_calls == [0.5, 1.0]
+    assert err.getvalue() == ""
+
+
+def test_up_retry_true_exhausted_retries_returns_rc1_with_failed_name() -> None:
+    """retry=True, always dead → rc 1, service named in stderr."""
+    # All has_children calls return False (dead) — initial check + 2 retries
+    reaper = FakeProcessReaper(children_sequence={100: [False, False, False]})
+    clock = FakeFollowClock()
+    err = io.StringIO()
+
+    toml = _MANIFEST_WITH_STARTUP_TOML  # retries=2
+    rc, tmux, _out, err = _up_with_panes(
+        toml,
+        {"0.0": 100},
+        reaper=reaper,
+        clock=clock,
+        retry=True,
+    )
+
+    assert rc == 1
+    # Initial send + 2 retry sends
+    assert len(tmux.sent) == 3
+    # Settle sleep + 2 retry_delay sleeps (1.0 each)
+    assert clock.sleep_calls == [0.5, 1.0, 1.0]
+    assert "backend" in err.getvalue()
+    assert "Services failed to stay up after retries" in err.getvalue()
+
+
+def test_up_retry_true_no_policy_not_monitored() -> None:
+    """retry=True but service has no startup policy → not monitored, no settle sleep."""
+    toml = """\
+session_prefix = "mp"
+
+[[service]]
+name = "backend"
+target = "0.0"
+command = "npm run start:dev"
+"""
+    # No startup policy on backend — reaper never consulted for retry
+    reaper = FakeProcessReaper()
+    clock = FakeFollowClock()
+
+    rc, tmux, _out, err = _up_with_panes(
+        toml,
+        {"0.0": 100},
+        reaper=reaper,
+        clock=clock,
+        retry=True,
+    )
+
+    assert rc == 0
+    assert len(tmux.sent) == 1
+    # No settle sleep because no candidates
+    assert clock.sleep_calls == []
+    assert err.getvalue() == ""
+
+
+def test_up_retry_false_with_policy_no_settle_no_extra_sends() -> None:
+    """retry=False (default) with a startup policy → zero sleeps, zero extra sends."""
+    # If reaper.has_children is called by mistake it returns False → would cause rc=1
+    reaper = FakeProcessReaper(children_sequence={100: [False, False, False]})
+    clock = FakeFollowClock()
+
+    rc, tmux, _out, err = _up_with_panes(
+        _MANIFEST_WITH_STARTUP_TOML,
+        {"0.0": 100},
+        reaper=reaper,
+        clock=clock,
+        retry=False,
+    )
+
+    assert rc == 0
+    # Only the initial send_keys, no retries
+    assert len(tmux.sent) == 1
+    # No sleeps at all
+    assert clock.sleep_calls == []
+    assert err.getvalue() == ""
+
+
+def test_up_retry_true_settle_and_retry_delay_go_through_clock_seam() -> None:
+    """Verify sleep calls use clock seam with exact values: settle + N*retry_delay."""
+    toml = """\
+session_prefix = "mp"
+
+[[service]]
+name = "svc"
+target = "0.0"
+command = "run"
+
+[service.startup]
+retries = 3
+retry_delay = 0.25
+"""
+    # Dead on settle, then alive on first retry
+    reaper = FakeProcessReaper(children_sequence={42: [False, True]})
+    clock = FakeFollowClock()
+
+    rc, _tmux, _out, _err = _up_with_panes(
+        toml,
+        {"0.0": 42},
+        reaper=reaper,
+        clock=clock,
+        retry=True,
+    )
+
+    assert rc == 0
+    # Settle (0.5) + one retry_delay (0.25)
+    assert clock.sleep_calls == [0.5, 0.25]
+
+
+def test_up_retry_true_reaps_descendants_before_relaunch() -> None:
+    """A dead candidate's pane descendants are reaped before each re-launch.
+
+    has_children sees only direct children; a lingering grandchild would stack a
+    second process into the pane. The retry loop reaps descendants first, mirroring
+    restart/down.
+    """
+    # Dead on settle, alive after one retry; pane 100 has an orphaned descendant 555.
+    reaper = FakeProcessReaper(
+        descendant_map={100: [555]},
+        children_sequence={100: [False, True]},
+    )
+    clock = FakeFollowClock()
+
+    rc, tmux, _out, _err = _up_with_panes(
+        _MANIFEST_WITH_STARTUP_TOML,
+        {"0.0": 100},
+        reaper=reaper,
+        clock=clock,
+        retry=True,
+    )
+
+    assert rc == 0
+    # The retry reaped pane 100's descendants ([555]) before re-sending.
+    assert reaper.killed == [[555]]
+    # Initial send + one retry send.
+    assert len(tmux.sent) == 2
+
+
+def test_up_retry_true_emits_per_attempt_progress() -> None:
+    """Each re-launch attempt writes a numbered progress line through the stdout seam."""
+    reaper = FakeProcessReaper(children_sequence={100: [False, False, True]})
+    clock = FakeFollowClock()
+
+    rc, _tmux, out, _err = _up_with_panes(
+        _MANIFEST_WITH_STARTUP_TOML,  # retries=2
+        {"0.0": 100},
+        reaper=reaper,
+        clock=clock,
+        retry=True,
+    )
+
+    assert rc == 0
+    output = out.getvalue()
+    assert "Retrying 'backend' (attempt 1/2)" in output
+    assert "Retrying 'backend' (attempt 2/2)" in output
