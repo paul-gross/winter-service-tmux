@@ -64,7 +64,7 @@ Use this only when the service's `log` mode is `"pane"` or you need to see the r
 
 ## Workspace-scoped services
 
-Services with `scope = "workspace"` run in a shared `<session_prefix>-workspace` session. See `winter-service-tmux:/index.md` §"Workspace-scoped singleton services" for the full commands and rules. Operationally:
+Services with `scope = "workspace"` run in a shared `<session_prefix>-workspace` session. See `winter-service-tmux:/ai/workspace-singletons.md` for the full commands and rules. Operationally:
 
 - To check a singleton, use `winter service status workspace` — not `./status`, which only shows this env's per-env services.
 - Prefer `winter service up <env>` over `alpha/up` — the former ensures workspace singletons are running before the env session starts; the env-root `./up` skips that check.
