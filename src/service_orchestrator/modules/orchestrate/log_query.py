@@ -1,15 +1,38 @@
 """LogQuery value object — parameters for the ``logs`` action.
 
-Constructed by ``DispatchService`` (``logs_backlog`` / ``logs_follow``) from
-``WINTER_LOG_*`` environment variables and passed to ``LogService.logs``.
+Render options arrive on argv (parsed by ``parse_log_args`` into a
+``LogRenderOptions``); ``DispatchService`` (``logs_backlog`` / ``logs_follow``)
+combines them with each env's service names via ``LogQuery.from_render`` and
+passes the result to ``LogService.logs``.
 """
 
 from __future__ import annotations
 
 import sys
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import IO
+
+
+@dataclass(frozen=True)
+class LogRenderOptions:
+    """Per-invocation render options for the ``logs`` action, parsed from argv.
+
+    These are the service-agnostic flags winter appends after the positional
+    ``<pattern...>`` tokens; ``services`` is folded in per-env later.
+
+    Attributes:
+        follow: When True, stream live output after emitting the backlog.
+        tail: Keep only the last *tail* events; ``None`` means all.
+        since: RFC3339 absolute lower bound; empty string if unset.
+        until: RFC3339 absolute upper bound; empty string if unset.
+        timestamps: When True, per-line timestamps were requested.
+    """
+
+    follow: bool
+    tail: int | None
+    since: str
+    until: str
+    timestamps: bool
 
 
 @dataclass(frozen=True)
@@ -40,29 +63,76 @@ class LogQuery:
     timestamps: bool
 
     @classmethod
-    def from_env(cls, services: tuple[str, ...], env: Mapping[str, str]) -> LogQuery:
-        """Construct a ``LogQuery`` from a ``WINTER_LOG_*`` environment mapping.
-
-        *env* is typically ``os.environ`` but any mapping works, making this
-        unit-testable without monkeypatching global state.
-        """
-        follow = env.get("WINTER_LOG_FOLLOW") == "1"
-        tail = parse_tail(env.get("WINTER_LOG_TAIL", "all"))
-        since = env.get("WINTER_LOG_SINCE", "")
-        until = env.get("WINTER_LOG_UNTIL", "")
-        timestamps = env.get("WINTER_LOG_TIMESTAMPS") == "1"
+    def from_render(cls, services: tuple[str, ...], render: LogRenderOptions) -> LogQuery:
+        """Combine per-env *services* with the argv-parsed *render* options."""
         return cls(
             services=services,
-            follow=follow,
-            tail=tail,
-            since=since,
-            until=until,
-            timestamps=timestamps,
+            follow=render.follow,
+            tail=render.tail,
+            since=render.since,
+            until=render.until,
+            timestamps=render.timestamps,
         )
 
 
+def parse_log_args(tokens: list[str]) -> tuple[list[str], LogRenderOptions]:
+    """Split the ``logs`` action's argv ``tokens`` into patterns + render options.
+
+    Mirrors ``winter service logs``' own flag surface, which winter appends
+    after the positional ``<pattern...>`` tokens::
+
+        <pattern...> [-f|--follow] [-n|--tail <N|all>] \\
+          [--since <rfc3339>] [--until <rfc3339>] [-t|--timestamps]
+
+    ``--since``/``--until`` carry winter's already-resolved RFC3339 values and
+    are consumed as-is (no duration re-parsing). ``--tail`` carries the resolved
+    count string (``N`` or ``all``). Any non-flag token is a positional pattern.
+
+    This is a thin contract parser, not a general getopt: it relies on winter's
+    emission guarantees — selection patterns never lead with ``-``, and a value
+    flag (``-n``/``--tail``, ``--since``, ``--until``) is always followed by its
+    value. Do not "harden" it past those guarantees without changing the
+    producer contract too.
+    """
+    patterns: list[str] = []
+    follow = False
+    tail_raw = "all"
+    since = ""
+    until = ""
+    timestamps = False
+
+    i = 0
+    n = len(tokens)
+    while i < n:
+        tok = tokens[i]
+        if tok in ("-f", "--follow"):
+            follow = True
+        elif tok in ("-t", "--timestamps"):
+            timestamps = True
+        elif tok in ("-n", "--tail"):
+            i += 1
+            tail_raw = tokens[i] if i < n else "all"
+        elif tok == "--since":
+            i += 1
+            since = tokens[i] if i < n else ""
+        elif tok == "--until":
+            i += 1
+            until = tokens[i] if i < n else ""
+        else:
+            patterns.append(tok)
+        i += 1
+
+    return patterns, LogRenderOptions(
+        follow=follow,
+        tail=parse_tail(tail_raw),
+        since=since,
+        until=until,
+        timestamps=timestamps,
+    )
+
+
 def parse_tail(raw: str, *, err_sink: IO[str] | None = None) -> int | None:
-    """Parse ``WINTER_LOG_TAIL`` into an int or None.
+    """Parse a ``--tail`` count string into an int or None.
 
     ``"all"`` or empty string → ``None`` (return all events).
     A positive integer string → ``int``.
@@ -78,7 +148,7 @@ def parse_tail(raw: str, *, err_sink: IO[str] | None = None) -> int | None:
         return int(raw)
     except ValueError:
         print(
-            f"orchestrate: WINTER_LOG_TAIL '{raw}' is not a valid integer or 'all'; treating as 'all'",
+            f"orchestrate: --tail '{raw}' is not a valid integer or 'all'; treating as 'all'",
             file=err_sink,
         )
         return None

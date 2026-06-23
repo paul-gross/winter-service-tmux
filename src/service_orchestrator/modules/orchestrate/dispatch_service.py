@@ -22,13 +22,13 @@ Construction::
 from __future__ import annotations
 
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from pathlib import Path
 from typing import IO
 
 from service_manifest.modules.manifest.errors import ManifestError
 from service_orchestrator.modules.orchestrate.errors import OrchestratorError
-from service_orchestrator.modules.orchestrate.log_query import LogQuery
+from service_orchestrator.modules.orchestrate.log_query import LogQuery, LogRenderOptions
 from service_orchestrator.modules.orchestrate.log_service import LogService
 from service_orchestrator.modules.orchestrate.orchestrator_service import OrchestratorService
 from service_orchestrator.modules.orchestrate.selector_service import SelectorService
@@ -339,14 +339,14 @@ class DispatchService:
         self,
         env_services: dict[str, list[str]],
         workspace_root: Path | None,
-        log_env: Mapping[str, str],
+        render: LogRenderOptions,
         *,
         current_rc: int = 0,
     ) -> int:
         """Read log backlog for each (env, svc) pair.  Folds last-non-zero-wins."""
 
         def _invoke(ctx: SessionContext, env: str, svc_names: list[str]) -> int:
-            query = LogQuery.from_env(tuple(svc_names), log_env)
+            query = LogQuery.from_render(tuple(svc_names), render)
             return self._log_service.logs(ctx, query)
 
         return self._run_for_target(env_services, workspace_root, _invoke, current_rc=current_rc)
@@ -355,7 +355,7 @@ class DispatchService:
         self,
         env_services: dict[str, list[str]],
         workspace_root: Path | None,
-        log_env: Mapping[str, str],
+        render: LogRenderOptions,
         current_rc: int = 0,
     ) -> int:
         """Build (ctx, query) pairs and call log_service.follow_streams.
@@ -374,7 +374,7 @@ class DispatchService:
             pairs.append(
                 (
                     ctx,
-                    LogQuery.from_env(tuple(svc_names), log_env),
+                    LogQuery.from_render(tuple(svc_names), render),
                 )
             )
         if not pairs:

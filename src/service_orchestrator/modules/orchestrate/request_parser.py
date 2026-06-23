@@ -2,7 +2,13 @@
 
 Parses ``[action, *rest]`` into a typed ``OrchestratorRequest`` or a
 ``ParseError`` carrying the pre-formatted stderr message and exit code.
-No flag parsing is performed — dash-leading tokens are literal patterns.
+
+This parser does no flag parsing of its own: ``rest`` is carried through as
+``patterns`` verbatim. For the ``logs`` action that tuple still holds the
+render flags intermixed with the patterns — ``cli.py`` separates them
+downstream via ``parse_log_args`` (and re-checks pattern arity after the
+split). The bare ``logs`` / ``restart`` (zero tokens) guard below stays here
+as the early arity check.
 """
 
 from __future__ import annotations
@@ -46,7 +52,8 @@ def parse_request(argv: list[str]) -> OrchestratorRequest | ParseError:
     Exact error strings and exit codes are preserved verbatim from ``cli.py``
     so that existing tests keep passing unedited.
 
-    No flag parsing: dash-leading tokens are treated as literal patterns.
+    No flag parsing here: dash-leading tokens pass through as patterns. The
+    ``logs`` render flags are split off downstream by ``parse_log_args``.
     """
     if not argv:
         return ParseError(

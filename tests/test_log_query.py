@@ -1,13 +1,19 @@
 """Tests for service_orchestrator.modules.orchestrate.log_query.
 
-Covers parse_tail() and LogQuery.from_env() — the WINTER_LOG_* input adapter.
+Covers parse_tail(), parse_log_args() — the argv render-option parser — and
+LogQuery.from_render().
 """
 
 from __future__ import annotations
 
 import io
 
-from service_orchestrator.modules.orchestrate.log_query import LogQuery, parse_tail
+from service_orchestrator.modules.orchestrate.log_query import (
+    LogQuery,
+    LogRenderOptions,
+    parse_log_args,
+    parse_tail,
+)
 
 # ---------------------------------------------------------------------------
 # parse_tail: empty string → None
@@ -71,7 +77,7 @@ def test_parse_tail_invalid_writes_exact_warning() -> None:
     parse_tail("notanumber", err_sink=sink)
     assert (
         sink.getvalue().strip()
-        == "orchestrate: WINTER_LOG_TAIL 'notanumber' is not a valid integer or 'all'; treating as 'all'"
+        == "orchestrate: --tail 'notanumber' is not a valid integer or 'all'; treating as 'all'"
     )
 
 
@@ -106,19 +112,102 @@ def test_parse_tail_default_err_sink_does_not_raise() -> None:
 
 
 # ---------------------------------------------------------------------------
-# LogQuery.from_env: all vars present
+# parse_log_args: positional patterns only, flags absent → defaults
 # ---------------------------------------------------------------------------
 
 
-def test_from_env_all_vars_present() -> None:
-    env = {
-        "WINTER_LOG_FOLLOW": "1",
-        "WINTER_LOG_TAIL": "100",
-        "WINTER_LOG_SINCE": "2026-01-01T00:00:00Z",
-        "WINTER_LOG_UNTIL": "2026-12-31T00:00:00Z",
-        "WINTER_LOG_TIMESTAMPS": "1",
-    }
-    query = LogQuery.from_env(("backend",), env)
+def test_parse_log_args_patterns_only_defaults() -> None:
+    patterns, render = parse_log_args(["alpha/backend", "alpha/worker"])
+    assert patterns == ["alpha/backend", "alpha/worker"]
+    assert render.follow is False
+    assert render.tail is None  # default "all" → None
+    assert render.since == ""
+    assert render.until == ""
+    assert render.timestamps is False
+
+
+# ---------------------------------------------------------------------------
+# parse_log_args: each flag is parsed off argv
+# ---------------------------------------------------------------------------
+
+
+def test_parse_log_args_follow_long_and_short() -> None:
+    _, render = parse_log_args(["alpha/backend", "--follow"])
+    assert render.follow is True
+    _, render = parse_log_args(["alpha/backend", "-f"])
+    assert render.follow is True
+
+
+def test_parse_log_args_timestamps_long_and_short() -> None:
+    _, render = parse_log_args(["alpha/backend", "--timestamps"])
+    assert render.timestamps is True
+    _, render = parse_log_args(["alpha/backend", "-t"])
+    assert render.timestamps is True
+
+
+def test_parse_log_args_tail_long_and_short() -> None:
+    _, render = parse_log_args(["alpha/backend", "--tail", "50"])
+    assert render.tail == 50
+    _, render = parse_log_args(["alpha/backend", "-n", "100"])
+    assert render.tail == 100
+
+
+def test_parse_log_args_tail_all() -> None:
+    _, render = parse_log_args(["alpha/backend", "--tail", "all"])
+    assert render.tail is None
+
+
+def test_parse_log_args_since_until_consumed_as_is() -> None:
+    patterns, render = parse_log_args(
+        [
+            "alpha/backend",
+            "--since",
+            "2026-01-01T00:00:00Z",
+            "--until",
+            "2026-12-31T00:00:00Z",
+        ]
+    )
+    assert patterns == ["alpha/backend"]
+    assert render.since == "2026-01-01T00:00:00Z"
+    assert render.until == "2026-12-31T00:00:00Z"
+
+
+def test_parse_log_args_all_flags_together() -> None:
+    patterns, render = parse_log_args(
+        [
+            "alpha/backend",
+            "-f",
+            "-n",
+            "25",
+            "--since",
+            "2026-01-01T00:00:00Z",
+            "--until",
+            "2026-12-31T00:00:00Z",
+            "-t",
+        ]
+    )
+    assert patterns == ["alpha/backend"]
+    assert render.follow is True
+    assert render.tail == 25
+    assert render.since == "2026-01-01T00:00:00Z"
+    assert render.until == "2026-12-31T00:00:00Z"
+    assert render.timestamps is True
+
+
+# ---------------------------------------------------------------------------
+# LogQuery.from_render: folds per-env services into the render options
+# ---------------------------------------------------------------------------
+
+
+def test_from_render_combines_services_and_options() -> None:
+    render = LogRenderOptions(
+        follow=True,
+        tail=100,
+        since="2026-01-01T00:00:00Z",
+        until="2026-12-31T00:00:00Z",
+        timestamps=True,
+    )
+    query = LogQuery.from_render(("backend",), render)
     assert query.follow is True
     assert query.tail == 100
     assert query.since == "2026-01-01T00:00:00Z"
@@ -127,67 +216,8 @@ def test_from_env_all_vars_present() -> None:
     assert query.services == ("backend",)
 
 
-# ---------------------------------------------------------------------------
-# LogQuery.from_env: defaults when vars absent
-# ---------------------------------------------------------------------------
-
-
-def test_from_env_defaults_when_absent() -> None:
-    query = LogQuery.from_env((), {})
-    assert query.follow is False
-    assert query.tail is None  # default "all" → None
-    assert query.since == ""
-    assert query.until == ""
-    assert query.timestamps is False
-    assert query.services == ()
-
-
-# ---------------------------------------------------------------------------
-# LogQuery.from_env: TAIL="all" → None
-# ---------------------------------------------------------------------------
-
-
-def test_from_env_tail_all_returns_none() -> None:
-    query = LogQuery.from_env((), {"WINTER_LOG_TAIL": "all"})
-    assert query.tail is None
-
-
-# ---------------------------------------------------------------------------
-# LogQuery.from_env: TAIL absent defaults to "all" → None
-# ---------------------------------------------------------------------------
-
-
-def test_from_env_tail_absent_defaults_to_none() -> None:
-    query = LogQuery.from_env((), {})
-    assert query.tail is None
-
-
-# ---------------------------------------------------------------------------
-# LogQuery.from_env: FOLLOW="0" → False
-# ---------------------------------------------------------------------------
-
-
-def test_from_env_follow_zero_is_false() -> None:
-    query = LogQuery.from_env((), {"WINTER_LOG_FOLLOW": "0"})
-    assert query.follow is False
-
-
-# ---------------------------------------------------------------------------
-# LogQuery.from_env: TIMESTAMPS="0" → False
-# ---------------------------------------------------------------------------
-
-
-def test_from_env_timestamps_zero_is_false() -> None:
-    query = LogQuery.from_env((), {"WINTER_LOG_TIMESTAMPS": "0"})
-    assert query.timestamps is False
-
-
-# ---------------------------------------------------------------------------
-# LogQuery.from_env: services tuple is preserved
-# ---------------------------------------------------------------------------
-
-
-def test_from_env_services_tuple_preserved() -> None:
+def test_from_render_services_tuple_preserved() -> None:
     svcs = ("backend", "worker")
-    query = LogQuery.from_env(svcs, {})
+    render = LogRenderOptions(follow=False, tail=None, since="", until="", timestamps=False)
+    query = LogQuery.from_render(svcs, render)
     assert query.services == svcs

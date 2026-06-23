@@ -463,6 +463,21 @@ def test_main_logs_zero_patterns_returns_1(
     assert "logs" in capsys.readouterr().err.lower()
 
 
+def test_main_logs_flags_only_no_pattern_returns_1(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Render flags with no positional pattern (winter's no-pattern dispatch) → rc 1.
+
+    parse_log_args strips the flags, leaving zero patterns; the post-parse
+    arity check in main() is the authoritative guard for this path.
+    """
+    _install(monkeypatch, _FakeContainer())
+    rc = main(["logs", "--tail", "200"])
+    assert rc == 1
+    assert "logs" in capsys.readouterr().err.lower()
+
+
 # ---------------------------------------------------------------------------
 # logs: one call per matched env; query.services carries expanded names
 # ---------------------------------------------------------------------------
@@ -472,11 +487,6 @@ def test_main_logs_single_env_pattern(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake = _install(monkeypatch, _FakeContainer(sessions=["mp-alpha"]))
-    monkeypatch.setenv("WINTER_LOG_FOLLOW", "0")
-    monkeypatch.setenv("WINTER_LOG_TAIL", "all")
-    monkeypatch.setenv("WINTER_LOG_SINCE", "")
-    monkeypatch.setenv("WINTER_LOG_UNTIL", "")
-    monkeypatch.setenv("WINTER_LOG_TIMESTAMPS", "0")
 
     rc = main(["logs", "alpha/backend"])
     assert rc == 0
@@ -494,11 +504,6 @@ def test_main_logs_cross_env_pattern_one_call_per_env(
         monkeypatch,
         _FakeContainer(sessions=["mp-alpha", "mp-beta"]),
     )
-    monkeypatch.setenv("WINTER_LOG_FOLLOW", "0")
-    monkeypatch.setenv("WINTER_LOG_TAIL", "all")
-    monkeypatch.setenv("WINTER_LOG_SINCE", "")
-    monkeypatch.setenv("WINTER_LOG_UNTIL", "")
-    monkeypatch.setenv("WINTER_LOG_TIMESTAMPS", "0")
 
     rc = main(["logs", "*/backend"])
     assert rc == 0
@@ -514,13 +519,20 @@ def test_main_logs_query_params_forwarded(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake = _install(monkeypatch, _FakeContainer(sessions=["mp-alpha"]))
-    monkeypatch.setenv("WINTER_LOG_FOLLOW", "0")
-    monkeypatch.setenv("WINTER_LOG_TAIL", "50")
-    monkeypatch.setenv("WINTER_LOG_SINCE", "2026-01-01T00:00:00Z")
-    monkeypatch.setenv("WINTER_LOG_UNTIL", "2026-12-31T00:00:00Z")
-    monkeypatch.setenv("WINTER_LOG_TIMESTAMPS", "1")
 
-    main(["logs", "alpha/backend"])
+    main(
+        [
+            "logs",
+            "alpha/backend",
+            "--tail",
+            "50",
+            "--since",
+            "2026-01-01T00:00:00Z",
+            "--until",
+            "2026-12-31T00:00:00Z",
+            "--timestamps",
+        ]
+    )
 
     assert len(fake.logs_calls) == 1
     _, query = fake.logs_calls[0]
@@ -535,11 +547,6 @@ def test_main_logs_passthrough_nonzero(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _install(monkeypatch, _FakeContainer(sessions=["mp-alpha"], log_rc=1))
-    monkeypatch.setenv("WINTER_LOG_FOLLOW", "0")
-    monkeypatch.setenv("WINTER_LOG_TAIL", "all")
-    monkeypatch.setenv("WINTER_LOG_SINCE", "")
-    monkeypatch.setenv("WINTER_LOG_UNTIL", "")
-    monkeypatch.setenv("WINTER_LOG_TIMESTAMPS", "0")
 
     rc = main(["logs", "alpha/backend"])
     assert rc == 1
@@ -731,13 +738,8 @@ def test_main_logs_follow_single_service_calls_follow_streams(
         monkeypatch,
         _FakeContainer(sessions=["mp-alpha"]),
     )
-    monkeypatch.setenv("WINTER_LOG_FOLLOW", "1")
-    monkeypatch.setenv("WINTER_LOG_TAIL", "all")
-    monkeypatch.setenv("WINTER_LOG_SINCE", "")
-    monkeypatch.setenv("WINTER_LOG_UNTIL", "")
-    monkeypatch.setenv("WINTER_LOG_TIMESTAMPS", "0")
 
-    rc = main(["logs", "alpha/backend"])
+    rc = main(["logs", "alpha/backend", "-f"])
 
     assert rc == 0
     assert len(fake.logs_calls) == 0
@@ -757,13 +759,8 @@ def test_main_logs_follow_multi_service_single_env_calls_follow_streams_once(
         monkeypatch,
         _FakeContainer(sessions=["mp-alpha"]),
     )
-    monkeypatch.setenv("WINTER_LOG_FOLLOW", "1")
-    monkeypatch.setenv("WINTER_LOG_TAIL", "all")
-    monkeypatch.setenv("WINTER_LOG_SINCE", "")
-    monkeypatch.setenv("WINTER_LOG_UNTIL", "")
-    monkeypatch.setenv("WINTER_LOG_TIMESTAMPS", "0")
 
-    rc = main(["logs", "alpha/*"])
+    rc = main(["logs", "alpha/*", "-f"])
 
     assert rc == 0
     assert len(fake.logs_calls) == 0
@@ -783,13 +780,8 @@ def test_main_logs_follow_cross_env_calls_follow_streams_once(
         monkeypatch,
         _FakeContainer(sessions=["mp-alpha", "mp-beta"]),
     )
-    monkeypatch.setenv("WINTER_LOG_FOLLOW", "1")
-    monkeypatch.setenv("WINTER_LOG_TAIL", "all")
-    monkeypatch.setenv("WINTER_LOG_SINCE", "")
-    monkeypatch.setenv("WINTER_LOG_UNTIL", "")
-    monkeypatch.setenv("WINTER_LOG_TIMESTAMPS", "0")
 
-    rc = main(["logs", "*/backend"])
+    rc = main(["logs", "*/backend", "-f"])
 
     assert rc == 0
     assert len(fake.logs_calls) == 0
@@ -807,13 +799,8 @@ def test_main_logs_follow_passthrough_nonzero(
 ) -> None:
     """follow_streams returning non-zero propagates to the exit code."""
     _install(monkeypatch, _FakeContainer(sessions=["mp-alpha"], log_rc=1))
-    monkeypatch.setenv("WINTER_LOG_FOLLOW", "1")
-    monkeypatch.setenv("WINTER_LOG_TAIL", "all")
-    monkeypatch.setenv("WINTER_LOG_SINCE", "")
-    monkeypatch.setenv("WINTER_LOG_UNTIL", "")
-    monkeypatch.setenv("WINTER_LOG_TIMESTAMPS", "0")
 
-    rc = main(["logs", "alpha/backend"])
+    rc = main(["logs", "alpha/backend", "-f"])
 
     assert rc != 0
 
@@ -821,15 +808,22 @@ def test_main_logs_follow_passthrough_nonzero(
 def test_main_logs_follow_tail_since_until_forwarded(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """FOLLOW=1 + TAIL/SINCE/UNTIL env vars are forwarded on the per-pair LogQuery objects."""
+    """-f plus --tail/--since/--until argv flags are forwarded on the per-pair LogQuery objects."""
     fake = _install(monkeypatch, _FakeContainer(sessions=["mp-alpha"]))
-    monkeypatch.setenv("WINTER_LOG_FOLLOW", "1")
-    monkeypatch.setenv("WINTER_LOG_TAIL", "50")
-    monkeypatch.setenv("WINTER_LOG_SINCE", "2026-01-01T00:00:00Z")
-    monkeypatch.setenv("WINTER_LOG_UNTIL", "2026-12-31T00:00:00Z")
-    monkeypatch.setenv("WINTER_LOG_TIMESTAMPS", "0")
 
-    main(["logs", "alpha/backend"])
+    main(
+        [
+            "logs",
+            "alpha/backend",
+            "-f",
+            "--tail",
+            "50",
+            "--since",
+            "2026-01-01T00:00:00Z",
+            "--until",
+            "2026-12-31T00:00:00Z",
+        ]
+    )
 
     assert len(fake.follow_streams_calls) == 1
     streams = fake.follow_streams_calls[0]
@@ -848,11 +842,6 @@ def test_main_logs_no_follow_multi_env_calls_logs_per_env(
         monkeypatch,
         _FakeContainer(sessions=["mp-alpha", "mp-beta"]),
     )
-    monkeypatch.setenv("WINTER_LOG_FOLLOW", "0")
-    monkeypatch.setenv("WINTER_LOG_TAIL", "all")
-    monkeypatch.setenv("WINTER_LOG_SINCE", "")
-    monkeypatch.setenv("WINTER_LOG_UNTIL", "")
-    monkeypatch.setenv("WINTER_LOG_TIMESTAMPS", "0")
 
     rc = main(["logs", "*/backend"])
 

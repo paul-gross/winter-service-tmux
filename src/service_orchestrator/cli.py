@@ -12,17 +12,23 @@ Action-specific argv shapes (patterns are ``<env>/<svc>`` segment-globs):
 - ``down <env>``            — single env, no patterns
 - ``status [<pattern>...]`` — 0 or more patterns; 0 means all running envs
 - ``restart <pattern>...``  — 1 or more patterns (non-zero if none given)
-- ``logs <pattern>...``     — 1 or more patterns (non-zero if none given)
+- ``logs <pattern>... [render flags]`` — 1 or more patterns, plus render flags
 
-Per-action parameters arrive via ``WINTER_*`` environment variables:
+The ``logs`` action's render options arrive as CLI flags appended after the
+positional patterns (parsed by ``parse_log_args``), mirroring ``winter service
+logs``' own surface::
+
+    logs <pattern>... [-f|--follow] [-n|--tail <N|all>] \\
+      [--since <rfc3339>] [--until <rfc3339>] [-t|--timestamps]
+
+``--since``/``--until`` carry winter's already-resolved RFC3339 values (consumed
+as-is, never re-parsed as durations); ``--tail`` carries the resolved count
+string (``N`` or ``all``).
+
+Base extension parameters arrive via ``WINTER_*`` environment variables:
 - ``WINTER_WORKSPACE_DIR`` — absolute path to the workspace root (always set).
 - ``WINTER_EXT_DIR``       — path to the extension clone (always set).
 - ``WINTER_EXT_PREFIX``    — resolved symlink prefix (always set).
-- ``WINTER_LOG_FOLLOW``    — ``1`` = follow, ``0`` = backlog-only (set for ``logs``).
-- ``WINTER_LOG_TAIL``      — positive int or ``all`` (set for ``logs``).
-- ``WINTER_LOG_SINCE``     — RFC3339 timestamp lower bound; empty if unset (set for ``logs``).
-- ``WINTER_LOG_UNTIL``     — RFC3339 timestamp upper bound; empty if unset (set for ``logs``).
-- ``WINTER_LOG_TIMESTAMPS``— ``1`` = timestamps requested (set for ``logs``).
 
 Exit-code passthrough: the orchestrator's return value becomes this process's
 exit code, as required by the contract.
@@ -37,6 +43,10 @@ from pathlib import Path
 
 from service_orchestrator.container import Container
 from service_orchestrator.modules.orchestrate.env_enumerator import running_envs
+from service_orchestrator.modules.orchestrate.log_query import (
+    LogRenderOptions,
+    parse_log_args,
+)
 from service_orchestrator.modules.orchestrate.request_parser import (
     ParseError,
     parse_request,
@@ -200,9 +210,10 @@ def _run_restart(
 def _run_logs(
     container: Container,
     patterns: list[str],
+    render: LogRenderOptions,
     workspace_root: Path | None,
 ) -> int:
-    """Handle logs action: 1 or more patterns."""
+    """Handle logs action: 1 or more patterns plus argv-parsed render options."""
     selector = container.selector
     dispatch = container.dispatch
 
@@ -226,13 +237,10 @@ def _run_logs(
             )
         return 1
 
-    _env = os.environ
-    follow = _env.get("WINTER_LOG_FOLLOW") == "1"
+    if render.follow:
+        return dispatch.logs_follow(env_services, workspace_root, render)
 
-    if follow:
-        return dispatch.logs_follow(env_services, workspace_root, _env)
-
-    return dispatch.logs_backlog(env_services, workspace_root, _env)
+    return dispatch.logs_backlog(env_services, workspace_root, render)
 
 
 def main(argv: list[str]) -> int:
@@ -278,10 +286,14 @@ def main(argv: list[str]) -> int:
         return _run_restart(container, request.patterns, workspace_root)
 
     # ------------------------------------------------------------------
-    # logs: 1 or more patterns required
+    # logs: 1 or more patterns required, plus argv render flags
     # ------------------------------------------------------------------
     if action == "logs":
-        return _run_logs(container, request.patterns, workspace_root)
+        patterns, render = parse_log_args(request.patterns)
+        if not patterns:
+            print("orchestrate: logs requires at least one pattern", file=sys.stderr)
+            return 1
+        return _run_logs(container, patterns, render, workspace_root)
 
     # Should be unreachable — already guarded above.
     print(f"orchestrate: internal error: unhandled action '{action}'", file=sys.stderr)

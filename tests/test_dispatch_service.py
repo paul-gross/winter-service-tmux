@@ -20,6 +20,7 @@ from service_manifest.modules.manifest.errors import ManifestError
 from service_manifest.modules.manifest.model import Service, ServiceManifest, Target
 from service_orchestrator.modules.orchestrate.dispatch_service import DispatchService
 from service_orchestrator.modules.orchestrate.errors import OrchestratorError
+from service_orchestrator.modules.orchestrate.log_query import LogRenderOptions
 from service_orchestrator.modules.orchestrate.selector_service import SelectorService
 from service_orchestrator.modules.orchestrate.session_context import SessionContext
 from service_orchestrator.modules.orchestrate.session_context_builder import WORKSPACE_TARGET
@@ -446,14 +447,8 @@ def test_restart_workspace_dead_pattern_returns_1() -> None:
 
 def test_logs_backlog_passthrough_rc() -> None:
     svc, _b, _o, _ls, _err = _make_dispatch(log_rc=4)
-    _env = {
-        "WINTER_LOG_FOLLOW": "0",
-        "WINTER_LOG_TAIL": "all",
-        "WINTER_LOG_SINCE": "",
-        "WINTER_LOG_UNTIL": "",
-        "WINTER_LOG_TIMESTAMPS": "0",
-    }
-    rc = svc.logs_backlog({"alpha": ["backend"]}, _WORKSPACE, _env)
+    _render = LogRenderOptions(follow=False, tail=None, since="", until="", timestamps=False)
+    rc = svc.logs_backlog({"alpha": ["backend"]}, _WORKSPACE, _render)
     assert rc == 4
     assert len(_ls.logs_calls) == 1
     ctx, query = _ls.logs_calls[0]
@@ -471,14 +466,8 @@ def test_logs_backlog_last_nonzero_wins() -> None:
 
     err = StringIO()
     svc = DispatchService(_FakeBuilder(), FakeOrchestrator(), _VariableLogService(), err)  # type: ignore[arg-type]
-    _env = {
-        "WINTER_LOG_FOLLOW": "0",
-        "WINTER_LOG_TAIL": "all",
-        "WINTER_LOG_SINCE": "",
-        "WINTER_LOG_UNTIL": "",
-        "WINTER_LOG_TIMESTAMPS": "0",
-    }
-    rc = svc.logs_backlog({"alpha": ["backend"], "beta": ["backend"]}, _WORKSPACE, _env)
+    _render = LogRenderOptions(follow=False, tail=None, since="", until="", timestamps=False)
+    rc = svc.logs_backlog({"alpha": ["backend"], "beta": ["backend"]}, _WORKSPACE, _render)
     assert rc == 2
 
 
@@ -491,72 +480,42 @@ def test_logs_follow_empty_pairs_returns_rc_or_1() -> None:
     """Build fails for all envs → empty pairs → return current_rc or 1."""
     b = _FakeBuilder(raises=OrchestratorError("no session"))
     svc, _b2, _o2, _ls2, _err2 = _make_dispatch(builder=b)
-    _env = {
-        "WINTER_LOG_FOLLOW": "1",
-        "WINTER_LOG_TAIL": "all",
-        "WINTER_LOG_SINCE": "",
-        "WINTER_LOG_UNTIL": "",
-        "WINTER_LOG_TIMESTAMPS": "0",
-    }
+    _render = LogRenderOptions(follow=True, tail=None, since="", until="", timestamps=False)
     # current_rc=0 → rc or 1 = 1
-    rc = svc.logs_follow({"alpha": ["backend"]}, _WORKSPACE, _env, current_rc=0)
+    rc = svc.logs_follow({"alpha": ["backend"]}, _WORKSPACE, _render, current_rc=0)
     assert rc == 1
 
 
 def test_logs_follow_no_envs_at_all_returns_current_rc_or_1() -> None:
     """Empty env_services dict (no envs to iterate) → current_rc or 1."""
     svc, _b2, _o2, _ls2, _err2 = _make_dispatch()
-    _env = {
-        "WINTER_LOG_FOLLOW": "1",
-        "WINTER_LOG_TAIL": "all",
-        "WINTER_LOG_SINCE": "",
-        "WINTER_LOG_UNTIL": "",
-        "WINTER_LOG_TIMESTAMPS": "0",
-    }
+    _render = LogRenderOptions(follow=True, tail=None, since="", until="", timestamps=False)
     # Empty dict → no build attempts, rc stays at current_rc=0 → rc or 1 = 1
-    rc = svc.logs_follow({}, _WORKSPACE, _env, current_rc=0)
+    rc = svc.logs_follow({}, _WORKSPACE, _render, current_rc=0)
     assert rc == 1
 
 
 def test_logs_follow_result_if_nonzero_else_rc() -> None:
     """follow_streams returning non-zero propagates; if zero, use current_rc."""
     svc, _b, _o, _ls, _err = _make_dispatch(log_rc=130)
-    _env = {
-        "WINTER_LOG_FOLLOW": "1",
-        "WINTER_LOG_TAIL": "all",
-        "WINTER_LOG_SINCE": "",
-        "WINTER_LOG_UNTIL": "",
-        "WINTER_LOG_TIMESTAMPS": "0",
-    }
-    rc = svc.logs_follow({"alpha": ["backend"]}, _WORKSPACE, _env, current_rc=0)
+    _render = LogRenderOptions(follow=True, tail=None, since="", until="", timestamps=False)
+    rc = svc.logs_follow({"alpha": ["backend"]}, _WORKSPACE, _render, current_rc=0)
     assert rc == 130  # result is non-zero so result wins
 
 
 def test_logs_follow_zero_result_uses_current_rc() -> None:
     """follow_streams returning 0, current_rc=1 → return 0 (result wins when non-zero, else rc)."""
     svc, _b, _o, _ls, _err = _make_dispatch(log_rc=0)
-    _env = {
-        "WINTER_LOG_FOLLOW": "1",
-        "WINTER_LOG_TAIL": "all",
-        "WINTER_LOG_SINCE": "",
-        "WINTER_LOG_UNTIL": "",
-        "WINTER_LOG_TIMESTAMPS": "0",
-    }
-    rc = svc.logs_follow({"alpha": ["backend"]}, _WORKSPACE, _env, current_rc=1)
+    _render = LogRenderOptions(follow=True, tail=None, since="", until="", timestamps=False)
+    rc = svc.logs_follow({"alpha": ["backend"]}, _WORKSPACE, _render, current_rc=1)
     # result=0 so "result if result != 0 else rc" → rc=1
     assert rc == 1
 
 
 def test_logs_follow_calls_follow_streams_with_pairs() -> None:
     svc, _b, _o, _ls, _err = _make_dispatch()
-    _env = {
-        "WINTER_LOG_FOLLOW": "1",
-        "WINTER_LOG_TAIL": "all",
-        "WINTER_LOG_SINCE": "",
-        "WINTER_LOG_UNTIL": "",
-        "WINTER_LOG_TIMESTAMPS": "0",
-    }
-    rc = svc.logs_follow({"alpha": ["backend", "worker"]}, _WORKSPACE, _env)
+    _render = LogRenderOptions(follow=True, tail=None, since="", until="", timestamps=False)
+    rc = svc.logs_follow({"alpha": ["backend", "worker"]}, _WORKSPACE, _render)
     assert rc == 0
     assert len(_ls.follow_streams_calls) == 1
     streams = _ls.follow_streams_calls[0]
