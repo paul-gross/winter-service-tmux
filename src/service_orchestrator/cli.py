@@ -243,6 +243,44 @@ def _run_logs(
     return dispatch.logs_backlog(env_services, workspace_root, render)
 
 
+def _run_catalog(workspace_root: Path | None) -> int:
+    """Handle catalog action: emit scope-qualified service names as JSON.
+
+    Outputs ``{"services": ["workspace/<name>", "*/<name>", ...]}`` where
+    ``workspace/<name>`` is a workspace-scoped service and ``*/<name>`` is an
+    env-scoped service (env-agnostic, any env may run it).
+    """
+    from service_manifest.container import Container as ManifestContainer
+    from service_manifest.modules.manifest.errors import ManifestError
+
+    ext_config_dir_val = os.environ.get("WINTER_EXT_CONFIG_DIR")
+    if ext_config_dir_val:
+        config_dir = Path(ext_config_dir_val)
+    elif workspace_root is not None:
+        config_dir = workspace_root / ".winter" / "config" / "winter-service-tmux"
+    else:
+        sys.stdout.write(json.dumps({"services": []}) + "\n")
+        sys.stdout.flush()
+        return 0
+
+    manifest_container = ManifestContainer()
+    try:
+        manifest = manifest_container.manifest_reader.read(config_dir)
+    except ManifestError:
+        sys.stdout.write(json.dumps({"services": []}) + "\n")
+        sys.stdout.flush()
+        return 0
+
+    names: list[str] = []
+    for svc in manifest.workspace_services:
+        names.append(f"workspace/{svc.name}")
+    for svc in manifest.services:
+        names.append(f"*/{svc.name}")
+    sys.stdout.write(json.dumps({"services": names}) + "\n")
+    sys.stdout.flush()
+    return 0
+
+
 def main(argv: list[str]) -> int:
     """Parse ``[action, *rest]`` and dispatch to ``OrchestratorService`` or ``LogService``.
 
@@ -250,6 +288,12 @@ def main(argv: list[str]) -> int:
     Catches ``OrchestratorError`` and ``ManifestError`` at this boundary;
     everything else propagates.
     """
+    # Handle catalog before parse_request (catalog is not in the standard action set).
+    if argv and argv[0] == "catalog":
+        ws_dir = os.environ.get("WINTER_WORKSPACE_DIR")
+        workspace_root = Path(ws_dir) if ws_dir else None
+        return _run_catalog(workspace_root)
+
     request = parse_request(argv)
     if isinstance(request, ParseError):
         print(request.message, file=sys.stderr)
