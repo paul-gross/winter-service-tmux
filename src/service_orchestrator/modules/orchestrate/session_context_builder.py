@@ -11,16 +11,30 @@ Resolution decisions (see ``00-plan.md`` resolved decisions #1, #2, R1):
   **config dir** — they are bare filenames in the manifest.
 - Env file path is resolved relative to the **worktree dir** (per-env file).
 - ``env_vars=None`` / ``env_file_path=None`` are the "local" mode signals.
+
+Extension-declared services
+----------------------------
+When ``WINTER_SERVICE_MANIFEST`` is set in the environment, the builder reads
+that TOML file after loading the committed ``config.toml`` and merges any
+extension-declared services into the manifest.  Services without a ``target``
+field are skipped (tmux requires a pane address).  Providers that predate this
+contract ignore the env var.
 """
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from service_manifest.modules.manifest.env_reader import EnvFileReader
+from service_manifest.modules.manifest.ext_reader import ExtManifestMerger
+from service_manifest.modules.manifest.model import ServiceManifest
 from service_manifest.modules.manifest.reader import ManifestReader
 from service_orchestrator.core.workspace_locator import IWorkspaceLocator
 from service_orchestrator.modules.orchestrate.session_context import SessionContext
+
+# Env-var name set by winter-cli when extension-declared services are present.
+_EXT_MANIFEST_ENV = "WINTER_SERVICE_MANIFEST"
 
 # Sentinel so callers can distinguish "pass None explicitly" from "omit".
 _SENTINEL: object = object()
@@ -74,6 +88,7 @@ class SessionContextBuilder:
         cfg_dir = self._locator.config_dir()
         worktree_dir = ws_root / env
         manifest = self._manifest_reader.read(cfg_dir)
+        manifest = _apply_ext_manifest(manifest)
 
         if skip_env_file:
             env_file_path: Path | None = None
@@ -122,6 +137,7 @@ class SessionContextBuilder:
         ws_root = workspace_root if workspace_root is not None else self._locator.workspace_root()
         cfg_dir = self._locator.config_dir()
         manifest = self._manifest_reader.read(cfg_dir)
+        manifest = _apply_ext_manifest(manifest)
         return SessionContext(
             env=WORKSPACE_TARGET,
             workspace_root=ws_root,
@@ -135,6 +151,20 @@ class SessionContextBuilder:
             env_vars=None,
             env_file_path=None,
         )
+
+
+def _apply_ext_manifest(manifest: ServiceManifest) -> ServiceManifest:
+    """Merge extension-declared services from ``WINTER_SERVICE_MANIFEST`` if set.
+
+    Reads the env var at call time (not at import time) so tests can set it
+    without module-level side effects.  Returns the original manifest unmodified
+    when the env var is absent or the file cannot be read.
+    """
+    ext_path_str = os.environ.get(_EXT_MANIFEST_ENV)
+    if not ext_path_str:
+        return manifest
+    ext_path = Path(ext_path_str)
+    return ExtManifestMerger().read_and_merge(manifest, ext_path)
 
 
 def build_for_target(
