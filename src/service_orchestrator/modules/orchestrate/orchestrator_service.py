@@ -199,14 +199,14 @@ class OrchestratorService:
         Captured: non-empty command AND log=FILE → writer-wrapped.
         Bare: empty command OR log!=FILE → plain launch line.
         """
-        captured = bool(svc.command) and svc.log == LogMode.FILE
+        captured = bool(svc.cmd) and svc.log == LogMode.FILE
         if captured:
             logfile = self._log_repo.log_path(ctx.worktree_dir, svc.name)
             return build_launch_line(
                 ctx.worktree_dir,
                 ctx.env_file_path,
                 svc.name,
-                svc.command,
+                svc.cmd,
                 logfile=logfile,
                 rotate_size_bytes=ctx.logs.rotate_size_bytes,
                 max_rotations=ctx.logs.max_rotations,
@@ -215,7 +215,7 @@ class OrchestratorService:
             ctx.worktree_dir,
             ctx.env_file_path,
             svc.name,
-            svc.command,
+            svc.cmd,
         )
 
     def _await_startup(self, ctx: SessionContext, pane_pids: dict[str, int]) -> list[str]:
@@ -228,7 +228,7 @@ class OrchestratorService:
         candidates = [
             svc
             for svc in ctx.services
-            if bool(svc.command)
+            if bool(svc.cmd)
             and svc.startup is not None
             and svc.startup.retries > 0
             and f"{svc.target.window}.{svc.target.pane}" in pane_pids
@@ -334,7 +334,7 @@ class OrchestratorService:
                 state = "stopped"
                 handle = None
 
-            captured = bool(svc.command) and svc.log == LogMode.FILE
+            captured = bool(svc.cmd) and svc.log == LogMode.FILE
             log_path = str(self._log_repo.log_path(ctx.worktree_dir, svc.name)) if captured else None
 
             health = self._service_health(svc.health, state, ctx)
@@ -467,7 +467,7 @@ class OrchestratorService:
             ctx.worktree_dir,
             ctx.env_file_path,
             service.name,
-            service.command,
+            service.cmd,
         )
         self._tmux.send_keys(ctx.session, target, line)
         self._stdout.write(f"Restarted '{service_name}' in {ctx.session}:{target}\n")

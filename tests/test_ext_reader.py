@@ -33,8 +33,8 @@ _BASE_MANIFEST = ServiceManifest(
     session_prefix="wws",
     env_file=".winter.env",
     layout_hook=None,
-    services=(Service(name="api", target=Target(1, 0), command="uvicorn"),),
-    workspace_services=(Service(name="rabbitmq", target=Target(0, 0), command="docker run rabbitmq"),),
+    services=(Service(name="api", target=Target(1, 0), cmd="uvicorn"),),
+    workspace_services=(Service(name="rabbitmq", target=Target(0, 0), cmd="docker run rabbitmq"),),
     status_urls=(),
     logs=LogConfig(),
     workspace_layout_hook=None,
@@ -92,7 +92,7 @@ def test_ext_service_with_target_merged_into_services(tmp_path: Path) -> None:
 name    = "worker"
 scope   = "feature-environment"
 source  = "my-ext"
-command = "python -m worker"
+cmd = "python -m worker"
 target  = "2.0"
 """
     result = _merge(content, tmp_path=tmp_path)
@@ -107,7 +107,7 @@ def test_ext_service_target_parsed_correctly(tmp_path: Path) -> None:
 name    = "worker"
 scope   = "feature-environment"
 source  = "my-ext"
-command = "python -m worker"
+cmd = "python -m worker"
 target  = "3.1"
 """
     result = _merge(content, tmp_path=tmp_path)
@@ -140,7 +140,7 @@ def test_ext_workspace_service_merged_into_workspace_services(tmp_path: Path) ->
 name    = "postgres"
 scope   = "workspace"
 source  = "my-ext"
-command = "pg_ctl start"
+cmd = "pg_ctl start"
 target  = "1.0"
 """
     result = _merge(content, tmp_path=tmp_path)
@@ -163,7 +163,7 @@ def test_ext_service_without_target_is_skipped(tmp_path: Path, caplog: pytest.Lo
 name    = "notarget"
 scope   = "feature-environment"
 source  = "my-ext"
-command = "echo hi"
+cmd = "echo hi"
 """
     with caplog.at_level(logging.WARNING):
         result = _merge(content, tmp_path=tmp_path)
@@ -181,7 +181,7 @@ def test_ext_service_name_collision_is_skipped(tmp_path: Path, caplog: pytest.Lo
 name    = "api"
 scope   = "feature-environment"
 source  = "my-ext"
-command = "new-api"
+cmd = "new-api"
 target  = "3.0"
 """
     with caplog.at_level(logging.WARNING):
@@ -190,7 +190,7 @@ target  = "3.0"
     # Only one "api" service — the original.
     api_services = [s for s in result.services if s.name == "api"]
     assert len(api_services) == 1
-    assert api_services[0].command == "uvicorn"  # original command preserved
+    assert api_services[0].cmd == "uvicorn"  # original cmd preserved
     assert any("api" in r.message for r in caplog.records)
 
 

@@ -65,12 +65,12 @@ layout_hook = "layout-hook.sh"
 [[service]]
 name = "backend"
 target = "0.0"
-command = "npm run start:dev"
+cmd = "npm run start:dev"
 
 [[service]]
 name = "frontend"
 target = "0.1"
-command = "npm run dev"
+cmd = "npm run dev"
 
 [[status.url]]
 label = "Backend"
@@ -79,8 +79,8 @@ url = "http://localhost:${BACKEND_PORT}"
 
 # Workspace services for direct model construction.
 _WS_SERVICES = (
-    Service(name="monitor", target=Target(window=0, pane=0), command="python -m monitor"),
-    Service(name="proxy", target=Target(window=0, pane=1), command="nginx -g 'daemon off;'"),
+    Service(name="monitor", target=Target(window=0, pane=0), cmd="python -m monitor"),
+    Service(name="proxy", target=Target(window=0, pane=1), cmd="nginx -g 'daemon off;'"),
 )
 _WS_LAYOUT_HOOK = "workspace-layout-hook.sh"
 
@@ -286,12 +286,12 @@ workspace_layout_hook = "workspace-layout-hook.sh"
 [[service]]
 name = "backend"
 target = "0.0"
-command = "npm start"
+cmd = "npm start"
 
 [[service]]
 name = "monitor"
 target = "0.0"
-command = "python -m monitor"
+cmd = "python -m monitor"
 scope = "workspace"
 
 [[status.url]]

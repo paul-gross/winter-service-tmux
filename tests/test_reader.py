@@ -60,17 +60,17 @@ layout_hook = "layout-hook.sh"
 [[service]]
 name = "backend"
 target = "0.0"
-command = "npm run start:dev"
+cmd = "npm run start:dev"
 
 [[service]]
 name = "frontend"
 target = "0.1"
-command = "npm run dev"
+cmd = "npm run dev"
 
 [[service]]
 name = "shell"
 target = "1.0"
-command = ""
+cmd = ""
 
 [[status.url]]
 label = "Backend"
@@ -88,9 +88,9 @@ url = "http://localhost:${FRONTEND_PORT}"
     assert manifest.layout_hook == "layout-hook.sh"
 
     assert len(manifest.services) == 3
-    assert manifest.services[0] == Service(name="backend", target=Target(window=0, pane=0), command="npm run start:dev")
-    assert manifest.services[1] == Service(name="frontend", target=Target(window=0, pane=1), command="npm run dev")
-    assert manifest.services[2] == Service(name="shell", target=Target(window=1, pane=0), command="")
+    assert manifest.services[0] == Service(name="backend", target=Target(window=0, pane=0), cmd="npm run start:dev")
+    assert manifest.services[1] == Service(name="frontend", target=Target(window=0, pane=1), cmd="npm run dev")
+    assert manifest.services[2] == Service(name="shell", target=Target(window=1, pane=0), cmd="")
 
     assert len(manifest.status_urls) == 2
     assert manifest.status_urls[0] == StatusUrl(label="Backend", url="http://localhost:${BACKEND_PORT}")
@@ -115,7 +115,7 @@ session_prefix = "mp"
 [[service]]
 name = "svc"
 target = "2.3"
-command = "echo hi"
+cmd = "echo hi"
 """
     manifest = _read({_COMMITTED_PATH: content})
     assert manifest.services[0].target == Target(window=2, pane=3)
@@ -128,7 +128,7 @@ session_prefix = "mp"
 [[service]]
 name = "backend"
 target = "0.0"
-command = "npm run start:dev"
+cmd = "npm run start:dev"
 
 [service.health]
 type = "url"
@@ -151,7 +151,7 @@ session_prefix = "mp"
 [[service]]
 name = "worker"
 target = "0.0"
-command = "npm run worker"
+cmd = "npm run worker"
 
 [service.health]
 type = "cmd"
@@ -169,7 +169,7 @@ session_prefix = "mp"
 [[service]]
 name = "backend"
 target = "0.0"
-command = "npm run start:dev"
+cmd = "npm run start:dev"
 
 [service.startup]
 retries = 3
@@ -186,7 +186,7 @@ session_prefix = "mp"
 [[service]]
 name = "backend"
 target = "0.0"
-command = "npm run start:dev"
+cmd = "npm run start:dev"
 
 [service.startup]
 retries = 5
@@ -202,7 +202,7 @@ session_prefix = "mp"
 [[service]]
 name = "backend"
 target = "0.0"
-command = "npm run start:dev"
+cmd = "npm run start:dev"
 
 [service.startup]
 retry_delay = 0.5
@@ -218,7 +218,7 @@ session_prefix = "mp"
 [[service]]
 name = "backend"
 target = "0.0"
-command = "npm run start:dev"
+cmd = "npm run start:dev"
 """
     manifest = _read({_COMMITTED_PATH: content})
     assert manifest.services[0].startup is None
@@ -231,7 +231,7 @@ session_prefix = "mp"
 [[service]]
 name = "backend"
 target = "0.0"
-command = "npm run start:dev"
+cmd = "npm run start:dev"
 
 [service.startup]
 retries = 2
@@ -256,7 +256,7 @@ session_prefix = "mp"
 [[service]]
 name = "backend"
 target = "0.0"
-command = "npm run start:dev"
+cmd = "npm run start:dev"
 
 [service.startup]
 retries = "x"
@@ -272,7 +272,7 @@ session_prefix = "proj"
 [[service]]
 name = "worker"
 target = "0.0"
-command = "python -m worker"
+cmd = "python -m worker"
 """
     manifest = _read({_COMMITTED_PATH: content})
     assert manifest.env_file is None
@@ -305,7 +305,7 @@ session_prefix = "mp"
 
 [[service]]
 target = "0.0"
-command = "cmd"
+cmd = "cmd"
 """
     with pytest.raises(ManifestError, match="name"):
         _read({_COMMITTED_PATH: content})
@@ -317,7 +317,7 @@ session_prefix = "mp"
 
 [[service]]
 name = "backend"
-command = "npm start"
+cmd = "npm start"
 """
     with pytest.raises(ManifestError, match="target"):
         _read({_COMMITTED_PATH: content})
@@ -366,7 +366,7 @@ session_prefix = "mp"
 [[service]]
 name = "svc"
 target = "abc"
-command = "cmd"
+cmd = "cmd"
 """
     with pytest.raises(ManifestError, match="malformed target"):
         _read({_COMMITTED_PATH: content})
@@ -379,7 +379,7 @@ session_prefix = "mp"
 [[service]]
 name = "svc"
 target = "0"
-command = "cmd"
+cmd = "cmd"
 """
     with pytest.raises(ManifestError, match="malformed target"):
         _read({_COMMITTED_PATH: content})
@@ -392,7 +392,7 @@ session_prefix = "mp"
 [[service]]
 name = "svc"
 target = "0.1.2"
-command = "cmd"
+cmd = "cmd"
 """
     with pytest.raises(ManifestError, match="malformed target"):
         _read({_COMMITTED_PATH: content})
@@ -405,7 +405,7 @@ session_prefix = "mp"
 [[service]]
 name = "svc"
 target = "a.b"
-command = "cmd"
+cmd = "cmd"
 """
     with pytest.raises(ManifestError, match="malformed target"):
         _read({_COMMITTED_PATH: content})
@@ -490,17 +490,17 @@ session_prefix = "mp"
 [[service]]
 name = "backend"
 target = "0.0"
-command = "npm run start:dev"
+cmd = "npm run start:dev"
 """
     overlay = """\
 [[service]]
 name = "backend"
 target = "0.0"
-command = "npm run start:prod"
+cmd = "npm run start:prod"
 """
     manifest = _read({_COMMITTED_PATH: committed, _LOCAL_PATH: overlay})
     assert len(manifest.services) == 1
-    assert manifest.services[0].command == "npm run start:prod"
+    assert manifest.services[0].cmd == "npm run start:prod"
 
 
 def test_overlay_service_overrides_target_field() -> None:
@@ -510,13 +510,13 @@ session_prefix = "mp"
 [[service]]
 name = "backend"
 target = "0.0"
-command = "cmd"
+cmd = "cmd"
 """
     overlay = """\
 [[service]]
 name = "backend"
 target = "1.0"
-command = "cmd"
+cmd = "cmd"
 """
     manifest = _read({_COMMITTED_PATH: committed, _LOCAL_PATH: overlay})
     assert manifest.services[0].target == Target(window=1, pane=0)
@@ -529,7 +529,7 @@ session_prefix = "mp"
 [[service]]
 name = "backend"
 target = "0.0"
-command = "cmd"
+cmd = "cmd"
 
 [service.health]
 type = "url"
@@ -560,13 +560,13 @@ session_prefix = "mp"
 [[service]]
 name = "backend"
 target = "0.0"
-command = "npm run start:dev"
+cmd = "npm run start:dev"
 """
     overlay = """\
 [[service]]
 name = "worker"
 target = "1.0"
-command = "python -m worker"
+cmd = "python -m worker"
 """
     manifest = _read({_COMMITTED_PATH: committed, _LOCAL_PATH: overlay})
     assert len(manifest.services) == 2
@@ -582,32 +582,32 @@ session_prefix = "mp"
 [[service]]
 name = "backend"
 target = "0.0"
-command = "backend-cmd"
+cmd = "backend-cmd"
 
 [[service]]
 name = "frontend"
 target = "0.1"
-command = "frontend-cmd"
+cmd = "frontend-cmd"
 """
     overlay = """\
 [[service]]
 name = "frontend"
 target = "0.1"
-command = "frontend-override"
+cmd = "frontend-override"
 
 [[service]]
 name = "shell"
 target = "1.0"
-command = ""
+cmd = ""
 """
     manifest = _read({_COMMITTED_PATH: committed, _LOCAL_PATH: overlay})
     assert len(manifest.services) == 3
     # backend unchanged at position 0
     assert manifest.services[0].name == "backend"
-    assert manifest.services[0].command == "backend-cmd"
+    assert manifest.services[0].cmd == "backend-cmd"
     # frontend overridden in place at position 1
     assert manifest.services[1].name == "frontend"
-    assert manifest.services[1].command == "frontend-override"
+    assert manifest.services[1].cmd == "frontend-override"
     # shell appended at position 2
     assert manifest.services[2].name == "shell"
 
@@ -713,7 +713,7 @@ session_prefix = "mp"
 [[service]]
 name = "svc"
 target = 0.0
-command = "cmd"
+cmd = "cmd"
 """
     with pytest.raises(ManifestError, match="quoted string"):
         _read({_COMMITTED_PATH: content})
@@ -727,7 +727,7 @@ session_prefix = "mp"
 [[service]]
 name = "svc"
 target = 1.10
-command = "cmd"
+cmd = "cmd"
 """
     with pytest.raises(ManifestError, match="quoted string"):
         _read({_COMMITTED_PATH: content})
@@ -741,7 +741,7 @@ session_prefix = "mp"
 [[service]]
 name = "svc"
 target = 1
-command = "cmd"
+cmd = "cmd"
 """
     with pytest.raises(ManifestError, match="quoted string"):
         _read({_COMMITTED_PATH: content})
@@ -856,7 +856,7 @@ session_prefix = "mp"
 [[service]]
 name = "watcher"
 target = "1.0"
-command = "npm run watch"
+cmd = "npm run watch"
 log = "pane"
 """
     manifest = _read({_COMMITTED_PATH: content})
@@ -870,7 +870,7 @@ session_prefix = "mp"
 [[service]]
 name = "backend"
 target = "0.0"
-command = "npm run start:dev"
+cmd = "npm run start:dev"
 log = "file"
 """
     manifest = _read({_COMMITTED_PATH: content})
@@ -884,7 +884,7 @@ session_prefix = "mp"
 [[service]]
 name = "svc"
 target = "0.0"
-command = "cmd"
+cmd = "cmd"
 log = "memory"
 """
     manifest = _read({_COMMITTED_PATH: content})
@@ -898,7 +898,7 @@ session_prefix = "mp"
 [[service]]
 name = "backend"
 target = "0.0"
-command = "npm start"
+cmd = "npm start"
 """
     manifest = _read({_COMMITTED_PATH: content})
     assert manifest.services[0].log == LogMode.FILE
@@ -911,7 +911,7 @@ session_prefix = "mp"
 [[service]]
 name = "svc"
 target = "0.0"
-command = "cmd"
+cmd = "cmd"
 log = "yes"
 """
     with pytest.raises(ManifestError, match="'log'"):
@@ -926,7 +926,7 @@ session_prefix = "mp"
 [[service]]
 name = "svc"
 target = "0.0"
-command = "cmd"
+cmd = "cmd"
 log = true
 """
     with pytest.raises(ManifestError, match="'log'"):
@@ -941,17 +941,17 @@ session_prefix = "mp"
 [[service]]
 name = "backend"
 target = "0.0"
-command = "npm start"
+cmd = "npm start"
 log = "pane"
 """
     # Local overlay changes command only — log="pane" should be preserved.
     local = """\
 [[service]]
 name = "backend"
-command = "npm run start:debug"
+cmd = "npm run start:debug"
 """
     manifest = _read({_COMMITTED_PATH: committed, _LOCAL_PATH: local})
-    assert manifest.services[0].command == "npm run start:debug"
+    assert manifest.services[0].cmd == "npm run start:debug"
     assert manifest.services[0].log == LogMode.PANE
 
 
@@ -963,7 +963,7 @@ session_prefix = "mp"
 [[service]]
 name = "watcher"
 target = "0.0"
-command = "npm run watch"
+cmd = "npm run watch"
 log = "pane"
 """
     local = """\
@@ -1039,13 +1039,13 @@ workspace_layout_hook = "ai/project/workspace-layout-hook.sh"
 [[service]]
 name = "docker"
 target = "0.0"
-command = "docker compose up"
+cmd = "docker compose up"
 scope = "workspace"
 
 [[service]]
 name = "watcher"
 target = "0.1"
-command = "npm run watch"
+cmd = "npm run watch"
 log = "pane"
 scope = "workspace"
 """
@@ -1055,7 +1055,7 @@ scope = "workspace"
     assert manifest.workspace_services[0].name == "docker"
     assert manifest.workspace_services[0].target.window == 0
     assert manifest.workspace_services[0].target.pane == 0
-    assert manifest.workspace_services[0].command == "docker compose up"
+    assert manifest.workspace_services[0].cmd == "docker compose up"
     assert manifest.workspace_services[1].name == "watcher"
     assert manifest.workspace_services[1].log == LogMode.PANE
     assert manifest.workspace_layout_hook == "ai/project/workspace-layout-hook.sh"
@@ -1069,12 +1069,12 @@ session_prefix = "mp"
 [[service]]
 name = "backend"
 target = "0.0"
-command = "npm start"
+cmd = "npm start"
 
 [[service]]
 name = "docker"
 target = "0.0"
-command = "docker compose up"
+cmd = "docker compose up"
 scope = "workspace"
 """
     manifest = _read({_COMMITTED_PATH: content})
@@ -1090,7 +1090,7 @@ session_prefix = "mp"
 [[service]]
 name = "backend"
 target = "0.0"
-command = "npm start"
+cmd = "npm start"
 """
     manifest = _read({_COMMITTED_PATH: content})
     assert [s.name for s in manifest.services] == ["backend"]
@@ -1105,7 +1105,7 @@ session_prefix = "mp"
 [[service]]
 name = "backend"
 target = "0.0"
-command = "npm start"
+cmd = "npm start"
 scope = "project"
 """
     manifest = _read({_COMMITTED_PATH: content})
@@ -1121,7 +1121,7 @@ session_prefix = "mp"
 [[service]]
 name = "backend"
 target = "0.0"
-command = "npm start"
+cmd = "npm start"
 scope = "global"
 """
     with pytest.raises(ManifestError, match="invalid scope"):
@@ -1136,7 +1136,7 @@ session_prefix = "mp"
 [[service]]
 name = "docker"
 target = "0.0"
-command = "docker compose up"
+cmd = "docker compose up"
 scope = "workspace"
 """
     manifest = _read({_COMMITTED_PATH: content})
@@ -1169,7 +1169,7 @@ session_prefix = "mp"
 [[service]]
 name = "docker"
 target = "0.0"
-command = "docker compose up"
+cmd = "docker compose up"
 scope = "workspace"
 """
     manifest = _read({_COMMITTED_PATH: content})
@@ -1182,7 +1182,7 @@ session_prefix = "mp"
 
 [[service]]
 target = "0.0"
-command = "cmd"
+cmd = "cmd"
 scope = "workspace"
 """
     with pytest.raises(ManifestError, match="name"):
@@ -1195,7 +1195,7 @@ session_prefix = "mp"
 
 [[service]]
 name = "docker"
-command = "cmd"
+cmd = "cmd"
 scope = "workspace"
 """
     with pytest.raises(ManifestError, match="target"):
@@ -1209,7 +1209,7 @@ session_prefix = "mp"
 [[service]]
 name = "docker"
 target = "abc"
-command = "cmd"
+cmd = "cmd"
 scope = "workspace"
 """
     with pytest.raises(ManifestError, match="malformed target"):
@@ -1224,7 +1224,7 @@ session_prefix = "mp"
 [[service]]
 name = "docker"
 target = 0.0
-command = "cmd"
+cmd = "cmd"
 scope = "workspace"
 """
     with pytest.raises(ManifestError, match="quoted string"):
@@ -1238,7 +1238,7 @@ session_prefix = "mp"
 [[service]]
 name = "docker"
 target = "0.0"
-command = "cmd"
+cmd = "cmd"
 log = "invalid"
 scope = "workspace"
 """
@@ -1253,7 +1253,7 @@ session_prefix = "mp"
 [[service]]
 name = "docker"
 target = "0.0"
-command = "cmd"
+cmd = "cmd"
 log = true
 scope = "workspace"
 """
@@ -1273,19 +1273,19 @@ session_prefix = "mp"
 [[service]]
 name = "docker"
 target = "0.0"
-command = "docker compose up"
+cmd = "docker compose up"
 scope = "workspace"
 """
     overlay = """\
 [[service]]
 name = "docker"
 target = "0.0"
-command = "docker compose up --build"
+cmd = "docker compose up --build"
 scope = "workspace"
 """
     manifest = _read({_COMMITTED_PATH: committed, _LOCAL_PATH: overlay})
     assert len(manifest.workspace_services) == 1
-    assert manifest.workspace_services[0].command == "docker compose up --build"
+    assert manifest.workspace_services[0].cmd == "docker compose up --build"
 
 
 def test_overlay_workspace_service_append_new_name() -> None:
@@ -1295,14 +1295,14 @@ session_prefix = "mp"
 [[service]]
 name = "docker"
 target = "0.0"
-command = "docker compose up"
+cmd = "docker compose up"
 scope = "workspace"
 """
     overlay = """\
 [[service]]
 name = "monitor"
 target = "0.1"
-command = "python -m monitor"
+cmd = "python -m monitor"
 scope = "workspace"
 """
     manifest = _read({_COMMITTED_PATH: committed, _LOCAL_PATH: overlay})
@@ -1319,33 +1319,33 @@ session_prefix = "mp"
 [[service]]
 name = "docker"
 target = "0.0"
-command = "docker compose up"
+cmd = "docker compose up"
 scope = "workspace"
 
 [[service]]
 name = "registry"
 target = "0.1"
-command = "docker run registry"
+cmd = "docker run registry"
 scope = "workspace"
 """
     overlay = """\
 [[service]]
 name = "registry"
 target = "0.1"
-command = "docker run registry:2"
+cmd = "docker run registry:2"
 scope = "workspace"
 
 [[service]]
 name = "monitor"
 target = "1.0"
-command = "python -m monitor"
+cmd = "python -m monitor"
 scope = "workspace"
 """
     manifest = _read({_COMMITTED_PATH: committed, _LOCAL_PATH: overlay})
     assert len(manifest.workspace_services) == 3
     assert manifest.workspace_services[0].name == "docker"
     assert manifest.workspace_services[1].name == "registry"
-    assert manifest.workspace_services[1].command == "docker run registry:2"
+    assert manifest.workspace_services[1].cmd == "docker run registry:2"
     assert manifest.workspace_services[2].name == "monitor"
 
 
@@ -1357,12 +1357,12 @@ session_prefix = "mp"
 [[service]]
 name = "backend"
 target = "0.0"
-command = "npm start"
+cmd = "npm start"
 
 [[service]]
 name = "docker"
 target = "0.0"
-command = "docker compose up"
+cmd = "docker compose up"
 scope = "workspace"
 """
     # Override the workspace docker entry (changing only command); append a new
@@ -1370,19 +1370,19 @@ scope = "workspace"
     overlay = """\
 [[service]]
 name = "docker"
-command = "docker compose up --build"
+cmd = "docker compose up --build"
 scope = "workspace"
 
 [[service]]
 name = "monitor"
 target = "1.0"
-command = "python -m monitor"
+cmd = "python -m monitor"
 scope = "workspace"
 """
     manifest = _read({_COMMITTED_PATH: committed, _LOCAL_PATH: overlay})
     assert [s.name for s in manifest.services] == ["backend"]
     assert [s.name for s in manifest.workspace_services] == ["docker", "monitor"]
-    assert manifest.workspace_services[0].command == "docker compose up --build"
+    assert manifest.workspace_services[0].cmd == "docker compose up --build"
 
 
 def test_overlay_workspace_layout_hook_replaces_committed() -> None:
@@ -1403,7 +1403,7 @@ session_prefix = "mp"
 [[service]]
 name = "docker"
 target = "0.0"
-command = "docker compose up"
+cmd = "docker compose up"
 log = "pane"
 scope = "workspace"
 """
@@ -1411,10 +1411,10 @@ scope = "workspace"
     overlay = """\
 [[service]]
 name = "docker"
-command = "docker compose up --build"
+cmd = "docker compose up --build"
 """
     manifest = _read({_COMMITTED_PATH: committed, _LOCAL_PATH: overlay})
-    assert manifest.workspace_services[0].command == "docker compose up --build"
+    assert manifest.workspace_services[0].cmd == "docker compose up --build"
     assert manifest.workspace_services[0].log == LogMode.PANE
     assert [s.name for s in manifest.services] == []
 
@@ -1427,12 +1427,12 @@ session_prefix = "mp"
 [[service]]
 name = "backend"
 target = "0.0"
-command = "npm start"
+cmd = "npm start"
 
 [[service]]
 name = "docker"
 target = "0.0"
-command = "docker compose up"
+cmd = "docker compose up"
 scope = "workspace"
 """
     # Should parse without error
@@ -1477,3 +1477,121 @@ def test_read_config_dir_reads_local_overlay() -> None:
     reader = ManifestReader(fake_fs)
     manifest = reader.read(_CONFIG_DIR)
     assert manifest.session_prefix == "local"
+
+
+# ---------------------------------------------------------------------------
+# cmd / command key — canonical key, deprecated alias, and absent key
+# ---------------------------------------------------------------------------
+
+
+def test_cmd_key_parsed() -> None:
+    """The canonical 'cmd' key is read correctly into Service.cmd."""
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "backend"
+target = "0.0"
+cmd = "npm run start:dev"
+"""
+    manifest = _read({_COMMITTED_PATH: content})
+    assert manifest.services[0].cmd == "npm run start:dev"
+
+
+def test_legacy_command_key_emits_deprecation_warning_and_is_read(capsys: pytest.CaptureFixture[str]) -> None:
+    """The legacy 'command' key is accepted but emits a deprecation warning to stderr."""
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "backend"
+target = "0.0"
+command = "npm run start:dev"
+"""
+    manifest = _read({_COMMITTED_PATH: content})
+    captured = capsys.readouterr()
+    assert manifest.services[0].cmd == "npm run start:dev"
+    assert "deprecation" in captured.err
+    assert "backend" in captured.err
+    assert "'cmd'" in captured.err
+
+
+def test_cmd_takes_precedence_over_command_when_both_present(capsys: pytest.CaptureFixture[str]) -> None:
+    """When both 'cmd' and 'command' are present, 'cmd' is canonical and wins; no warning."""
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "backend"
+target = "0.0"
+cmd = "npm run start:dev"
+command = "SHOULD_NOT_BE_USED"
+"""
+    manifest = _read({_COMMITTED_PATH: content})
+    captured = capsys.readouterr()
+    assert manifest.services[0].cmd == "npm run start:dev"
+    assert captured.err == ""
+
+
+def test_absent_cmd_defaults_to_empty_string() -> None:
+    """When neither 'cmd' nor 'command' is present, cmd defaults to '' (interactive pane)."""
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "shell"
+target = "1.0"
+"""
+    manifest = _read({_COMMITTED_PATH: content})
+    assert manifest.services[0].cmd == ""
+
+
+def test_empty_cmd_produces_interactive_pane() -> None:
+    """cmd = '' is legal and signals an interactive shell pane."""
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "shell"
+target = "1.0"
+cmd = ""
+"""
+    manifest = _read({_COMMITTED_PATH: content})
+    assert manifest.services[0].cmd == ""
+
+
+def test_overlay_command_alias_overrides_committed_cmd(capsys: pytest.CaptureFixture[str]) -> None:
+    """Overlay using deprecated 'command' key overrides committed 'cmd' for the same service."""
+    committed = """\
+session_prefix = "mp"
+
+[[service]]
+name = "backend"
+target = "0.0"
+cmd = "committed-cmd"
+"""
+    overlay = """\
+[[service]]
+name = "backend"
+target = "0.0"
+command = "overlay-cmd"
+"""
+    manifest = _read({_COMMITTED_PATH: committed, _LOCAL_PATH: overlay})
+    captured = capsys.readouterr()
+    assert manifest.services[0].cmd == "overlay-cmd"
+    assert "deprecation" in captured.err
+    assert "backend" in captured.err
+
+
+def test_legacy_command_non_string_raises() -> None:
+    """When 'command' (legacy key) is a non-string, ManifestError is raised."""
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "backend"
+target = "0.0"
+command = 42
+"""
+    with pytest.raises(ManifestError, match="cmd must be a string"):
+        _read({_COMMITTED_PATH: content})

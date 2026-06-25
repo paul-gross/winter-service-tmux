@@ -42,17 +42,17 @@ env_file = ".winter.env"
 [[service]]
 name = "backend"
 target = "0.0"
-command = "npm run start:dev"
+cmd = "npm run start:dev"
 
 [[service]]
 name = "frontend"
 target = "0.1"
-command = "npm run dev"
+cmd = "npm run dev"
 
 [[service]]
 name = "shell"
 target = "1.0"
-command = ""
+cmd = ""
 
 [[status.url]]
 label = "Backend"
@@ -101,7 +101,7 @@ session_prefix = "mp"
 [[service]]
 name = "backend"
 target = "0.0"
-command = "npm run start"
+cmd = "npm run start"
 """
     _write_manifest(tmp_path, content)
 
@@ -119,12 +119,12 @@ session_prefix = "mp"
 [[service]]
 name = "backend"
 target = "0.0"
-command = "npm run start:dev"
+cmd = "npm run start:dev"
 
 [[service]]
 name = "frontend"
 target = "0.0"
-command = "npm run dev"
+cmd = "npm run dev"
 """
     _write_manifest(tmp_path, content)
 
@@ -146,12 +146,12 @@ session_prefix = "mp"
 [[service]]
 name = "backend"
 target = "0.0"
-command = "cmd"
+cmd = "cmd"
 
 [[service]]
 name = "frontend"
 target = "0.0"
-command = "cmd"
+cmd = "cmd"
 """
     _write_manifest(tmp_path, content)
 
@@ -222,7 +222,7 @@ env_file = ".winter.env"
 [[service]]
 name = "backend"
 target = "0.0"
-command = "cmd"
+cmd = "cmd"
 
 [[status.url]]
 label = "Backend"
@@ -248,7 +248,7 @@ env_file = ".winter.env"
 [[service]]
 name = "backend"
 target = "0.0"
-command = "cmd"
+cmd = "cmd"
 
 [[status.url]]
 label = "Backend"
@@ -292,12 +292,12 @@ session_prefix = "mp"
 [[service]]
 name = "svc"
 target = "0.0"
-command = "cmd"
+cmd = "cmd"
 
 [[service]]
 name = "svc"
 target = "0.1"
-command = "cmd"
+cmd = "cmd"
 """
     _write_manifest(tmp_path, content)
 

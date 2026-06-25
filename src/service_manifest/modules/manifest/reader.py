@@ -7,6 +7,7 @@ exceptions directly.
 
 from __future__ import annotations
 
+import sys
 import tomllib
 from pathlib import Path
 
@@ -170,10 +171,14 @@ class ManifestReader:
             result["logs"] = committed_logs
 
         # --- [[service]]: keyed by "name", override-or-append ---
+        # Normalise command→cmd in every entry BEFORE the merge so that an
+        # overlay using the deprecated alias correctly overwrites the committed
+        # canonical key (and vice-versa).
         if "service" in local:
+            _norm = ManifestReader._normalize_cmd_key
             result["service"] = ManifestReader._merge_keyed(
-                list(committed.get("service", [])),
-                local["service"],
+                [_norm(e) for e in committed.get("service", [])],
+                [_norm(e) for e in local["service"]],
                 "name",
             )
 
@@ -211,6 +216,35 @@ class ManifestReader:
         return Target(window=window, pane=pane)
 
     @staticmethod
+    def _normalize_cmd_key(entry: dict) -> dict:  # type: ignore[type-arg]
+        """Normalize the ``command`` alias to the canonical ``cmd`` key in one entry.
+
+        When only ``command`` is present the key is renamed to ``cmd`` and a
+        deprecation warning is emitted to stderr naming the service.  When both
+        ``cmd`` and ``command`` are present, ``cmd`` wins and ``command`` is
+        dropped (no warning — the author is already using the canonical key).
+        Entries that already use only ``cmd``, or neither key, are returned
+        unchanged (the dict is copied only when a change is needed).
+        """
+        if "command" not in entry:
+            return entry
+        if "cmd" in entry:
+            # cmd is canonical; drop the stale alias silently.
+            result = dict(entry)
+            del result["command"]
+            return result
+        # Only "command" is present — rename with a deprecation warning.
+        name = entry.get("name", "<unknown>")
+        sys.stderr.write(
+            f"[winter-service-tmux] deprecation: service '{name}' uses 'command'; "
+            "rename it to 'cmd' — 'command' will be removed in a future release\n"
+        )
+        sys.stderr.flush()
+        result = dict(entry)
+        result["cmd"] = result.pop("command")
+        return result
+
+    @staticmethod
     def _parse_services(
         raw_services: list[dict],  # type: ignore[type-arg]
     ) -> list[tuple[Service, str]]:
@@ -224,6 +258,9 @@ class ManifestReader:
 
         Raises ``ManifestError`` on a missing/invalid field or an unknown
         ``scope``, naming the offending service.
+
+        Entries are expected to have been normalised by ``_normalize_cmd_key``
+        before reaching this method — only the canonical ``cmd`` key is checked.
         """
         parsed: list[tuple[Service, str]] = []
         for i, raw in enumerate(raw_services):
@@ -240,10 +277,13 @@ class ManifestReader:
                     f"service '{name}': target must be a quoted string like \"0.1\", got {type(target_str).__name__}"
                 )
             target = ManifestReader._parse_target(target_str, name)
-            command_raw = raw.get("command", "")
-            if not isinstance(command_raw, str):
-                raise ManifestError(f"service '{name}': command must be a string, got {type(command_raw).__name__}")
-            command: str = command_raw
+            if "cmd" in raw:
+                cmd_raw = raw["cmd"]
+                if not isinstance(cmd_raw, str):
+                    raise ManifestError(f"service '{name}': cmd must be a string, got {type(cmd_raw).__name__}")
+            else:
+                cmd_raw = ""
+            cmd: str = cmd_raw
             log_raw = raw.get("log", LogMode.FILE.value)
             _allowed = [m.value for m in LogMode]
             if not isinstance(log_raw, str):
@@ -315,7 +355,7 @@ class ManifestReader:
                     f"service '{name}': invalid scope {scope!r}; "
                     f"allowed values are {', '.join(repr(s) for s in _VALID_SCOPES)}"
                 )
-            svc = Service(name=name, target=target, command=command, log=log_mode, health=health, startup=startup)
+            svc = Service(name=name, target=target, cmd=cmd, log=log_mode, health=health, startup=startup)
             parsed.append((svc, scope))
         return parsed
 
@@ -337,7 +377,12 @@ class ManifestReader:
         workspace_layout_hook: str | None = doc.get("workspace_layout_hook") or None
 
         # --- [[service]] — parse once into (Service, scope) pairs, then partition ---
-        parsed_services = ManifestReader._parse_services(doc.get("service", []))
+        # Normalise command→cmd here so _parse_services only ever sees the
+        # canonical key (covers the no-overlay path; the overlay path also
+        # normalises but a second pass is idempotent and cheap).
+        _norm = ManifestReader._normalize_cmd_key
+        raw_service_entries = [_norm(e) for e in doc.get("service", [])]
+        parsed_services = ManifestReader._parse_services(raw_service_entries)
         services = [svc for svc, scope in parsed_services if scope == "project"]
         workspace_services = [svc for svc, scope in parsed_services if scope == "workspace"]
 

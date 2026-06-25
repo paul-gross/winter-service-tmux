@@ -34,9 +34,7 @@ _WORKTREE = _WORKSPACE / "alpha"
 
 
 def _make_manifest(*service_names: str) -> ServiceManifest:
-    services = tuple(
-        Service(name=n, target=Target(window=0, pane=i), command="cmd") for i, n in enumerate(service_names)
-    )
+    services = tuple(Service(name=n, target=Target(window=0, pane=i), cmd="cmd") for i, n in enumerate(service_names))
     return ServiceManifest(
         session_prefix="mp",
         env_file=".winter.env",
@@ -396,7 +394,7 @@ def test_real_follow_clock_not_interrupted_initially() -> None:
 
 def _make_pane_manifest(name: str, window: int = 0, pane: int = 0) -> ServiceManifest:
     """Build a single-service manifest with log=LogMode.PANE."""
-    svc = Service(name=name, target=Target(window=window, pane=pane), command="cmd", log=LogMode.PANE)
+    svc = Service(name=name, target=Target(window=window, pane=pane), cmd="cmd", log=LogMode.PANE)
     return ServiceManifest(
         session_prefix="mp",
         env_file=None,
@@ -459,8 +457,8 @@ def test_pane_mode_services_filter() -> None:
     tmux = FakeTmuxRepository(capture_text={"0.0": "shell-line\n", "0.1": "other-line\n"})
     tmux.seed_session("mp-alpha", {"0.0": 10, "0.1": 20})
     fake_repo = FakeLogRepository()
-    svc_shell = Service(name="shell", target=Target(window=0, pane=0), command="", log=LogMode.PANE)
-    svc_other = Service(name="other", target=Target(window=0, pane=1), command="cmd", log=LogMode.PANE)
+    svc_shell = Service(name="shell", target=Target(window=0, pane=0), cmd="", log=LogMode.PANE)
+    svc_other = Service(name="other", target=Target(window=0, pane=1), cmd="cmd", log=LogMode.PANE)
     manifest = ServiceManifest(
         session_prefix="mp",
         env_file=None,
@@ -506,7 +504,7 @@ def test_pane_mode_empty_capture_emits_nothing() -> None:
 
 def test_memory_mode_emits_nothing() -> None:
     """MEMORY-mode service: no output (stub, future work)."""
-    svc_mem = Service(name="svc", target=Target(window=0, pane=0), command="cmd", log=LogMode.MEMORY)
+    svc_mem = Service(name="svc", target=Target(window=0, pane=0), cmd="cmd", log=LogMode.MEMORY)
     manifest = ServiceManifest(
         session_prefix="mp",
         env_file=None,
@@ -532,7 +530,7 @@ def test_memory_mode_emits_one_line_stderr_diagnostic() -> None:
     """MEMORY-mode service emits exactly one diagnostic line to err_sink explaining
     why there is no output, so callers see a clear message instead of silence.
     """
-    svc_mem = Service(name="worker", target=Target(window=0, pane=0), command="cmd", log=LogMode.MEMORY)
+    svc_mem = Service(name="worker", target=Target(window=0, pane=0), cmd="cmd", log=LogMode.MEMORY)
     manifest = ServiceManifest(
         session_prefix="mp",
         env_file=None,
@@ -565,9 +563,9 @@ def test_memory_mode_emits_one_line_stderr_diagnostic() -> None:
 def test_mixed_file_and_pane_both_contribute() -> None:
     """A call covering one FILE-mode and one PANE-mode service emits events from both."""
     # FILE service (api): has a log file
-    svc_file = Service(name="api", target=Target(window=0, pane=0), command="cmd", log=LogMode.FILE)
+    svc_file = Service(name="api", target=Target(window=0, pane=0), cmd="cmd", log=LogMode.FILE)
     # PANE service (shell): read via capture-pane
-    svc_pane = Service(name="shell", target=Target(window=0, pane=1), command="", log=LogMode.PANE)
+    svc_pane = Service(name="shell", target=Target(window=0, pane=1), cmd="", log=LogMode.PANE)
     manifest = ServiceManifest(
         session_prefix="mp",
         env_file=None,
@@ -816,7 +814,7 @@ def test_ndjson_serialized_line_contains_env_pane_mode() -> None:
     svc_pane = Service(
         name="shell",
         target=Target(window=0, pane=0),
-        command="",
+        cmd="",
         log=LogMode.PANE,
     )
     manifest = ServiceManifest(
@@ -1163,8 +1161,8 @@ def test_follow_streams_broken_pipe_returns_0() -> None:
 
 def test_follow_streams_mixed_file_and_pane() -> None:
     """One FILE + one PANE stream: both contribute live lines; PANE events carry no ts."""
-    svc_file = Service(name="api", target=Target(window=0, pane=0), command="cmd", log=LogMode.FILE)
-    svc_pane = Service(name="shell", target=Target(window=0, pane=1), command="", log=LogMode.PANE)
+    svc_file = Service(name="api", target=Target(window=0, pane=0), cmd="cmd", log=LogMode.FILE)
+    svc_pane = Service(name="shell", target=Target(window=0, pane=1), cmd="", log=LogMode.PANE)
     manifest = ServiceManifest(
         session_prefix="mp",
         env_file=None,

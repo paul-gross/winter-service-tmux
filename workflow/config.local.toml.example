@@ -48,7 +48,7 @@ rotate_size_bytes = 52428800  # 50 MiB (committed default is 10 MiB)
 # restating the whole startup table under the matching [[service]].
 [[service]]
 name = "backend"
-command = "npm run start:debug"
+cmd = "npm run start:debug"
 log = "pane"
 
 [service.health]
@@ -70,7 +70,7 @@ retries = 0  # disable retries locally; committed value had retries = 3
 [[service]]
 name = "debugger"
 target = "2.0"
-command = "node --inspect src/index.js"
+cmd = "node --inspect src/index.js"
 
 # Override a committed status URL by label — point the Backend URL at a
 # different port locally.
@@ -88,7 +88,7 @@ url = "http://localhost:9229"
 # unspecified fields keep their committed values (including scope = "workspace").
 [[service]]
 name = "docker"
-command = "docker compose -f docker-compose.local.yml up"
+cmd = "docker compose -f docker-compose.local.yml up"
 
 # Append a workspace service that isn't in the committed manifest — e.g. a
 # personal monitoring tool.  Set scope = "workspace" so it routes to the
@@ -97,5 +97,5 @@ command = "docker compose -f docker-compose.local.yml up"
 [[service]]
 name = "local-monitor"
 target = "1.0"
-command = "python -m monitor"
+cmd = "python -m monitor"
 scope = "workspace"

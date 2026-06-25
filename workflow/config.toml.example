@@ -68,7 +68,7 @@ retention_seconds = 604800    # 7 days
 # Fields:
 #   name     (required) — unique identifier; used in status output and ./restart
 #   target   (required) — "<window>.<pane>", both zero-based integers
-#   command  (optional, default "") — shell command to run in the pane;
+#   cmd      (optional, default "") — shell command to run in the pane;
 #                                     "" means interactive pane (sits at prompt)
 #   log      (optional, default "file") — log capture mode.  Allowed values:
 #              "file"   — capture output to <env>/.winter/logs/<svc>.log via
@@ -120,7 +120,7 @@ retention_seconds = 604800    # 7 days
 [[service]]
 name = "backend"
 target = "0.0"
-command = "npm run start:dev"
+cmd = "npm run start:dev"
 
 [service.health]
 type = "url"
@@ -134,7 +134,7 @@ retry_delay = 2  # seconds between attempts
 [[service]]
 name = "frontend"
 target = "0.1"
-command = "npm run dev"
+cmd = "npm run dev"
 
 [service.health]
 type = "cmd"
@@ -147,7 +147,7 @@ target = "pgrep -f 'npm run dev'"
 # (no file persistence, no timestamps, requires a running session).
 name = "shell"
 target = "1.0"
-command = ""
+cmd = ""
 log = "pane"
 
 [[service]]
@@ -155,7 +155,7 @@ log = "pane"
 # runs the command; output is read live via capture-pane rather than a log file.
 name = "watcher"
 target = "1.1"
-command = "npm run watch"
+cmd = "npm run watch"
 log = "pane"
 
 # ---------------------------------------------------------------------------
@@ -218,7 +218,7 @@ workspace_layout_hook = "workspace-layout-hook.sh"
 [[service]]
 name = "docker"
 target = "0.0"
-command = "docker compose -f docker-compose.workspace.yml up"
+cmd = "docker compose -f docker-compose.workspace.yml up"
 scope = "workspace"
 
 [[service]]
@@ -227,6 +227,6 @@ scope = "workspace"
 # or TTY colouring that you want preserved.
 name = "registry"
 target = "0.1"
-command = "docker run -p 5000:5000 registry:2"
+cmd = "docker run -p 5000:5000 registry:2"
 log = "pane"
 scope = "workspace"

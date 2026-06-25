@@ -49,18 +49,18 @@ _MANIFEST = ServiceManifest(
     session_prefix="mp",
     env_file=".winter.env",
     layout_hook=None,
-    services=(Service(name="backend", target=Target(window=0, pane=0), command="cmd"),),
+    services=(Service(name="backend", target=Target(window=0, pane=0), cmd="cmd"),),
     status_urls=(),
-    workspace_services=(Service(name="ws-svc", target=Target(window=0, pane=0), command="ws-cmd"),),
+    workspace_services=(Service(name="ws-svc", target=Target(window=0, pane=0), cmd="ws-cmd"),),
 )
 _MANIFEST_MULTI = ServiceManifest(
     session_prefix="mp",
     env_file=".winter.env",
     layout_hook=None,
     services=(
-        Service(name="backend", target=Target(window=0, pane=0), command="cmd"),
-        Service(name="backend-worker", target=Target(window=0, pane=1), command="cmd"),
-        Service(name="frontend", target=Target(window=1, pane=0), command="cmd"),
+        Service(name="backend", target=Target(window=0, pane=0), cmd="cmd"),
+        Service(name="backend-worker", target=Target(window=0, pane=1), cmd="cmd"),
+        Service(name="frontend", target=Target(window=1, pane=0), cmd="cmd"),
     ),
     status_urls=(),
 )

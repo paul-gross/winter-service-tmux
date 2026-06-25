@@ -188,7 +188,7 @@ class ManifestValidator:
                 violations.append(
                     f"{label} '{service.name}': startup.retry_delay must be non-negative, got {startup.retry_delay:g}"
                 )
-            if startup.retries > 0 and not service.command.strip():
+            if startup.retries > 0 and not service.cmd.strip():
                 violations.append(
                     f"{label} '{service.name}': startup retry policy has no effect on an "
                     "interactive (empty-command) service"

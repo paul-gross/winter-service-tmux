@@ -32,34 +32,34 @@ def test_target_is_frozen() -> None:
 
 
 def test_service_construction_and_equality() -> None:
-    svc = Service(name="backend", target=Target(window=0, pane=0), command="npm run start:dev")
+    svc = Service(name="backend", target=Target(window=0, pane=0), cmd="npm run start:dev")
     assert svc.name == "backend"
     assert svc.target == Target(window=0, pane=0)
-    assert svc.command == "npm run start:dev"
-    assert svc == Service(name="backend", target=Target(window=0, pane=0), command="npm run start:dev")
+    assert svc.cmd == "npm run start:dev"
+    assert svc == Service(name="backend", target=Target(window=0, pane=0), cmd="npm run start:dev")
 
 
 def test_service_empty_command_is_legal() -> None:
     """An empty command represents an interactive pane — this must not be rejected."""
-    svc = Service(name="shell", target=Target(window=1, pane=0), command="")
-    assert svc.command == ""
+    svc = Service(name="shell", target=Target(window=1, pane=0), cmd="")
+    assert svc.cmd == ""
 
 
 def test_service_health_is_optional() -> None:
-    svc = Service(name="backend", target=Target(window=0, pane=0), command="cmd")
+    svc = Service(name="backend", target=Target(window=0, pane=0), cmd="cmd")
     assert svc.health is None
 
 
 def test_service_can_have_health_probe() -> None:
     health = Health(type=HealthType.URL, target="http://localhost:${BACKEND_PORT}/health", timeout=2)
-    svc = Service(name="backend", target=Target(window=0, pane=0), command="cmd", health=health)
+    svc = Service(name="backend", target=Target(window=0, pane=0), cmd="cmd", health=health)
     assert svc.health == health
 
 
 def test_service_is_frozen() -> None:
     import pytest
 
-    svc = Service(name="x", target=Target(0, 0), command="cmd")
+    svc = Service(name="x", target=Target(0, 0), cmd="cmd")
     with pytest.raises(FrozenInstanceError):
         svc.name = "y"  # type: ignore[misc]
 
@@ -85,9 +85,9 @@ def test_service_manifest_construction() -> None:
         env_file=".winter.env",
         layout_hook="layout-hook.sh",
         services=(
-            Service(name="backend", target=Target(0, 0), command="npm run start:dev"),
-            Service(name="frontend", target=Target(0, 1), command="npm run dev"),
-            Service(name="shell", target=Target(1, 0), command=""),
+            Service(name="backend", target=Target(0, 0), cmd="npm run start:dev"),
+            Service(name="frontend", target=Target(0, 1), cmd="npm run dev"),
+            Service(name="shell", target=Target(1, 0), cmd=""),
         ),
         status_urls=(StatusUrl(label="Backend", url="http://localhost:${BACKEND_PORT}"),),
     )
@@ -195,17 +195,17 @@ def test_service_manifest_logs_custom() -> None:
 
 
 def test_service_log_defaults_to_file_mode() -> None:
-    svc = Service(name="backend", target=Target(window=0, pane=0), command="npm start")
+    svc = Service(name="backend", target=Target(window=0, pane=0), cmd="npm start")
     assert svc.log == LogMode.FILE
 
 
 def test_service_log_can_be_pane_mode() -> None:
-    svc = Service(name="shell", target=Target(window=1, pane=0), command="", log=LogMode.PANE)
+    svc = Service(name="shell", target=Target(window=1, pane=0), cmd="", log=LogMode.PANE)
     assert svc.log == LogMode.PANE
 
 
 def test_service_log_can_be_memory_mode() -> None:
-    svc = Service(name="svc", target=Target(window=0, pane=0), command="cmd", log=LogMode.MEMORY)
+    svc = Service(name="svc", target=Target(window=0, pane=0), cmd="cmd", log=LogMode.MEMORY)
     assert svc.log == LogMode.MEMORY
 
 
@@ -215,7 +215,7 @@ def test_service_manifest_equality() -> None:
             session_prefix="mp",
             env_file=".winter.env",
             layout_hook=None,
-            services=(Service(name="backend", target=Target(0, 0), command="cmd"),),
+            services=(Service(name="backend", target=Target(0, 0), cmd="cmd"),),
             status_urls=(),
         )
 
@@ -233,7 +233,7 @@ def test_service_manifest_workspace_fields_default() -> None:
         session_prefix="mp",
         env_file=None,
         layout_hook="layout-hook.sh",
-        services=(Service(name="backend", target=Target(0, 0), command="cmd"),),
+        services=(Service(name="backend", target=Target(0, 0), cmd="cmd"),),
         status_urls=(StatusUrl(label="BE", url="http://localhost:4020"),),
     )
     assert manifest.workspace_services == ()
@@ -241,7 +241,7 @@ def test_service_manifest_workspace_fields_default() -> None:
 
 
 def test_service_manifest_workspace_fields_explicit() -> None:
-    ws_svc = Service(name="docker", target=Target(0, 0), command="docker compose up")
+    ws_svc = Service(name="docker", target=Target(0, 0), cmd="docker compose up")
     manifest = ServiceManifest(
         session_prefix="mp",
         env_file=None,
@@ -282,11 +282,11 @@ def test_startup_policy_is_frozen() -> None:
 
 
 def test_service_startup_defaults_to_none() -> None:
-    svc = Service(name="backend", target=Target(window=0, pane=0), command="cmd")
+    svc = Service(name="backend", target=Target(window=0, pane=0), cmd="cmd")
     assert svc.startup is None
 
 
 def test_service_can_have_startup_policy() -> None:
     policy = StartupPolicy(retries=3, retry_delay=2.0)
-    svc = Service(name="backend", target=Target(window=0, pane=0), command="cmd", startup=policy)
+    svc = Service(name="backend", target=Target(window=0, pane=0), cmd="cmd", startup=policy)
     assert svc.startup == policy

@@ -59,12 +59,12 @@ session_prefix = "mp"
 [[service]]
 name = "backend"
 target = "0.0"
-command = "npm start"
+cmd = "npm start"
 
 [[service]]
 name = "worker"
 target = "0.1"
-command = "npm run worker"
+cmd = "npm run worker"
 """,
     )
     rc = main(["catalog"])
@@ -87,7 +87,7 @@ session_prefix = "mp"
 [[service]]
 name = "rabbitmq"
 target = "0.0"
-command = "rabbitmq-server"
+cmd = "rabbitmq-server"
 scope = "workspace"
 """,
     )
@@ -111,12 +111,12 @@ session_prefix = "mp"
 [[service]]
 name = "api"
 target = "0.0"
-command = "uvicorn"
+cmd = "uvicorn"
 
 [[service]]
 name = "postgres"
 target = "1.0"
-command = "postgres"
+cmd = "postgres"
 scope = "workspace"
 """,
     )
@@ -142,7 +142,7 @@ session_prefix = "mp"
 [[service]]
 name = "myservice"
 target = "0.0"
-command = "cmd"
+cmd = "cmd"
 """,
     )
     monkeypatch.setenv("WINTER_EXT_CONFIG_DIR", str(custom_dir))

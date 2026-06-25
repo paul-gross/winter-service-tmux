@@ -21,7 +21,7 @@ The `workspace` token is an exact reserved name — `work*` globs do NOT match i
 
 ## Declaring workspace services
 
-Add `scope = "workspace"` to a `[[service]]` entry in `workspace:/.winter/config/winter-service-tmux/config.toml`. `scope` is the only field that distinguishes a workspace singleton from a per-env service — it defaults to `"project"` when omitted, and every other field (`name`/`target`/`command`/`log`) is identical:
+Add `scope = "workspace"` to a `[[service]]` entry in `workspace:/.winter/config/winter-service-tmux/config.toml`. `scope` is the only field that distinguishes a workspace singleton from a per-env service — it defaults to `"project"` when omitted, and every other field (`name`/`target`/`cmd`/`log`) is identical:
 
 ```toml
 workspace_layout_hook = "workspace-layout-hook.sh"
@@ -29,13 +29,13 @@ workspace_layout_hook = "workspace-layout-hook.sh"
 [[service]]
 name    = "db"
 target  = "0.0"
-command = "postgres -D /usr/local/var/postgres"
+cmd     = "postgres -D /usr/local/var/postgres"
 scope   = "workspace"
 
 [[service]]
 name    = "broker"
 target  = "0.1"
-command = "rabbitmq-server"
+cmd     = "rabbitmq-server"
 scope   = "workspace"
 ```
 

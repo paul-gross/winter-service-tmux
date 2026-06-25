@@ -42,7 +42,8 @@ logger = logging.getLogger(__name__)
 
 # Keys that are recognised in the ext-manifest [[service]] entries.
 # ``source`` carries attribution; ``ports`` is for future providers.
-_EXT_KNOWN_KEYS = frozenset({"name", "scope", "source", "command", "image", "target", "ports"})
+# Both ``cmd`` (canonical) and ``command`` (deprecated alias) are accepted.
+_EXT_KNOWN_KEYS = frozenset({"name", "scope", "source", "cmd", "command", "image", "target", "ports"})
 
 _VALID_SCOPES = frozenset({"workspace", "feature-environment"})
 
@@ -122,12 +123,25 @@ class ExtManifestMerger:
             if target is None:
                 continue
 
-            command = raw.get("command", "")
-            if not isinstance(command, str):
-                logger.warning("ext-manifest: service %r 'command' is not a string, skipping", name)
-                continue
+            if "cmd" in raw:
+                cmd = raw["cmd"]
+                if not isinstance(cmd, str):
+                    logger.warning("ext-manifest: service %r 'cmd' is not a string, skipping", name)
+                    continue
+            elif "command" in raw:
+                logger.warning(
+                    "ext-manifest: service %r uses 'command'; rename it to 'cmd' — "
+                    "'command' will be removed in a future release",
+                    name,
+                )
+                cmd = raw["command"]
+                if not isinstance(cmd, str):
+                    logger.warning("ext-manifest: service %r 'cmd' is not a string, skipping", name)
+                    continue
+            else:
+                cmd = ""
 
-            svc = Service(name=name, target=target, command=command)
+            svc = Service(name=name, target=target, cmd=cmd)
             existing_names.add(name)
 
             if scope == "workspace":

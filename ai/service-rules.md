@@ -28,6 +28,6 @@ Once installed, the workspace conventions are:
   - `"file"` (default): stdout/stderr is captured to `<env>/.winter/logs/<svc>.log` via the capture writer; `logs` reads the persisted file (timestamped, survives `down`). Note: the live pane shows plain (uncolored) output because stdout is piped.
   - `"pane"`: the service is launched bare (TTY preserved); `logs` reads the pane buffer via `tmux capture-pane` on demand (no file persistence, no timestamps, requires a running session). Natural for interactive panes (`shell`) or services where TTY fidelity matters more than persistence.
   - `"memory"`: accepted and validated; not yet implemented — `logs` emits nothing for memory-mode services (future work).
-  Services with an empty `command` (interactive panes) are always launched bare regardless of `log`.
+  Services with an empty `cmd` (interactive panes) are always launched bare regardless of `log`.
 
 Tmux session names are `<SESSION_PREFIX>-<env>` — e.g. `mp-alpha`. The prefix is declared as `session_prefix` in `workspace:/.winter/config/winter-service-tmux/config.toml`. A separate `<SESSION_PREFIX>-workspace` session holds workspace-scoped singleton services — see [workspace-singletons.md](./workspace-singletons.md).

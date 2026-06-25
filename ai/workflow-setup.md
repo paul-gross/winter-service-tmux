@@ -102,11 +102,11 @@ Once the user lists them, **for each service** ask in turn (one question per tur
 4. **"Does `<service>` have a status health probe?"** Accept "none". This is reported by `status`; it does not make `./up` wait. For HTTP health checks, record `type = "url"` and the health URL (e.g. `http://localhost:${BACKEND_PORT}/health`). For shell checks, record `type = "cmd"` and the command that should exit 0 when ready (e.g. `pgrep -f my-worker`, run from the worktree root). Ask for a timeout only if the user wants a non-default value; otherwise omit it and use the default 5 seconds.
 5. **"Should `<service>` be re-launched if it dies immediately on boot?"** Accept "no". If yes, record `retries` (e.g. 3) and ask whether a non-default retry delay is needed (default is 2 seconds); otherwise omit `retry_delay`. This startup retry policy is honored by `winter service up`; the env-root `./up` symlink is a thin no-retry door and does not honor it.
 
-The start command and run directory combine into one `command` field in the manifest: a service that runs from the worktree root is just its command (`command = "npm run dev"`); a service in a subdirectory prepends a *relative* `cd` (`command = "cd apps/backend && npm run dev"`). Keep that `cd` relative — the orchestrator resets each pane to the worktree root before running, so the same command works on both `./up` and `./restart`.
+The start command and run directory combine into one `cmd` field in the manifest: a service that runs from the worktree root is just its command (`cmd = "npm run dev"`); a service in a subdirectory prepends a *relative* `cd` (`cmd = "cd apps/backend && npm run dev"`). Keep that `cd` relative — the orchestrator resets each pane to the worktree root before running, so the same command works on both `./up` and `./restart`.
 
 Record each answer before moving to the next service. After all services are described, summarise back: "OK — you have `<n>` services: `<service-1>` running `<cmd-1>` from `<dir-1>`, `<service-2>` running `<cmd-2>` from `<dir-2>`, ..." and ask **"Anything to add, change, or remove?"** before continuing.
 
-A common pattern is one pane per service plus an extra `shell` pane for ad-hoc commands. Suggest it if the user didn't include one: **"Add a `shell` pane for ad-hoc commands?"** (A shell pane uses an empty command: `command = ""`.)
+A common pattern is one pane per service plus an extra `shell` pane for ad-hoc commands. Suggest it if the user didn't include one: **"Add a `shell` pane for ad-hoc commands?"** (A shell pane uses an empty cmd: `cmd = ""`.)
 
 ### 4. Session prefix
 
@@ -173,7 +173,7 @@ Then write the file. Read `config.toml.example` and reproduce its structure, sub
 - `session_prefix` ← the value confirmed in the session-prefix step.
 - `env_file` ← `".winter.env"` if the env-file step recorded one; omit the key otherwise.
 - `layout_hook` ← `"layout-hook.sh"` (the bare filename — resolved relative to the config dir where this file lives).
-- `[[service]]` entries ← one table per service, with `name`, `target`, and `command`. Empty command (`command = ""`) for interactive panes.
+- `[[service]]` entries ← one table per service, with `name`, `target`, and `cmd`. Empty cmd (`cmd = ""`) for interactive panes.
 - `[service.health]` subtables ← only for services that declared a status health probe. Place each subtable immediately after its matching `[[service]]`, before the next `[[service]]`. Use `type = "url"` or `type = "cmd"`, `target = "..."`, and optional `timeout = <seconds>`. `${VAR}` placeholders in `target` are resolved from `env_file`, the same way `[[status.url]]` entries are; bare `$VAR` is not interpolated.
 - `[service.startup]` subtables ← only for services that declared a startup retry policy. Place each subtable immediately after its matching `[[service]]` (and after any `[service.health]`), before the next `[[service]]`. Use `retries = <int>` and optional `retry_delay = <seconds>`.
 - `[[status.url]]` entries ← one table per URL from the status-URLs step (omit section if none).
@@ -227,7 +227,7 @@ workspace_layout_hook = "workspace-layout-hook.sh"
 [[service]]
 name    = "<name>"
 target  = "<window>.<pane>"
-command = "<blocking-foreground-command>"
+cmd     = "<blocking-foreground-command>"
 scope   = "workspace"
 ```
 

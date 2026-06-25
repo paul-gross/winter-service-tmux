@@ -100,15 +100,15 @@ class Target:
 class Service:
     """A single declared service in the manifest.
 
-    ``command`` may be an empty string — that signals an interactive pane:
+    ``cmd`` may be an empty string — that signals an interactive pane:
     the pane gets the env sourced and a banner, then sits at a prompt (matching
     the bash ``winter_service_cmd shell ""`` convention).
 
     Fields:
         name: Unique identifier for the service.
         target: Tmux pane address.
-        command: Shell command to run; empty string means interactive pane.
-        log: Log capture mode.  Default ``LogMode.FILE``.  Empty-command
+        cmd: Shell command to run; empty string means interactive pane.
+        log: Log capture mode.  Default ``LogMode.FILE``.  Empty-cmd
             (interactive) services are always launched bare regardless of this
             field.  ``LogMode.FILE`` captures output to a persisted file via the
             capture writer.  ``LogMode.PANE`` reads the pane buffer via
@@ -123,7 +123,7 @@ class Service:
 
     name: str
     target: Target
-    command: str
+    cmd: str
     log: LogMode = LogMode.FILE
     health: Health | None = None
     startup: StartupPolicy | None = None

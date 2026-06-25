@@ -47,12 +47,12 @@ layout_hook = "layout-hook.sh"
 [[service]]
 name = "backend"
 target = "0.0"
-command = "npm run start:dev"
+cmd = "npm run start:dev"
 
 [[service]]
 name = "frontend"
 target = "0.1"
-command = "npm run dev"
+cmd = "npm run dev"
 
 [[status.url]]
 label = "Backend"
@@ -290,7 +290,7 @@ session_prefix = "mp"
 [[service]]
 name = "backend"
 target = "0.0"
-command = "npm run start:dev"
+cmd = "npm run start:dev"
 """
     tmux = FakeTmuxRepository()
     hook = FakeLayoutHookRunner()
@@ -556,10 +556,10 @@ def test_status_renders_health_column_when_probe_declared() -> None:
             Service(
                 name="backend",
                 target=Target(0, 0),
-                command="cmd",
+                cmd="cmd",
                 health=Health(type=HealthType.URL, target="http://localhost:${BACKEND_PORT}/health"),
             ),
-            Service(name="frontend", target=Target(0, 1), command="cmd"),
+            Service(name="frontend", target=Target(0, 1), cmd="cmd"),
         ),
         status_urls=(),
     )
@@ -679,7 +679,7 @@ session_prefix = "mp"
 [[service]]
 name = "backend"
 target = "0.0"
-command = "cmd"
+cmd = "cmd"
 """
     manifest = _make_manifest(toml)
     ctx2 = _make_ctx(manifest=manifest, env_file_path=None)
@@ -703,7 +703,7 @@ session_prefix = "mp"
 [[service]]
 name = "shell"
 target = "0.0"
-command = ""
+cmd = ""
 """
     tmux = FakeTmuxRepository()
     hook = FakeLayoutHookRunner()
@@ -740,7 +740,7 @@ session_prefix = "mp"
 [[service]]
 name = "docs"
 target = "0.0"
-command = "npm run docs"
+cmd = "npm run docs"
 
 [logs]
 rotate_size_bytes = 5242880
@@ -784,7 +784,7 @@ session_prefix = "mp"
 [[service]]
 name = "worker"
 target = "0.0"
-command = "python -m worker"
+cmd = "python -m worker"
 log = "pane"
 """
     tmux = FakeTmuxRepository()
@@ -818,7 +818,7 @@ session_prefix = "mp"
 [[service]]
 name = "worker"
 target = "0.0"
-command = "python -m worker"
+cmd = "python -m worker"
 log = "memory"
 """
     tmux = FakeTmuxRepository()
@@ -850,7 +850,7 @@ session_prefix = "mp"
 [[service]]
 name = "api"
 target = "0.0"
-command = "python -m api"
+cmd = "python -m api"
 log = "file"
 """
     tmux = FakeTmuxRepository()
@@ -904,7 +904,7 @@ def _make_prune_manifest(retention_seconds: int = 604800) -> ServiceManifest:
         session_prefix="mp",
         env_file=".winter.env",
         layout_hook=None,
-        services=(Service(name="docs", target=Target(window=0, pane=0), command="cmd"),),
+        services=(Service(name="docs", target=Target(window=0, pane=0), cmd="cmd"),),
         status_urls=(),
         logs=LogConfig(retention_seconds=retention_seconds),
     )
@@ -1271,16 +1271,16 @@ def test_status_env_document_populates_declared_health() -> None:
             Service(
                 name="backend",
                 target=Target(0, 0),
-                command="cmd",
+                cmd="cmd",
                 health=Health(type=HealthType.URL, target="http://localhost:${BACKEND_PORT}/health"),
             ),
             Service(
                 name="frontend",
                 target=Target(0, 1),
-                command="cmd",
+                cmd="cmd",
                 health=Health(type=HealthType.CMD, target="pgrep -f frontend"),
             ),
-            Service(name="shell", target=Target(1, 0), command=""),
+            Service(name="shell", target=Target(1, 0), cmd=""),
         ),
         status_urls=(),
     )
@@ -1316,7 +1316,7 @@ def test_status_env_document_declared_health_is_unhealthy_without_running_servic
             Service(
                 name="backend",
                 target=Target(0, 0),
-                command="cmd",
+                cmd="cmd",
                 health=Health(type=HealthType.URL, target="http://localhost:${BACKEND_PORT}/health"),
             ),
         ),
@@ -1345,7 +1345,7 @@ def test_status_env_document_declared_health_is_unhealthy_for_stopped_pane() -> 
             Service(
                 name="backend",
                 target=Target(0, 0),
-                command="cmd",
+                cmd="cmd",
                 health=Health(type=HealthType.CMD, target="true"),
             ),
         ),
@@ -1374,7 +1374,7 @@ def test_status_env_document_declared_health_is_unhealthy_for_missing_pane() -> 
             Service(
                 name="backend",
                 target=Target(0, 0),
-                command="cmd",
+                cmd="cmd",
                 health=Health(type=HealthType.CMD, target="true"),
             ),
         ),
@@ -1521,7 +1521,7 @@ session_prefix = "mp"
 [[service]]
 name = "backend"
 target = "0.0"
-command = "npm run start:dev"
+cmd = "npm run start:dev"
 
 [service.startup]
 retries = 2
@@ -1645,7 +1645,7 @@ session_prefix = "mp"
 [[service]]
 name = "backend"
 target = "0.0"
-command = "npm run start:dev"
+cmd = "npm run start:dev"
 """
     # No startup policy on backend — reaper never consulted for retry
     reaper = FakeProcessReaper()
@@ -1696,7 +1696,7 @@ session_prefix = "mp"
 [[service]]
 name = "svc"
 target = "0.0"
-command = "run"
+cmd = "run"
 
 [service.startup]
 retries = 3

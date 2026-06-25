@@ -40,11 +40,11 @@ def _make_manifest(
 
 
 def _service(name: str, window: int = 0, pane: int = 0, command: str = "cmd") -> Service:
-    return Service(name=name, target=Target(window=window, pane=pane), command=command)
+    return Service(name=name, target=Target(window=window, pane=pane), cmd=command)
 
 
 def _service_with_health(name: str, health: Health, window: int = 0, pane: int = 0) -> Service:
-    return Service(name=name, target=Target(window=window, pane=pane), command="cmd", health=health)
+    return Service(name=name, target=Target(window=window, pane=pane), cmd="cmd", health=health)
 
 
 def _status_url(label: str, url: str) -> StatusUrl:
@@ -118,7 +118,7 @@ def test_empty_service_name_is_violation() -> None:
 
 def test_blank_service_name_is_violation() -> None:
     manifest = _make_manifest(
-        services=(Service(name="   ", target=Target(0, 0), command="cmd"),),
+        services=(Service(name="   ", target=Target(0, 0), cmd="cmd"),),
     )
     violations = _validator.validate(manifest)
     assert len(violations) == 1
@@ -184,7 +184,7 @@ def test_unique_targets_no_violation() -> None:
 
 def test_negative_window_is_violation() -> None:
     manifest = _make_manifest(
-        services=(Service(name="svc", target=Target(-1, 0), command="cmd"),),
+        services=(Service(name="svc", target=Target(-1, 0), cmd="cmd"),),
     )
     violations = _validator.validate(manifest)
     assert any("window" in v and "-1" in v for v in violations)
@@ -192,7 +192,7 @@ def test_negative_window_is_violation() -> None:
 
 def test_negative_pane_is_violation() -> None:
     manifest = _make_manifest(
-        services=(Service(name="svc", target=Target(0, -1), command="cmd"),),
+        services=(Service(name="svc", target=Target(0, -1), cmd="cmd"),),
     )
     violations = _validator.validate(manifest)
     assert any("pane" in v and "-1" in v for v in violations)
@@ -200,7 +200,7 @@ def test_negative_pane_is_violation() -> None:
 
 def test_zero_window_and_pane_no_violation() -> None:
     manifest = _make_manifest(
-        services=(Service(name="svc", target=Target(0, 0), command="cmd"),),
+        services=(Service(name="svc", target=Target(0, 0), cmd="cmd"),),
     )
     assert _validator.validate(manifest) == []
 
@@ -320,12 +320,12 @@ def test_multiple_violations_all_reported() -> None:
         session_prefix="mp",
         services=(
             # negative window
-            Service(name="svc-a", target=Target(-1, 0), command="cmd"),
+            Service(name="svc-a", target=Target(-1, 0), cmd="cmd"),
             # duplicate name with svc-a
-            Service(name="svc-a", target=Target(0, 1), command="cmd"),
+            Service(name="svc-a", target=Target(0, 1), cmd="cmd"),
             # duplicate target with next service
-            Service(name="svc-b", target=Target(1, 0), command="cmd"),
-            Service(name="svc-c", target=Target(1, 0), command="cmd"),
+            Service(name="svc-b", target=Target(1, 0), cmd="cmd"),
+            Service(name="svc-c", target=Target(1, 0), cmd="cmd"),
         ),
         status_urls=(_status_url("Api", "http://localhost:${API_PORT}"),),
     )
@@ -422,7 +422,7 @@ def test_valid_workspace_services_no_violations() -> None:
 
 def test_empty_workspace_service_name_is_violation() -> None:
     manifest = _make_manifest(
-        workspace_services=(Service(name="", target=Target(0, 0), command="cmd"),),
+        workspace_services=(Service(name="", target=Target(0, 0), cmd="cmd"),),
     )
     violations = _validator.validate(manifest)
     assert len(violations) == 1
@@ -432,7 +432,7 @@ def test_empty_workspace_service_name_is_violation() -> None:
 
 def test_blank_workspace_service_name_is_violation() -> None:
     manifest = _make_manifest(
-        workspace_services=(Service(name="   ", target=Target(0, 0), command="cmd"),),
+        workspace_services=(Service(name="   ", target=Target(0, 0), cmd="cmd"),),
     )
     violations = _validator.validate(manifest)
     assert len(violations) == 1
@@ -468,7 +468,7 @@ def test_duplicate_workspace_service_target_is_violation() -> None:
 
 def test_negative_window_in_workspace_service_is_violation() -> None:
     manifest = _make_manifest(
-        workspace_services=(Service(name="docker", target=Target(-1, 0), command="cmd"),),
+        workspace_services=(Service(name="docker", target=Target(-1, 0), cmd="cmd"),),
     )
     violations = _validator.validate(manifest)
     assert any("workspace service" in v and "window" in v and "-1" in v for v in violations)
@@ -476,7 +476,7 @@ def test_negative_window_in_workspace_service_is_violation() -> None:
 
 def test_negative_pane_in_workspace_service_is_violation() -> None:
     manifest = _make_manifest(
-        workspace_services=(Service(name="docker", target=Target(0, -1), command="cmd"),),
+        workspace_services=(Service(name="docker", target=Target(0, -1), cmd="cmd"),),
     )
     violations = _validator.validate(manifest)
     assert any("workspace service" in v and "pane" in v and "-1" in v for v in violations)
@@ -558,7 +558,7 @@ def test_same_name_across_scopes_with_shared_target_is_name_violation_only() -> 
 
 
 def _service_with_startup(name: str, startup: StartupPolicy, window: int = 0, pane: int = 0) -> Service:
-    return Service(name=name, target=Target(window=window, pane=pane), command="cmd", startup=startup)
+    return Service(name=name, target=Target(window=window, pane=pane), cmd="cmd", startup=startup)
 
 
 def test_startup_negative_retries_is_violation() -> None:
@@ -597,7 +597,7 @@ def test_startup_retries_on_empty_command_service_is_violation() -> None:
     shell = Service(
         name="shell",
         target=Target(window=0, pane=0),
-        command="",
+        cmd="",
         startup=StartupPolicy(retries=3, retry_delay=2.0),
     )
     manifest = _make_manifest(services=(shell,))
@@ -610,7 +610,7 @@ def test_startup_zero_retries_on_empty_command_service_is_clean() -> None:
     shell = Service(
         name="shell",
         target=Target(window=0, pane=0),
-        command="",
+        cmd="",
         startup=StartupPolicy(retries=0, retry_delay=2.0),
     )
     manifest = _make_manifest(services=(shell,))

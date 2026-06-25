@@ -31,13 +31,13 @@ _MANIFEST = ServiceManifest(
     env_file=".winter.env",
     layout_hook=None,
     services=(
-        Service(name="backend", target=Target(window=0, pane=0), command="cmd"),
-        Service(name="worker", target=Target(window=0, pane=1), command="cmd"),
+        Service(name="backend", target=Target(window=0, pane=0), cmd="cmd"),
+        Service(name="worker", target=Target(window=0, pane=1), cmd="cmd"),
     ),
     status_urls=(),
     workspace_services=(
-        Service(name="ws-backend", target=Target(window=0, pane=0), command="ws-cmd"),
-        Service(name="ws-worker", target=Target(window=0, pane=1), command="ws-cmd"),
+        Service(name="ws-backend", target=Target(window=0, pane=0), cmd="ws-cmd"),
+        Service(name="ws-worker", target=Target(window=0, pane=1), cmd="ws-cmd"),
     ),
 )
 
