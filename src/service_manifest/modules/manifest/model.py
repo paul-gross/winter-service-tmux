@@ -1,7 +1,22 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from enum import StrEnum
+
+# Valid port expression: optional whitespace around "WINTER_PORT_BASE + <int>"
+_PORT_EXPR_RE = re.compile(r"^\s*WINTER_PORT_BASE\s*\+\s*(\d+)\s*$")
+
+
+def parse_port_expression(s: str) -> int | None:
+    """Parse a ``WINTER_PORT_BASE + <offset>`` expression and return the offset.
+
+    Returns the integer offset when *s* matches the expression, or ``None``
+    when it does not match.  The caller adds the offset to the resolved
+    ``WINTER_PORT_BASE`` value to obtain the absolute port number.
+    """
+    m = _PORT_EXPR_RE.match(s)
+    return int(m.group(1)) if m else None
 
 
 class LogMode(StrEnum):
@@ -119,6 +134,20 @@ class Service:
             ``health = "unknown"`` in winter's status document.
         startup: Optional startup retry policy. ``None`` means no retry;
             ``winter service up`` honors it, the env-root ``./up`` does not.
+        port: Optional declared port for this service.  Either a literal integer
+            or a ``WINTER_PORT_BASE + <offset>`` expression (e.g.
+            ``"WINTER_PORT_BASE + 10"``).  Stored as-is (the raw parsed value);
+            the orchestrator resolves the expression against the env's
+            ``WINTER_PORT_BASE`` at status time.  ``None`` when not declared —
+            the service renders blank in the ``PORTS`` column.
+
+            The bespoke ``WINTER_PORT_BASE + <int>`` form is intentionally
+            distinct from the manifest's ``${VAR}`` interpolation used by
+            ``health.target`` and ``status_url``.  Offset arithmetic — adding a
+            literal integer to an env-supplied base — is not expressible via
+            ``${...}`` substitution (which only performs verbatim string
+            replacement), so a small dedicated syntax is used here.  The
+            divergence is a conscious design choice, not an inconsistency.
     """
 
     name: str
@@ -127,6 +156,7 @@ class Service:
     log: LogMode = LogMode.FILE
     health: Health | None = None
     startup: StartupPolicy | None = None
+    port: int | str | None = None
 
 
 @dataclass(frozen=True)

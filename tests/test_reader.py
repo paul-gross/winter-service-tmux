@@ -1482,3 +1482,63 @@ command = 42
 """
     with pytest.raises(ManifestError, match="cmd must be a string"):
         _read({_COMMITTED_PATH: content})
+
+
+# ---------------------------------------------------------------------------
+# port field — literal integer, offset expression, absent
+# ---------------------------------------------------------------------------
+
+
+def test_service_port_literal_integer_parsed() -> None:
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "web"
+target = "0.0"
+cmd = "npm run start"
+port = 4070
+"""
+    manifest = _read({_COMMITTED_PATH: content})
+    assert manifest.services[0].port == 4070
+
+
+def test_service_port_offset_expression_parsed() -> None:
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "web"
+target = "0.0"
+cmd = "npm run start"
+port = "WINTER_PORT_BASE + 10"
+"""
+    manifest = _read({_COMMITTED_PATH: content})
+    assert manifest.services[0].port == "WINTER_PORT_BASE + 10"
+
+
+def test_service_port_absent_is_none() -> None:
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "web"
+target = "0.0"
+cmd = "npm run start"
+"""
+    manifest = _read({_COMMITTED_PATH: content})
+    assert manifest.services[0].port is None
+
+
+def test_service_port_bool_raises() -> None:
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "web"
+target = "0.0"
+cmd = "npm run start"
+port = true
+"""
+    with pytest.raises(ManifestError, match="port"):
+        _read({_COMMITTED_PATH: content})

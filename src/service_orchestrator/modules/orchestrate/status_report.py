@@ -100,13 +100,16 @@ def build_service_status(
     health: str = "unknown",
     handle: str | None,
     log_path: str | None,
+    ports: list[int] | None = None,
 ) -> dict:  # type: ignore[type-arg]
     """Build one service entry for winter's env-keyed status document.
 
     Shape-stable per the winter ``status`` wire contract: every field is always
     present.  ``health`` is ``"healthy"``/``"unhealthy"`` when a service declares
-    a readiness probe and ``"unknown"`` otherwise.  ``ports``/``since`` are
-    unpopulated (``[]`` / ``None``) because tmux does not track them.
+    a readiness probe and ``"unknown"`` otherwise.  ``since`` is unpopulated
+    (``None``) because tmux does not track it.  ``ports`` carries the declared
+    port(s) for services that declare a ``port`` field in the manifest; it is
+    ``[]`` when no port is declared.
 
     Args:
         name: Service name.
@@ -115,12 +118,14 @@ def build_service_status(
             ``None`` when no live pane backs the service.
         log_path: Absolute path to the captured log file, or ``None`` when the
             service is not file-logged.
+        ports: List of declared port numbers for this service, or ``None``/``[]``
+            when no port is declared.
     """
     return {
         "name": name,
         "state": state,
         "health": health,
-        "ports": [],
+        "ports": ports if ports else [],
         "handle": handle,
         "log_path": log_path,
         "since": None,

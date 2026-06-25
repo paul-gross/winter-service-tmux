@@ -344,7 +344,21 @@ class ManifestReader:
                     f"service '{name}': invalid scope {scope!r}; "
                     f"allowed values are {', '.join(repr(s) for s in _VALID_SCOPES)}"
                 )
-            svc = Service(name=name, target=target, cmd=cmd, log=log_mode, health=health, startup=startup)
+            port_raw = raw.get("port")
+            port: int | str | None = None
+            if port_raw is not None:
+                if isinstance(port_raw, bool):
+                    raise ManifestError(f"service '{name}': 'port' must be an integer or a string expression, got bool")
+                if isinstance(port_raw, int | str):
+                    port = port_raw
+                else:
+                    raise ManifestError(
+                        f"service '{name}': 'port' must be an integer or a string expression "
+                        f"(e.g. 'WINTER_PORT_BASE + 10'), got {type(port_raw).__name__}"
+                    )
+            svc = Service(
+                name=name, target=target, cmd=cmd, log=log_mode, health=health, startup=startup, port=port
+            )
             parsed.append((svc, scope))
         return parsed
 

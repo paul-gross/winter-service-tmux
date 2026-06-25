@@ -93,6 +93,14 @@ retention_seconds = 604800    # 7 days
 #              Workspace-scoped services do not load env_file, so their health
 #              targets must not contain ${VAR} placeholders.
 #              timeout is optional seconds; default is 5.
+#   port     (optional) — declared port for this service, surfaced in the
+#              ``PORTS`` column of ``winter service status``.  Two forms:
+#              - Literal integer: ``port = 4070``
+#              - Offset expression: ``port = "WINTER_PORT_BASE + 10"``
+#                Resolved against the env's ``WINTER_PORT_BASE`` at status
+#                time.  Services without a declared port render blank in
+#                ``PORTS``.  Expression must match the pattern exactly; bare
+#                integers are always treated as absolute port numbers.
 #   [service.startup] (optional) — opt-in per-service startup retry policy.
 #              When winter service up launches a service and its process exits
 #              within a short settle window, up re-launches it up to retries
@@ -121,6 +129,7 @@ retention_seconds = 604800    # 7 days
 name = "backend"
 target = "0.0"
 cmd = "npm run start:dev"
+port = "WINTER_PORT_BASE + 10"  # resolves to e.g. 4070 when WINTER_PORT_BASE=4060
 
 [service.health]
 type = "url"
@@ -135,6 +144,7 @@ retry_delay = 2  # seconds between attempts
 name = "frontend"
 target = "0.1"
 cmd = "npm run dev"
+port = "WINTER_PORT_BASE + 11"  # resolves to e.g. 4071 when WINTER_PORT_BASE=4060
 
 [service.health]
 type = "cmd"

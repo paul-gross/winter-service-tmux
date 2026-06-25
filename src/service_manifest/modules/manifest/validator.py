@@ -17,7 +17,7 @@ DATA (the caller decides fatality), not control flow.  See
 from __future__ import annotations
 
 from service_manifest.modules.manifest.env import interpolate, referenced_vars
-from service_manifest.modules.manifest.model import Service, ServiceManifest
+from service_manifest.modules.manifest.model import Service, ServiceManifest, parse_port_expression
 
 
 class ManifestValidator:
@@ -87,6 +87,8 @@ class ManifestValidator:
         self._check_startup_config(manifest.services, "service", violations)
         self._check_startup_config(manifest.workspace_services, "workspace service", violations)
         self._check_log_config(manifest, violations)
+        self._check_port_config(manifest.services, "service", violations)
+        self._check_port_config(manifest.workspace_services, "workspace service", violations)
 
         if env is not None:
             self._check_health_vars(manifest.services, "service", env, violations)
@@ -191,6 +193,23 @@ class ManifestValidator:
                 violations.append(
                     f"{label} '{service.name}': startup retry policy has no effect on an "
                     "interactive (empty-command) service"
+                )
+
+    @staticmethod
+    def _check_port_config(services: tuple[Service, ...], label: str, violations: list[str]) -> None:
+        for service in services:
+            port = service.port
+            if port is None:
+                continue
+            if isinstance(port, int):
+                if port <= 0:
+                    violations.append(f"{label} '{service.name}': port must be a positive integer, got {port}")
+                continue
+            # String expression — must match "WINTER_PORT_BASE + <offset>"
+            if parse_port_expression(port) is None:
+                violations.append(
+                    f"{label} '{service.name}': port expression {port!r} is not valid; "
+                    "expected a positive integer or 'WINTER_PORT_BASE + <offset>'"
                 )
 
     @staticmethod

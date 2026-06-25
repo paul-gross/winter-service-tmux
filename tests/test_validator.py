@@ -570,3 +570,73 @@ def test_startup_zero_retries_on_empty_command_service_is_clean() -> None:
     )
     manifest = _make_manifest(services=(shell,))
     assert _validator.validate(manifest) == []
+
+
+# ---------------------------------------------------------------------------
+# port field validation
+# ---------------------------------------------------------------------------
+
+
+def test_port_absent_is_clean() -> None:
+    svc = Service(name="web", target=Target(0, 0), cmd="cmd")
+    manifest = _make_manifest(services=(svc,))
+    assert _validator.validate(manifest) == []
+
+
+def test_port_literal_integer_is_clean() -> None:
+    svc = Service(name="web", target=Target(0, 0), cmd="cmd", port=4070)
+    manifest = _make_manifest(services=(svc,))
+    assert _validator.validate(manifest) == []
+
+
+def test_port_offset_expression_is_clean() -> None:
+    svc = Service(name="web", target=Target(0, 0), cmd="cmd", port="WINTER_PORT_BASE + 10")
+    manifest = _make_manifest(services=(svc,))
+    assert _validator.validate(manifest) == []
+
+
+def test_port_offset_expression_with_spaces_is_clean() -> None:
+    svc = Service(name="web", target=Target(0, 0), cmd="cmd", port="  WINTER_PORT_BASE  +  10  ")
+    manifest = _make_manifest(services=(svc,))
+    assert _validator.validate(manifest) == []
+
+
+def test_port_zero_literal_is_violation() -> None:
+    svc = Service(name="web", target=Target(0, 0), cmd="cmd", port=0)
+    manifest = _make_manifest(services=(svc,))
+    violations = _validator.validate(manifest)
+    assert any("web" in v and "port" in v for v in violations)
+
+
+def test_port_negative_literal_is_violation() -> None:
+    svc = Service(name="web", target=Target(0, 0), cmd="cmd", port=-1)
+    manifest = _make_manifest(services=(svc,))
+    violations = _validator.validate(manifest)
+    assert any("web" in v and "port" in v for v in violations)
+
+
+def test_port_malformed_expression_is_violation() -> None:
+    svc = Service(name="web", target=Target(0, 0), cmd="cmd", port="PORT_BASE + 10")
+    manifest = _make_manifest(services=(svc,))
+    violations = _validator.validate(manifest)
+    assert any("web" in v and "port" in v for v in violations)
+
+
+def test_port_bare_variable_expression_is_violation() -> None:
+    svc = Service(name="web", target=Target(0, 0), cmd="cmd", port="WINTER_PORT_BASE")
+    manifest = _make_manifest(services=(svc,))
+    violations = _validator.validate(manifest)
+    assert any("web" in v and "port" in v for v in violations)
+
+
+def test_port_workspace_service_literal_is_clean() -> None:
+    svc = Service(name="docker", target=Target(0, 0), cmd="docker compose up", port=5432)
+    manifest = _make_manifest(workspace_services=(svc,))
+    assert _validator.validate(manifest) == []
+
+
+def test_port_workspace_service_malformed_is_violation() -> None:
+    svc = Service(name="docker", target=Target(0, 0), cmd="docker compose up", port="bad expression")
+    manifest = _make_manifest(workspace_services=(svc,))
+    violations = _validator.validate(manifest)
+    assert any("docker" in v and "port" in v for v in violations)

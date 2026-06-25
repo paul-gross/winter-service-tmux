@@ -292,3 +292,28 @@ def test_build_status_document_wraps_env_list() -> None:
 
 def test_build_status_document_empty_is_valid() -> None:
     assert build_status_document([]) == {"envs": []}
+
+
+# ---------------------------------------------------------------------------
+# build_service_status — ports parameter
+# ---------------------------------------------------------------------------
+
+
+def test_build_service_status_ports_absent_defaults_to_empty_list() -> None:
+    svc = build_service_status("api", "running", handle=None, log_path=None)
+    assert svc["ports"] == []
+
+
+def test_build_service_status_ports_none_yields_empty_list() -> None:
+    svc = build_service_status("api", "running", handle=None, log_path=None, ports=None)
+    assert svc["ports"] == []
+
+
+def test_build_service_status_ports_with_value() -> None:
+    svc = build_service_status("api", "running", handle=None, log_path=None, ports=[4070])
+    assert svc["ports"] == [4070]
+
+
+def test_build_service_status_ports_empty_list() -> None:
+    svc = build_service_status("api", "running", handle=None, log_path=None, ports=[])
+    assert svc["ports"] == []

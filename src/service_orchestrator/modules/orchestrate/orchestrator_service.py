@@ -12,7 +12,7 @@ import os
 import sys
 from typing import IO
 
-from service_manifest.modules.manifest.model import Health, LogMode, Service
+from service_manifest.modules.manifest.model import Health, LogMode, Service, parse_port_expression
 from service_orchestrator.modules.orchestrate.errors import OrchestratorError
 from service_orchestrator.modules.orchestrate.follow_clock import IFollowClock
 from service_orchestrator.modules.orchestrate.health_checker import IHealthChecker
@@ -35,6 +35,28 @@ _TMUX_HEIGHT = 50
 # Post-launch settle window before the first liveness check in _await_startup.
 # Gives the pane shell a moment to fork the service process after send_keys.
 _STARTUP_SETTLE_SECONDS = 0.5
+
+
+def _resolve_service_port(port: int | str | None, port_base: int | None) -> int | None:
+    """Resolve a service's declared ``port`` field to an absolute port number.
+
+    Returns ``None`` when *port* is ``None`` (undeclared) or when the expression
+    requires *port_base* but it is ``None`` (no ``WINTER_PORT_BASE`` in the env).
+
+    Accepts:
+    - ``None`` → ``None`` (no port declared).
+    - ``int`` → returned as-is (literal port).
+    - ``str`` matching ``"WINTER_PORT_BASE + <offset>"`` → ``port_base + offset``
+      when *port_base* is available, else ``None``.
+    """
+    if port is None:
+        return None
+    if isinstance(port, int):
+        return port
+    offset = parse_port_expression(port)
+    if offset is not None and port_base is not None:
+        return port_base + offset
+    return None
 
 
 def _segments_to_prune(
@@ -337,7 +359,11 @@ class OrchestratorService:
             log_path = str(self._log_repo.log_path(ctx.worktree_dir, svc.name)) if captured else None
 
             health = self._service_health(svc.health, state, ctx)
-            svc_docs.append(build_service_status(svc.name, state, health=health, handle=handle, log_path=log_path))
+            resolved_port = _resolve_service_port(svc.port, self._port_base(ctx))
+            ports = [resolved_port] if resolved_port is not None else None
+            svc_docs.append(
+                build_service_status(svc.name, state, health=health, handle=handle, log_path=log_path, ports=ports)
+            )
 
         return build_env_status(ctx.env, ctx.session, self._port_base(ctx), svc_docs)
 

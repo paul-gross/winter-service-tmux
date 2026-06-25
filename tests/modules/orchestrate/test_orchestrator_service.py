@@ -15,7 +15,11 @@ import pytest
 import service_manifest.container as sm_container_mod
 from service_manifest.modules.manifest.model import Health, HealthType, LogConfig, Service, ServiceManifest, Target
 from service_orchestrator.modules.orchestrate.errors import OrchestratorError
-from service_orchestrator.modules.orchestrate.orchestrator_service import OrchestratorService, _segments_to_prune
+from service_orchestrator.modules.orchestrate.orchestrator_service import (
+    OrchestratorService,
+    _resolve_service_port,
+    _segments_to_prune,
+)
 from service_orchestrator.modules.orchestrate.session_context import SessionContext
 from service_orchestrator.modules.orchestrate.status_report import logwriter_path
 from tests.conftest import (
@@ -1726,3 +1730,138 @@ def test_up_retry_true_emits_per_attempt_progress() -> None:
     output = out.getvalue()
     assert "Retrying 'backend' (attempt 1/2)" in output
     assert "Retrying 'backend' (attempt 2/2)" in output
+
+
+# ---------------------------------------------------------------------------
+# _resolve_service_port — pure function unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_service_port_none_returns_none() -> None:
+    assert _resolve_service_port(None, 4060) is None
+
+
+def test_resolve_service_port_none_without_port_base_returns_none() -> None:
+    assert _resolve_service_port(None, None) is None
+
+
+def test_resolve_service_port_literal_int_returned_as_is() -> None:
+    assert _resolve_service_port(4070, None) == 4070
+
+
+def test_resolve_service_port_literal_int_ignores_port_base() -> None:
+    assert _resolve_service_port(4070, 9000) == 4070
+
+
+def test_resolve_service_port_offset_expression_resolved() -> None:
+    assert _resolve_service_port("WINTER_PORT_BASE + 10", 4060) == 4070
+
+
+def test_resolve_service_port_offset_expression_resolved_different_base() -> None:
+    assert _resolve_service_port("WINTER_PORT_BASE + 11", 4060) == 4071
+
+
+def test_resolve_service_port_offset_expression_without_port_base_returns_none() -> None:
+    assert _resolve_service_port("WINTER_PORT_BASE + 10", None) is None
+
+
+def test_resolve_service_port_offset_zero_with_base() -> None:
+    assert _resolve_service_port("WINTER_PORT_BASE + 0", 4060) == 4060
+
+
+def test_resolve_service_port_offset_expression_with_whitespace() -> None:
+    assert _resolve_service_port("  WINTER_PORT_BASE  +  5  ", 4060) == 4065
+
+
+def test_resolve_service_port_invalid_expression_returns_none() -> None:
+    assert _resolve_service_port("PORT_BASE + 10", 4060) is None
+
+
+# ---------------------------------------------------------------------------
+# status_env_document — port resolution end-to-end
+# ---------------------------------------------------------------------------
+
+
+def test_status_env_document_literal_port_in_ports_column() -> None:
+    """A literal port value appears in the service's ports list."""
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 10})
+    reaper = FakeProcessReaper(children_set={10})
+    manifest = ServiceManifest(
+        session_prefix="mp",
+        env_file=".winter.env",
+        layout_hook=None,
+        services=(Service(name="web", target=Target(0, 0), cmd="cmd", port=4070),),
+    )
+    ctx = _make_ctx(manifest=manifest)
+    svc = _make_service(tmux=tmux, reaper=reaper, stdout=io.StringIO())
+
+    doc = svc.status_env_document(ctx)
+
+    web = doc["services"][0]
+    assert web["ports"] == [4070]
+
+
+def test_status_env_document_offset_expression_resolved_against_port_base() -> None:
+    """An offset expression resolves to port_base + offset for the env."""
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 10, "0.1": 20})
+    reaper = FakeProcessReaper(children_set={10, 20})
+    manifest = ServiceManifest(
+        session_prefix="mp",
+        env_file=".winter.env",
+        layout_hook=None,
+        services=(
+            Service(name="web", target=Target(0, 0), cmd="cmd", port="WINTER_PORT_BASE + 10"),
+            Service(name="api", target=Target(0, 1), cmd="cmd", port="WINTER_PORT_BASE + 11"),
+        ),
+    )
+    ctx = _make_ctx(manifest=manifest, env_vars={"WINTER_PORT_BASE": "4060"})
+    svc = _make_service(tmux=tmux, reaper=reaper, stdout=io.StringIO())
+
+    doc = svc.status_env_document(ctx)
+
+    by_name = {s["name"]: s for s in doc["services"]}
+    assert by_name["web"]["ports"] == [4070]   # 4060 + 10
+    assert by_name["api"]["ports"] == [4071]   # 4060 + 11
+
+
+def test_status_env_document_no_port_renders_blank() -> None:
+    """A service without a port field renders ports as [] (blank)."""
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 10})
+    reaper = FakeProcessReaper(children_set={10})
+    manifest = ServiceManifest(
+        session_prefix="mp",
+        env_file=".winter.env",
+        layout_hook=None,
+        services=(Service(name="worker", target=Target(0, 0), cmd="cmd"),),
+    )
+    ctx = _make_ctx(manifest=manifest, env_vars={"WINTER_PORT_BASE": "4060"})
+    svc = _make_service(tmux=tmux, reaper=reaper, stdout=io.StringIO())
+
+    doc = svc.status_env_document(ctx)
+
+    worker = doc["services"][0]
+    assert worker["ports"] == []
+
+
+def test_status_env_document_offset_expression_without_port_base_renders_blank() -> None:
+    """When WINTER_PORT_BASE is absent, an offset-expression port renders blank."""
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 10})
+    reaper = FakeProcessReaper(children_set={10})
+    manifest = ServiceManifest(
+        session_prefix="mp",
+        env_file=".winter.env",
+        layout_hook=None,
+        services=(Service(name="web", target=Target(0, 0), cmd="cmd", port="WINTER_PORT_BASE + 10"),),
+    )
+    # No WINTER_PORT_BASE in env_vars
+    ctx = _make_ctx(manifest=manifest, env_vars={})
+    svc = _make_service(tmux=tmux, reaper=reaper, stdout=io.StringIO())
+
+    doc = svc.status_env_document(ctx)
+
+    web = doc["services"][0]
+    assert web["ports"] == []
