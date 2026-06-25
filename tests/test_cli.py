@@ -53,10 +53,6 @@ cmd = "npm run dev"
 name = "shell"
 target = "1.0"
 cmd = ""
-
-[[status.url]]
-label = "Backend"
-url = "http://localhost:${BACKEND_PORT}"
 """
 
 _VALID_ENV = "BACKEND_PORT=3000\n"
@@ -214,7 +210,7 @@ def test_malformed_toml_json_exit_1(tmp_path: Path, capsys: pytest.CaptureFixtur
 
 
 def test_unresolvable_var_with_env_file_exit_1(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """Env file present but missing a required var → violation → exit 1."""
+    """Env file present but missing a required health-probe var → violation → exit 1."""
     content = """\
 session_prefix = "mp"
 env_file = ".winter.env"
@@ -224,9 +220,9 @@ name = "backend"
 target = "0.0"
 cmd = "cmd"
 
-[[status.url]]
-label = "Backend"
-url = "http://localhost:${BACKEND_PORT}"
+[service.health]
+type = "url"
+target = "http://localhost:${BACKEND_PORT}/health"
 """
     _write_manifest(tmp_path, content)
     _write_env(tmp_path, "OTHER_VAR=1234\n")  # BACKEND_PORT missing
@@ -250,9 +246,9 @@ name = "backend"
 target = "0.0"
 cmd = "cmd"
 
-[[status.url]]
-label = "Backend"
-url = "http://localhost:${BACKEND_PORT}"
+[service.health]
+type = "url"
+target = "http://localhost:${BACKEND_PORT}/health"
 """
     _write_manifest(tmp_path, content)
     # .winter.env intentionally NOT written

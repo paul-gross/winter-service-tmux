@@ -7,7 +7,6 @@ from service_manifest.modules.manifest.model import (
     Service,
     ServiceManifest,
     StartupPolicy,
-    StatusUrl,
     Target,
 )
 from service_manifest.modules.manifest.validator import ManifestValidator
@@ -22,7 +21,6 @@ def _make_manifest(
     env_file: str | None = None,
     layout_hook: str | None = None,
     services: tuple[Service, ...] = (),
-    status_urls: tuple[StatusUrl, ...] = (),
     logs: LogConfig = LogConfig(),
     workspace_services: tuple[Service, ...] = (),
     workspace_layout_hook: str | None = None,
@@ -32,7 +30,6 @@ def _make_manifest(
         env_file=env_file,
         layout_hook=layout_hook,
         services=services,
-        status_urls=status_urls,
         logs=logs,
         workspace_services=workspace_services,
         workspace_layout_hook=workspace_layout_hook,
@@ -45,10 +42,6 @@ def _service(name: str, window: int = 0, pane: int = 0, command: str = "cmd") ->
 
 def _service_with_health(name: str, health: Health, window: int = 0, pane: int = 0) -> Service:
     return Service(name=name, target=Target(window=window, pane=pane), cmd="cmd", health=health)
-
-
-def _status_url(label: str, url: str) -> StatusUrl:
-    return StatusUrl(label=label, url=url)
 
 
 _validator = ManifestValidator()
@@ -66,13 +59,11 @@ def test_valid_manifest_returns_empty_list() -> None:
             _service("backend", window=0, pane=0),
             _service("frontend", window=0, pane=1),
         ),
-        status_urls=(_status_url("Backend", "http://localhost:${BACKEND_PORT}"),),
     )
-    env = {"BACKEND_PORT": "3000"}
-    assert _validator.validate(manifest, env=env) == []
+    assert _validator.validate(manifest, env={"BACKEND_PORT": "3000"}) == []
 
 
-def test_valid_manifest_no_env_no_status_urls() -> None:
+def test_valid_manifest_no_services() -> None:
     manifest = _make_manifest(
         session_prefix="proj",
         services=(_service("worker", window=0, pane=0),),
@@ -80,11 +71,16 @@ def test_valid_manifest_no_env_no_status_urls() -> None:
     assert _validator.validate(manifest) == []
 
 
-def test_valid_manifest_env_none_skips_var_check() -> None:
+def test_valid_manifest_env_none_skips_health_var_check() -> None:
     """env=None: ${VAR} checks skipped; other checks still run."""
     manifest = _make_manifest(
         session_prefix="mp",
-        status_urls=(_status_url("Backend", "http://localhost:${MISSING_VAR}"),),
+        services=(
+            _service_with_health(
+                "backend",
+                Health(type=HealthType.URL, target="http://localhost:${MISSING_VAR}/health"),
+            ),
+        ),
     )
     # No env provided — var check skipped, so no violation
     assert _validator.validate(manifest, env=None) == []
@@ -206,46 +202,8 @@ def test_zero_window_and_pane_no_violation() -> None:
 
 
 # ---------------------------------------------------------------------------
-# ${VAR} resolvability checks
+# ${VAR} resolvability checks — health checks
 # ---------------------------------------------------------------------------
-
-
-def test_unresolvable_var_in_status_url_with_env_is_violation() -> None:
-    manifest = _make_manifest(
-        status_urls=(_status_url("Backend", "http://localhost:${BACKEND_PORT}"),),
-    )
-    # env provided but BACKEND_PORT is absent
-    violations = _validator.validate(manifest, env={})
-    assert len(violations) == 1
-    v = violations[0]
-    assert "Backend" in v
-    assert "BACKEND_PORT" in v
-
-
-def test_resolvable_var_in_status_url_with_env_no_violation() -> None:
-    manifest = _make_manifest(
-        status_urls=(_status_url("Backend", "http://localhost:${BACKEND_PORT}"),),
-    )
-    violations = _validator.validate(manifest, env={"BACKEND_PORT": "3000"})
-    assert violations == []
-
-
-def test_unresolvable_var_skipped_when_env_is_none() -> None:
-    """env=None: ${VAR} resolvability check must be skipped entirely."""
-    manifest = _make_manifest(
-        status_urls=(_status_url("Backend", "http://localhost:${BACKEND_PORT}"),),
-    )
-    assert _validator.validate(manifest, env=None) == []
-
-
-def test_unresolvable_var_names_status_label_and_var() -> None:
-    manifest = _make_manifest(
-        status_urls=(_status_url("Frontend", "http://localhost:${FRONTEND_PORT}/app"),),
-    )
-    violations = _validator.validate(manifest, env={})
-    assert len(violations) == 1
-    assert "Frontend" in violations[0]
-    assert "FRONTEND_PORT" in violations[0]
 
 
 def test_unresolvable_var_in_service_health_with_env_is_violation() -> None:
@@ -315,7 +273,7 @@ def test_workspace_service_health_var_is_violation() -> None:
 
 
 def test_multiple_violations_all_reported() -> None:
-    """Duplicate name + duplicate target + negative window + unresolvable var."""
+    """Duplicate name + duplicate target + negative window."""
     manifest = _make_manifest(
         session_prefix="mp",
         services=(
@@ -327,7 +285,6 @@ def test_multiple_violations_all_reported() -> None:
             Service(name="svc-b", target=Target(1, 0), cmd="cmd"),
             Service(name="svc-c", target=Target(1, 0), cmd="cmd"),
         ),
-        status_urls=(_status_url("Api", "http://localhost:${API_PORT}"),),
     )
     violations = _validator.validate(manifest, env={})
 
@@ -337,11 +294,9 @@ def test_multiple_violations_all_reported() -> None:
     assert any("duplicate service name" in v and "svc-a" in v for v in violations)
     # duplicate target 1.0 for svc-b and svc-c
     assert any("1.0" in v and "svc-b" in v and "svc-c" in v for v in violations)
-    # unresolvable ${API_PORT}
-    assert any("API_PORT" in v for v in violations)
 
     # Ensure more than one violation
-    assert len(violations) >= 4
+    assert len(violations) >= 3
 
 
 # ---------------------------------------------------------------------------

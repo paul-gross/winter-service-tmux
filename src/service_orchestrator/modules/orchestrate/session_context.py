@@ -16,16 +16,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from service_manifest.modules.manifest.model import LogConfig, Service, StatusUrl
+from service_manifest.modules.manifest.model import LogConfig, Service
 
 
 @dataclass(frozen=True)
 class SessionContext:
     """Resolved per-action state for one orchestrator invocation.
 
-    The service/layout/status fields are already scope-selected by the builder:
+    The service/layout fields are already scope-selected by the builder:
     for a feature env they are the manifest's env-scoped values; for the
-    workspace session they are its ``workspace_*`` values (with no status URLs).
+    workspace session they are its ``workspace_*`` values.
     The orchestrator consumes them uniformly without knowing which scope it is.
 
     Attributes:
@@ -44,8 +44,6 @@ class SessionContext:
         services: The services to run in this session, in declaration order.
         layout_hook: Optional bash layout hook for this session (bare filename,
             resolved relative to ``config_dir``), or ``None``.
-        status_urls: Status-header URLs for this session (empty for the
-            workspace session).
         logs: Log-capture configuration.
         env_vars: Parsed key-value mapping from the env file, or ``None``
             when no env file was declared or the file was absent.
@@ -60,7 +58,6 @@ class SessionContext:
     session_prefix: str
     services: tuple[Service, ...]
     layout_hook: str | None
-    status_urls: tuple[StatusUrl, ...]
     logs: LogConfig
     env_vars: dict[str, str] | None
     env_file_path: Path | None

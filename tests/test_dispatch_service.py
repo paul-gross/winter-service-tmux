@@ -42,7 +42,6 @@ _MANIFEST = ServiceManifest(
         Service(name="backend", target=Target(window=0, pane=0), cmd="cmd"),
         Service(name="worker", target=Target(window=0, pane=1), cmd="cmd"),
     ),
-    status_urls=(),
     workspace_services=(
         Service(name="ws-backend", target=Target(window=0, pane=0), cmd="ws-cmd"),
         Service(name="ws-worker", target=Target(window=0, pane=1), cmd="ws-cmd"),
@@ -59,7 +58,6 @@ def _make_ctx(env: str = "alpha") -> SessionContext:
         session_prefix=_MANIFEST.session_prefix,
         services=_MANIFEST.services,
         layout_hook=_MANIFEST.layout_hook,
-        status_urls=_MANIFEST.status_urls,
         logs=_MANIFEST.logs,
         env_vars=None,
         env_file_path=None,
@@ -75,7 +73,6 @@ def _make_workspace_ctx() -> SessionContext:
         session_prefix=_MANIFEST.session_prefix,
         services=_MANIFEST.workspace_services,
         layout_hook=_MANIFEST.workspace_layout_hook,
-        status_urls=(),
         logs=_MANIFEST.logs,
         env_vars=None,
         env_file_path=None,

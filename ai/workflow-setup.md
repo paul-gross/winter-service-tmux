@@ -46,7 +46,7 @@ Don't wait for a "go" signal — just begin.
 
 ### 1. Check existing config.toml
 
-**Explain first:** "Before changing anything, I need to know what's already there. `workspace:/.winter/config/winter-service-tmux/config.toml` is the canonical source of truth — if it exists, it tells me your current `session_prefix`, `env_file`, services, and any status URLs."
+**Explain first:** "Before changing anything, I need to know what's already there. `workspace:/.winter/config/winter-service-tmux/config.toml` is the canonical source of truth — if it exists, it tells me your current `session_prefix`, `env_file`, and services."
 
 Check the current state:
 
@@ -151,18 +151,7 @@ Ask **one** question:
 
 Record each service's `<window>.<pane>` target. Every target must be unique.
 
-### 7. Status URLs (optional)
-
-**Explain first:** "`./status` reads each pane's last few lines and prints them. You can optionally inject a header above that with per-env URLs — useful for showing which ports are live. If you don't need one, skip this step."
-
-Ask **one** question:
-
-**"Want status URL entries? If yes, what should they show? (e.g. `http://localhost:$BACKEND_PORT` for the backend)"**
-
-- "no" / "skip": omit `[[status.url]]` entries.
-- otherwise: take the user's spec and translate it into `[[status.url]]` table entries. `${VAR}` placeholders in the `url` field are resolved from the env file at status time.
-
-### 8. Write config.toml
+### 7. Write config.toml
 
 **Explain first:** "Now I have everything needed to write `workspace:/.winter/config/winter-service-tmux/config.toml`. The annotated schema reference is `winter-service-tmux:/workflow/config.toml.example` — follow its structure and substitute the values we just collected."
 
@@ -174,15 +163,14 @@ Then write the file. Read `config.toml.example` and reproduce its structure, sub
 - `env_file` ← `".winter.env"` if the env-file step recorded one; omit the key otherwise.
 - `layout_hook` ← `"layout-hook.sh"` (the bare filename — resolved relative to the config dir where this file lives).
 - `[[service]]` entries ← one table per service, with `name`, `target`, and `cmd`. Empty cmd (`cmd = ""`) for interactive panes.
-- `[service.health]` subtables ← only for services that declared a status health probe. Place each subtable immediately after its matching `[[service]]`, before the next `[[service]]`. Use `type = "url"` or `type = "cmd"`, `target = "..."`, and optional `timeout = <seconds>`. `${VAR}` placeholders in `target` are resolved from `env_file`, the same way `[[status.url]]` entries are; bare `$VAR` is not interpolated.
+- `[service.health]` subtables ← only for services that declared a status health probe. Place each subtable immediately after its matching `[[service]]`, before the next `[[service]]`. Use `type = "url"` or `type = "cmd"`, `target = "..."`, and optional `timeout = <seconds>`. `${VAR}` placeholders in `target` are resolved from `env_file`; bare `$VAR` is not interpolated.
 - `[service.startup]` subtables ← only for services that declared a startup retry policy. Place each subtable immediately after its matching `[[service]]` (and after any `[service.health]`), before the next `[[service]]`. Use `retries = <int>` and optional `retry_delay = <seconds>`.
-- `[[status.url]]` entries ← one table per URL from the status-URLs step (omit section if none).
 
 Confirm: "`config.toml` written at `workspace:/.winter/config/winter-service-tmux/config.toml`."
 
-**Machine-specific overrides (mention, don't prompt):** the committed `config.toml` can be paired with a gitignored `config.local.toml` in the same directory for per-machine tweaks. The reader merges it on top using the same key-based semantics (scalars replace; services/URLs merge by `name`/`label`). Don't create one as part of this guide — just tell the user it exists: "If you ever need machine-specific overrides, drop a gitignored `config.local.toml` next to this file and it'll be merged on top." Only create it if the user explicitly asks; if you do, ensure it's gitignored.
+**Machine-specific overrides (mention, don't prompt):** the committed `config.toml` can be paired with a gitignored `config.local.toml` in the same directory for per-machine tweaks. The reader merges it on top using the same key-based semantics (scalars replace; services merge by `name`). Don't create one as part of this guide — just tell the user it exists: "If you ever need machine-specific overrides, drop a gitignored `config.local.toml` next to this file and it'll be merged on top." Only create it if the user explicitly asks; if you do, ensure it's gitignored.
 
-### 9. Write layout-hook.sh
+### 8. Write layout-hook.sh
 
 **Explain first:** "The orchestrator calls `layout-hook.sh` once per `./up`, after creating the tmux session and before sending any service commands. Its only job is to create the windows and panes the manifest's `[[service]]` targets refer to — nothing else. The annotated contract is `winter-service-tmux:/workflow/layout-hook.sh.example`."
 
@@ -204,7 +192,7 @@ chmod +x ./.winter/config/winter-service-tmux/layout-hook.sh
 
 Confirm: "`layout-hook.sh` written and executable at `workspace:/.winter/config/winter-service-tmux/layout-hook.sh`."
 
-### 10. Workspace singleton services (optional)
+### 9. Workspace singleton services (optional)
 
 **Explain first:** "If your workspace needs shared infrastructure that should run once for the whole workspace — a database, a message broker, a container registry — you can mark a `[[service]]` entry with `scope = "workspace"` alongside the per-env ones (`scope` defaults to `"project"`). These run in a separate `<prefix>-workspace` tmux session at the workspace root, started via `winter service up workspace`. `winter service up <env>` ensures the workspace session is running first — so workspace singletons are guaranteed to be up when any env spins up via `winter service up`. Note: the env-root `./up` symlink does NOT auto-start the workspace session; if you use `alpha/up`, run `winter service up workspace` separately first."
 
@@ -241,7 +229,7 @@ chmod +x ./.winter/config/winter-service-tmux/workspace-layout-hook.sh
 
 Confirm: "Workspace singletons added to `config.toml`; `workspace-layout-hook.sh` written."
 
-### 11. Validate
+### 10. Validate
 
 **Explain first:** "Before testing live, validate the manifest — the validator catches schema errors, duplicate targets, and missing-service issues before they reach a running tmux session."
 
@@ -258,7 +246,7 @@ If the validator reports errors, fix them in `config.toml` (or `layout-hook.sh` 
 
 Confirm: "Manifest validates cleanly."
 
-### 12. Smoke test (optional)
+### 11. Smoke test (optional)
 
 **Explain first:** "Before declaring done, you can verify the full lifecycle in a real worktree."
 

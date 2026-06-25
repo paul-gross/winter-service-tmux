@@ -50,7 +50,6 @@ _MANIFEST = ServiceManifest(
     env_file=".winter.env",
     layout_hook=None,
     services=(Service(name="backend", target=Target(window=0, pane=0), cmd="cmd"),),
-    status_urls=(),
     workspace_services=(Service(name="ws-svc", target=Target(window=0, pane=0), cmd="ws-cmd"),),
 )
 _MANIFEST_MULTI = ServiceManifest(
@@ -62,7 +61,6 @@ _MANIFEST_MULTI = ServiceManifest(
         Service(name="backend-worker", target=Target(window=0, pane=1), cmd="cmd"),
         Service(name="frontend", target=Target(window=1, pane=0), cmd="cmd"),
     ),
-    status_urls=(),
 )
 
 
@@ -75,7 +73,6 @@ def _make_ctx(env: str = "alpha", manifest: ServiceManifest = _MANIFEST) -> Sess
         session_prefix=manifest.session_prefix,
         services=manifest.services,
         layout_hook=manifest.layout_hook,
-        status_urls=manifest.status_urls,
         logs=manifest.logs,
         env_vars={"BACKEND_PORT": "4100"},
         env_file_path=_WORKSPACE / env / ".winter.env",
@@ -83,7 +80,7 @@ def _make_ctx(env: str = "alpha", manifest: ServiceManifest = _MANIFEST) -> Sess
 
 
 def _make_workspace_ctx() -> SessionContext:
-    # The workspace session selects the manifest's workspace_* fields (no status URLs).
+    # The workspace session selects the manifest's workspace_* fields.
     return SessionContext(
         env=WORKSPACE_TARGET,
         workspace_root=_WORKSPACE,
@@ -92,7 +89,6 @@ def _make_workspace_ctx() -> SessionContext:
         session_prefix=_MANIFEST.session_prefix,
         services=_MANIFEST.workspace_services,
         layout_hook=_MANIFEST.workspace_layout_hook,
-        status_urls=(),
         logs=_MANIFEST.logs,
         env_vars=None,
         env_file_path=None,

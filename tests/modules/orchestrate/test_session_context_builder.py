@@ -71,10 +71,6 @@ cmd = "npm run start:dev"
 name = "frontend"
 target = "0.1"
 cmd = "npm run dev"
-
-[[status.url]]
-label = "Backend"
-url = "http://localhost:${BACKEND_PORT}"
 """
 
 # Workspace services for direct model construction.
@@ -116,7 +112,6 @@ def _make_workspace_manifest(
         env_file=None,
         layout_hook=None,
         services=(),  # env services cleared
-        status_urls=(),
         logs=LogConfig(),
         workspace_services=workspace_services,
         workspace_layout_hook=workspace_layout_hook,
@@ -144,7 +139,6 @@ def _make_workspace_ctx(
         session_prefix=manifest.session_prefix,
         services=manifest.workspace_services,
         layout_hook=manifest.workspace_layout_hook,
-        status_urls=(),
         logs=manifest.logs,
         env_vars=None,
         env_file_path=None,
@@ -253,17 +247,16 @@ def test_build_workspace_session_is_prefix_workspace() -> None:
     assert ctx.session == "mp-workspace"
 
 
-def test_build_workspace_drops_status_urls_and_env_services() -> None:
-    """The workspace session selects no env services and no status URLs.
+def test_build_workspace_drops_env_services() -> None:
+    """The workspace session selects no env services.
 
-    The env-only TOML declares env services and one [[status.url]] but no
-    workspace-scoped service, so build_workspace() yields empty services and
-    empty status_urls — it reads the workspace scope, not the env scope.
+    The env-only TOML declares env services but no workspace-scoped service,
+    so build_workspace() yields empty services — it reads the workspace scope,
+    not the env scope.
     """
     builder = _make_builder()
     ctx = builder.build_workspace()
     assert ctx.services == ()
-    assert ctx.status_urls == ()
 
 
 def test_build_workspace_session_prefix_preserved() -> None:
@@ -274,7 +267,7 @@ def test_build_workspace_session_prefix_preserved() -> None:
 
 def test_build_workspace_selects_workspace_fields() -> None:
     """End-to-end: build_workspace() surfaces the manifest's workspace_* fields as the
-    session's services/layout_hook and drops status URLs — no env-shaped projection.
+    session's services/layout_hook — no env-shaped projection.
 
     Uses a real scope-tagged TOML so the reader -> builder -> SessionContext chain is
     exercised whole.
@@ -293,16 +286,11 @@ name = "monitor"
 target = "0.0"
 cmd = "python -m monitor"
 scope = "workspace"
-
-[[status.url]]
-label = "Backend"
-url = "http://localhost:3000"
 """
     builder = _make_builder(toml)
     ctx = builder.build_workspace()
     assert [s.name for s in ctx.services] == ["monitor"]
     assert ctx.layout_hook == "workspace-layout-hook.sh"
-    assert ctx.status_urls == ()
     assert ctx.session_prefix == "mp"
 
 

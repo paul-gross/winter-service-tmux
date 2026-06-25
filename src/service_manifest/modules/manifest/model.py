@@ -130,18 +130,6 @@ class Service:
 
 
 @dataclass(frozen=True)
-class StatusUrl:
-    """A URL entry displayed in the status header.
-
-    ``url`` is the raw template string and may contain ``${VAR}`` placeholders
-    that are resolved against the env file at validation time.
-    """
-
-    label: str
-    url: str
-
-
-@dataclass(frozen=True)
 class ServiceManifest:
     """The fully-parsed, immutable manifest for a feature environment.
 
@@ -153,7 +141,6 @@ class ServiceManifest:
         layout_hook: Path to the optional bash layout hook, relative to the
             workspace root.  ``None`` when not declared.
         services: All declared services, in declaration order.
-        status_urls: All declared status URLs, in declaration order.
         logs: Log-capture configuration.  Always present (defaulted); consumers
             need no null-guard.
         workspace_services: Services scoped to the shared ``<prefix>-workspace``
@@ -166,7 +153,6 @@ class ServiceManifest:
     env_file: str | None
     layout_hook: str | None
     services: tuple[Service, ...]
-    status_urls: tuple[StatusUrl, ...]
     logs: LogConfig = field(default_factory=LogConfig)
     workspace_services: tuple[Service, ...] = ()
     workspace_layout_hook: str | None = None

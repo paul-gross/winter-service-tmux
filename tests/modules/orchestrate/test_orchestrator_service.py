@@ -53,10 +53,6 @@ cmd = "npm run start:dev"
 name = "frontend"
 target = "0.1"
 cmd = "npm run dev"
-
-[[status.url]]
-label = "Backend"
-url = "http://localhost:${BACKEND_PORT}"
 """
 
 _MANIFEST_COMMITTED_PATH = Path("config.toml")
@@ -90,7 +86,6 @@ def _make_ctx(
         session_prefix=manifest.session_prefix,
         services=manifest.services,
         layout_hook=manifest.layout_hook,
-        status_urls=manifest.status_urls,
         logs=manifest.logs,
         env_vars=env_vars,
         env_file_path=env_file_path,
@@ -464,7 +459,7 @@ def test_down_skips_reap_when_no_descendants() -> None:
 
 
 # ---------------------------------------------------------------------------
-# status — running / stopped / missing + status URL header
+# status — running / stopped / missing
 # ---------------------------------------------------------------------------
 
 
@@ -517,33 +512,6 @@ def test_status_missing_pane() -> None:
     assert "frontend" in output
 
 
-def test_status_interpolates_status_url_header() -> None:
-    tmux = FakeTmuxRepository()
-    tmux.seed_session("mp-alpha", {"0.0": 10, "0.1": 20})
-    reaper = FakeProcessReaper()
-    ctx = _make_ctx(env_vars={"BACKEND_PORT": "4100"})
-    out = io.StringIO()
-    svc = _make_service(tmux=tmux, reaper=reaper, stdout=out)
-
-    svc.status(ctx)
-
-    assert "http://localhost:4100" in out.getvalue()
-
-
-def test_status_unresolved_var_left_literal() -> None:
-    """When env_vars is None, ${VAR} placeholders are left as literals."""
-    tmux = FakeTmuxRepository()
-    tmux.seed_session("mp-alpha", {"0.0": 10, "0.1": 20})
-    reaper = FakeProcessReaper()
-    ctx = _make_ctx(env_vars=None)
-    out = io.StringIO()
-    svc = _make_service(tmux=tmux, reaper=reaper, stdout=out)
-
-    svc.status(ctx)
-
-    assert "${BACKEND_PORT}" in out.getvalue()
-
-
 def test_status_renders_health_column_when_probe_declared() -> None:
     tmux = FakeTmuxRepository()
     tmux.seed_session("mp-alpha", {"0.0": 10, "0.1": 20})
@@ -561,7 +529,6 @@ def test_status_renders_health_column_when_probe_declared() -> None:
             ),
             Service(name="frontend", target=Target(0, 1), cmd="cmd"),
         ),
-        status_urls=(),
     )
     ctx = _make_ctx(manifest=manifest, env_vars={"BACKEND_PORT": "3000"})
     health = FakeHealthChecker({"http://localhost:${BACKEND_PORT}/health": True})
@@ -905,7 +872,6 @@ def _make_prune_manifest(retention_seconds: int = 604800) -> ServiceManifest:
         env_file=".winter.env",
         layout_hook=None,
         services=(Service(name="docs", target=Target(window=0, pane=0), cmd="cmd"),),
-        status_urls=(),
         logs=LogConfig(retention_seconds=retention_seconds),
     )
 
@@ -920,7 +886,6 @@ def _make_prune_ctx(retention_seconds: int = 604800) -> SessionContext:
         session_prefix=manifest.session_prefix,
         services=manifest.services,
         layout_hook=manifest.layout_hook,
-        status_urls=manifest.status_urls,
         logs=manifest.logs,
         env_vars=None,
         env_file_path=None,
@@ -1282,7 +1247,6 @@ def test_status_env_document_populates_declared_health() -> None:
             ),
             Service(name="shell", target=Target(1, 0), cmd=""),
         ),
-        status_urls=(),
     )
     ctx = _make_ctx(manifest=manifest, env_vars={"BACKEND_PORT": "3000"})
     health = FakeHealthChecker(
@@ -1320,7 +1284,6 @@ def test_status_env_document_declared_health_is_unhealthy_without_running_servic
                 health=Health(type=HealthType.URL, target="http://localhost:${BACKEND_PORT}/health"),
             ),
         ),
-        status_urls=(),
     )
     ctx = _make_ctx(manifest=manifest, env_vars={"BACKEND_PORT": "3000"})
     health = FakeHealthChecker({"http://localhost:${BACKEND_PORT}/health": True})
@@ -1349,7 +1312,6 @@ def test_status_env_document_declared_health_is_unhealthy_for_stopped_pane() -> 
                 health=Health(type=HealthType.CMD, target="true"),
             ),
         ),
-        status_urls=(),
     )
     ctx = _make_ctx(manifest=manifest)
     health = FakeHealthChecker({"true": True})
@@ -1378,7 +1340,6 @@ def test_status_env_document_declared_health_is_unhealthy_for_missing_pane() -> 
                 health=Health(type=HealthType.CMD, target="true"),
             ),
         ),
-        status_urls=(),
     )
     ctx = _make_ctx(manifest=manifest)
     health = FakeHealthChecker({"true": True})

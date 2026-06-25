@@ -70,8 +70,8 @@ class ManifestValidator:
         - Each service's ``startup.retry_delay`` is non-negative (both lists).
         - A ``startup`` policy with ``retries > 0`` is not declared on an
           interactive (empty-command) service, where it would never fire.
-        - When *env* is provided: every ``${VAR}`` in a ``status.url`` template
-          resolves against *env*; unresolvable vars are reported per-label.
+        - When *env* is provided: every ``${VAR}`` in a service health target
+          resolves against *env*; unresolvable vars are reported per-service.
         """
         violations: list[str] = []
 
@@ -89,7 +89,6 @@ class ManifestValidator:
         self._check_log_config(manifest, violations)
 
         if env is not None:
-            self._check_status_url_vars(manifest, env, violations)
             self._check_health_vars(manifest.services, "service", env, violations)
             self._check_health_vars(manifest.workspace_services, "workspace service", env, violations)
 
@@ -204,17 +203,6 @@ class ManifestValidator:
                     f"workspace service '{service.name}' health: variable '${{{var}}}' is not supported "
                     "because workspace services do not load an env_file"
                 )
-
-    @staticmethod
-    def _check_status_url_vars(
-        manifest: ServiceManifest,
-        env: dict[str, str],
-        violations: list[str],
-    ) -> None:
-        for status_url in manifest.status_urls:
-            _rendered, unresolved = interpolate(status_url.url, env)
-            for var in unresolved:
-                violations.append(f"status url '{status_url.label}': unresolvable variable '${{{var}}}'")
 
     @staticmethod
     def _check_health_vars(

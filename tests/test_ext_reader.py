@@ -35,7 +35,6 @@ _BASE_MANIFEST = ServiceManifest(
     layout_hook=None,
     services=(Service(name="api", target=Target(1, 0), cmd="uvicorn"),),
     workspace_services=(Service(name="rabbitmq", target=Target(0, 0), cmd="docker run rabbitmq"),),
-    status_urls=(),
     logs=LogConfig(),
     workspace_layout_hook=None,
 )

@@ -18,8 +18,8 @@
 #
 # For machine-specific overrides that shouldn't be committed, add a sibling
 # config.local.toml in the same directory — the reader merges it on top using
-# the same overlay semantics (scalars replace; [[service]] and [[status.url]]
-# merge keyed by name/label). Keep it gitignored.
+# the same overlay semantics (scalars replace; [[service]] merges keyed by
+# name). Keep it gitignored.
 
 # Session prefix — tmux sessions will be named <session_prefix>-<env>
 # e.g., "mp" produces "mp-alpha", "mp-beta"
@@ -157,27 +157,6 @@ name = "watcher"
 target = "1.1"
 cmd = "npm run watch"
 log = "pane"
-
-# ---------------------------------------------------------------------------
-# Status URLs — displayed in the ./status output header
-# ---------------------------------------------------------------------------
-#
-# Fields:
-#   label (required) — display name shown in ./status
-#   url   (required) — template string; ${VAR} placeholders are resolved from
-#                      env_file at validation time
-#
-# The validator reports unresolvable ${VAR} when an env file is present. When
-# the env file is absent, ${VAR} resolution is skipped (warn-and-continue,
-# matching the bash up script's behaviour).
-
-[[status.url]]
-label = "Backend"
-url = "http://localhost:${BACKEND_PORT}"
-
-[[status.url]]
-label = "Frontend"
-url = "http://localhost:${FRONTEND_PORT}"
 
 # ---------------------------------------------------------------------------
 # Workspace-scoped singleton services

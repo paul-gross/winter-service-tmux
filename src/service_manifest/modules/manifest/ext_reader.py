@@ -157,7 +157,6 @@ class ExtManifestMerger:
             env_file=base.env_file,
             layout_hook=base.layout_hook,
             services=base.services + tuple(extra_env),
-            status_urls=base.status_urls,
             logs=base.logs,
             workspace_services=base.workspace_services + tuple(extra_ws),
             workspace_layout_hook=base.workspace_layout_hook,

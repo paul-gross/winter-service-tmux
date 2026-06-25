@@ -12,7 +12,6 @@ import os
 import sys
 from typing import IO
 
-from service_manifest.modules.manifest.env import interpolate
 from service_manifest.modules.manifest.model import Health, LogMode, Service
 from service_orchestrator.modules.orchestrate.errors import OrchestratorError
 from service_orchestrator.modules.orchestrate.follow_clock import IFollowClock
@@ -366,9 +365,8 @@ class OrchestratorService:
         NOT render here — it calls ``status_env_document`` and lets winter own
         the table/JSON rendering.
 
-        Renders the manifest's declarative status URLs as a header (with
-        ``${VAR}`` placeholders interpolated against ``ctx.env_vars``), then
-        per-service running/stopped/missing lines.
+        Renders the ``=== {env} ===`` header followed by per-service
+        running/stopped/missing lines with the latest captured log line.
 
         Args:
             ctx: The resolved environment context.
@@ -389,12 +387,6 @@ class OrchestratorService:
             in_scope = tuple(s for s in in_scope if s.name in requested)
 
         self._stdout.write(f"=== {ctx.env} ===\n")
-
-        if ctx.status_urls:
-            env_vars = ctx.env_vars or {}
-            for status_url in ctx.status_urls:
-                rendered_url, _ = interpolate(status_url.url, env_vars)
-                self._stdout.write(f"  {status_url.label}: {rendered_url}\n")
 
         show_health = any(svc.health is not None for svc in in_scope)
 

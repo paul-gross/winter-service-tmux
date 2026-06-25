@@ -25,9 +25,6 @@
 #     override startup locally, restate the whole startup table (retries and
 #     optional retry_delay).
 #
-#   [[status.url]] — keyed by "label":
-#     Same override-or-append rule as [[service]], keyed by "label".
-
 # Override the session prefix — handy when the committed prefix collides with
 # another project's tmux sessions on a shared machine.
 session_prefix = "myprefix"
@@ -71,17 +68,6 @@ retries = 0  # disable retries locally; committed value had retries = 3
 name = "debugger"
 target = "2.0"
 cmd = "node --inspect src/index.js"
-
-# Override a committed status URL by label — point the Backend URL at a
-# different port locally.
-[[status.url]]
-label = "Backend"
-url = "http://localhost:${LOCAL_BACKEND_PORT}"
-
-# Append a new status URL that only makes sense on this machine.
-[[status.url]]
-label = "Debug Inspector"
-url = "http://localhost:9229"
 
 # Override a committed workspace service by name — e.g. point docker at a
 # different compose file locally.  Only the fields you specify are replaced;

@@ -109,7 +109,6 @@ class SessionContextBuilder:
             session_prefix=manifest.session_prefix,
             services=manifest.services,
             layout_hook=manifest.layout_hook,
-            status_urls=manifest.status_urls,
             logs=manifest.logs,
             env_vars=env_vars,
             env_file_path=env_file_path,
@@ -129,8 +128,7 @@ class SessionContextBuilder:
         logs under ``<ws_root>/.winter/logs/``.
 
         The session's services/layout are selected from the manifest's
-        ``workspace_*`` fields (status URLs are dropped — the workspace header
-        must not render env URLs), so ``OrchestratorService`` consumes them
+        ``workspace_*`` fields, so ``OrchestratorService`` consumes them
         identically to a feature-env session.  No env file is loaded
         (``env_vars=None``, ``env_file_path=None``).
         """
@@ -146,7 +144,6 @@ class SessionContextBuilder:
             session_prefix=manifest.session_prefix,
             services=manifest.workspace_services,
             layout_hook=manifest.workspace_layout_hook,
-            status_urls=(),
             logs=manifest.logs,
             env_vars=None,
             env_file_path=None,

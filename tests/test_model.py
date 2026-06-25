@@ -10,7 +10,6 @@ from service_manifest.modules.manifest.model import (
     Service,
     ServiceManifest,
     StartupPolicy,
-    StatusUrl,
     Target,
 )
 
@@ -64,21 +63,6 @@ def test_service_is_frozen() -> None:
         svc.name = "y"  # type: ignore[misc]
 
 
-def test_status_url_construction_and_equality() -> None:
-    su = StatusUrl(label="Backend", url="http://localhost:${BACKEND_PORT}")
-    assert su.label == "Backend"
-    assert su.url == "http://localhost:${BACKEND_PORT}"
-    assert su == StatusUrl(label="Backend", url="http://localhost:${BACKEND_PORT}")
-
-
-def test_status_url_is_frozen() -> None:
-    import pytest
-
-    su = StatusUrl(label="A", url="http://example.com")
-    with pytest.raises(FrozenInstanceError):
-        su.label = "B"  # type: ignore[misc]
-
-
 def test_service_manifest_construction() -> None:
     manifest = ServiceManifest(
         session_prefix="mp",
@@ -89,13 +73,11 @@ def test_service_manifest_construction() -> None:
             Service(name="frontend", target=Target(0, 1), cmd="npm run dev"),
             Service(name="shell", target=Target(1, 0), cmd=""),
         ),
-        status_urls=(StatusUrl(label="Backend", url="http://localhost:${BACKEND_PORT}"),),
     )
     assert manifest.session_prefix == "mp"
     assert manifest.env_file == ".winter.env"
     assert manifest.layout_hook == "layout-hook.sh"
     assert len(manifest.services) == 3
-    assert len(manifest.status_urls) == 1
 
 
 def test_service_manifest_optional_fields_none() -> None:
@@ -104,12 +86,10 @@ def test_service_manifest_optional_fields_none() -> None:
         env_file=None,
         layout_hook=None,
         services=(),
-        status_urls=(),
     )
     assert manifest.env_file is None
     assert manifest.layout_hook is None
     assert manifest.services == ()
-    assert manifest.status_urls == ()
 
 
 def test_service_manifest_is_frozen() -> None:
@@ -120,7 +100,6 @@ def test_service_manifest_is_frozen() -> None:
         env_file=None,
         layout_hook=None,
         services=(),
-        status_urls=(),
     )
     with pytest.raises(FrozenInstanceError):
         manifest.session_prefix = "other"  # type: ignore[misc]
@@ -170,7 +149,6 @@ def test_service_manifest_logs_defaults_to_log_config() -> None:
         env_file=None,
         layout_hook=None,
         services=(),
-        status_urls=(),
     )
     assert isinstance(manifest.logs, LogConfig)
     assert manifest.logs == LogConfig()
@@ -183,7 +161,6 @@ def test_service_manifest_logs_custom() -> None:
         env_file=None,
         layout_hook=None,
         services=(),
-        status_urls=(),
         logs=lc,
     )
     assert manifest.logs == lc
@@ -216,7 +193,6 @@ def test_service_manifest_equality() -> None:
             env_file=".winter.env",
             layout_hook=None,
             services=(Service(name="backend", target=Target(0, 0), cmd="cmd"),),
-            status_urls=(),
         )
 
     assert make() == make()
@@ -228,13 +204,12 @@ def test_service_manifest_equality() -> None:
 
 
 def test_service_manifest_workspace_fields_default() -> None:
-    """New workspace fields default to () and None without breaking existing construction."""
+    """workspace_services and workspace_layout_hook default to () and None."""
     manifest = ServiceManifest(
         session_prefix="mp",
         env_file=None,
         layout_hook="layout-hook.sh",
         services=(Service(name="backend", target=Target(0, 0), cmd="cmd"),),
-        status_urls=(StatusUrl(label="BE", url="http://localhost:4020"),),
     )
     assert manifest.workspace_services == ()
     assert manifest.workspace_layout_hook is None
@@ -247,7 +222,6 @@ def test_service_manifest_workspace_fields_explicit() -> None:
         env_file=None,
         layout_hook=None,
         services=(),
-        status_urls=(),
         workspace_services=(ws_svc,),
         workspace_layout_hook="ai/project/workspace-layout-hook.sh",
     )

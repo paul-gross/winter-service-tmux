@@ -40,7 +40,6 @@ def _make_manifest(*service_names: str) -> ServiceManifest:
         env_file=".winter.env",
         layout_hook=None,
         services=services,
-        status_urls=(),
     )
 
 
@@ -53,7 +52,6 @@ def _make_ctx(manifest: ServiceManifest) -> SessionContext:
         session_prefix=manifest.session_prefix,
         services=manifest.services,
         layout_hook=manifest.layout_hook,
-        status_urls=manifest.status_urls,
         logs=manifest.logs,
         env_vars=None,
         env_file_path=None,
@@ -400,7 +398,6 @@ def _make_pane_manifest(name: str, window: int = 0, pane: int = 0) -> ServiceMan
         env_file=None,
         layout_hook=None,
         services=(svc,),
-        status_urls=(),
     )
 
 
@@ -464,7 +461,6 @@ def test_pane_mode_services_filter() -> None:
         env_file=None,
         layout_hook=None,
         services=(svc_shell, svc_other),
-        status_urls=(),
     )
     ctx = _make_ctx(manifest)
     sink = io.StringIO()
@@ -510,7 +506,6 @@ def test_memory_mode_emits_nothing() -> None:
         env_file=None,
         layout_hook=None,
         services=(svc_mem,),
-        status_urls=(),
     )
     fake_repo = FakeLogRepository()
     tmux = FakeTmuxRepository()
@@ -536,7 +531,6 @@ def test_memory_mode_emits_one_line_stderr_diagnostic() -> None:
         env_file=None,
         layout_hook=None,
         services=(svc_mem,),
-        status_urls=(),
     )
     fake_repo = FakeLogRepository()
     tmux = FakeTmuxRepository()
@@ -571,7 +565,6 @@ def test_mixed_file_and_pane_both_contribute() -> None:
         env_file=None,
         layout_hook=None,
         services=(svc_file, svc_pane),
-        status_urls=(),
     )
     fake_repo = FakeLogRepository(segments={"api": ["2026-06-16T10:00:01Z\tapi-msg\n"]})
     tmux = FakeTmuxRepository(capture_text={"0.1": "shell-line\n"})
@@ -822,7 +815,6 @@ def test_ndjson_serialized_line_contains_env_pane_mode() -> None:
         env_file=".winter.env",
         layout_hook=None,
         services=(svc_pane,),
-        status_urls=(),
     )
     ctx = _make_ctx(manifest)
     sink = io.StringIO()
@@ -887,7 +879,6 @@ def _make_ctx_env(env: str, manifest: ServiceManifest) -> SessionContext:
         session_prefix=manifest.session_prefix,
         services=manifest.services,
         layout_hook=manifest.layout_hook,
-        status_urls=manifest.status_urls,
         logs=manifest.logs,
         env_vars=None,
         env_file_path=None,
@@ -1168,7 +1159,6 @@ def test_follow_streams_mixed_file_and_pane() -> None:
         env_file=None,
         layout_hook=None,
         services=(svc_file, svc_pane),
-        status_urls=(),
     )
     ctx = _make_ctx_env("alpha", manifest)
 

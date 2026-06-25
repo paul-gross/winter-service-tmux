@@ -13,7 +13,6 @@ from service_manifest.modules.manifest.model import (
     Service,
     ServiceManifest,
     StartupPolicy,
-    StatusUrl,
     Target,
 )
 from service_manifest.modules.manifest.reader import ManifestReader
@@ -47,7 +46,7 @@ def _read(files: dict[Path, str]) -> ServiceManifest:
 
 
 # ---------------------------------------------------------------------------
-# Valid parse — scalars, services, status urls, target parsing
+# Valid parse — scalars, services, target parsing
 # ---------------------------------------------------------------------------
 
 
@@ -71,14 +70,6 @@ cmd = "npm run dev"
 name = "shell"
 target = "1.0"
 cmd = ""
-
-[[status.url]]
-label = "Backend"
-url = "http://localhost:${BACKEND_PORT}"
-
-[[status.url]]
-label = "Frontend"
-url = "http://localhost:${FRONTEND_PORT}"
 """
     manifest = _read({_COMMITTED_PATH: content})
 
@@ -92,10 +83,6 @@ url = "http://localhost:${FRONTEND_PORT}"
     assert manifest.services[1] == Service(name="frontend", target=Target(window=0, pane=1), cmd="npm run dev")
     assert manifest.services[2] == Service(name="shell", target=Target(window=1, pane=0), cmd="")
 
-    assert len(manifest.status_urls) == 2
-    assert manifest.status_urls[0] == StatusUrl(label="Backend", url="http://localhost:${BACKEND_PORT}")
-    assert manifest.status_urls[1] == StatusUrl(label="Frontend", url="http://localhost:${FRONTEND_PORT}")
-
 
 def test_valid_minimal_manifest() -> None:
     """Only session_prefix is required; all other fields may be absent."""
@@ -105,7 +92,6 @@ def test_valid_minimal_manifest() -> None:
     assert manifest.env_file is None
     assert manifest.layout_hook is None
     assert manifest.services == ()
-    assert manifest.status_urls == ()
 
 
 def test_target_parsed_to_correct_window_and_pane() -> None:
@@ -613,76 +599,27 @@ cmd = ""
 
 
 # ---------------------------------------------------------------------------
-# Overlay semantics — status.url override + append
+# [[status.url]] entries are silently ignored
 # ---------------------------------------------------------------------------
 
 
-def test_overlay_status_url_override_by_label() -> None:
-    committed = """\
+def test_status_url_entries_silently_ignored() -> None:
+    """[[status.url]] is a removed feature — present entries are silently ignored."""
+    content = """\
 session_prefix = "mp"
 
-[[status.url]]
-label = "Backend"
-url = "http://localhost:3000"
-"""
-    overlay = """\
-[[status.url]]
-label = "Backend"
-url = "http://localhost:4100"
-"""
-    manifest = _read({_COMMITTED_PATH: committed, _LOCAL_PATH: overlay})
-    assert len(manifest.status_urls) == 1
-    assert manifest.status_urls[0].url == "http://localhost:4100"
-
-
-def test_overlay_status_url_append_new_label() -> None:
-    committed = """\
-session_prefix = "mp"
+[[service]]
+name = "backend"
+target = "0.0"
+command = "npm start"
 
 [[status.url]]
 label = "Backend"
-url = "http://localhost:3000"
+url = "http://localhost:${BACKEND_PORT}"
 """
-    overlay = """\
-[[status.url]]
-label = "Frontend"
-url = "http://localhost:3001"
-"""
-    manifest = _read({_COMMITTED_PATH: committed, _LOCAL_PATH: overlay})
-    assert len(manifest.status_urls) == 2
-    assert manifest.status_urls[0].label == "Backend"
-    assert manifest.status_urls[1].label == "Frontend"
-
-
-def test_overlay_status_url_override_and_append_preserves_order() -> None:
-    committed = """\
-session_prefix = "mp"
-
-[[status.url]]
-label = "Backend"
-url = "http://localhost:3000"
-
-[[status.url]]
-label = "Frontend"
-url = "http://localhost:3001"
-"""
-    overlay = """\
-[[status.url]]
-label = "Frontend"
-url = "http://localhost:4200"
-
-[[status.url]]
-label = "Docs"
-url = "http://localhost:4300"
-"""
-    manifest = _read({_COMMITTED_PATH: committed, _LOCAL_PATH: overlay})
-    assert len(manifest.status_urls) == 3
-    assert manifest.status_urls[0].label == "Backend"
-    assert manifest.status_urls[0].url == "http://localhost:3000"
-    assert manifest.status_urls[1].label == "Frontend"
-    assert manifest.status_urls[1].url == "http://localhost:4200"
-    assert manifest.status_urls[2].label == "Docs"
-    assert manifest.status_urls[2].url == "http://localhost:4300"
+    manifest = _read({_COMMITTED_PATH: content})
+    assert manifest.session_prefix == "mp"
+    assert len(manifest.services) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -973,56 +910,6 @@ log = "file"
 """
     manifest = _read({_COMMITTED_PATH: committed, _LOCAL_PATH: local})
     assert manifest.services[0].log == LogMode.FILE
-
-
-# ---------------------------------------------------------------------------
-# Overlay merge does NOT mutate the committed dict (AC: shallow-copy aliasing)
-# ---------------------------------------------------------------------------
-
-
-def test_overlay_merge_does_not_mutate_committed_status_url() -> None:
-    """Merging a local overlay into a committed doc with [[status.url]] must not
-    mutate the committed dict's nested 'status' table.
-
-    The prior bug: ``result = dict(committed)`` is shallow, so
-    ``result.setdefault('status', {})['url'] = merged_urls`` would write back
-    into committed's original 'status' dict via the aliased reference.  The fix
-    builds a fresh dict: ``result['status'] = {**committed.get('status', {}),
-    'url': merged_urls}``.
-    """
-    from service_manifest.modules.manifest.reader import ManifestReader
-
-    committed_toml = """\
-session_prefix = "mp"
-
-[[status.url]]
-label = "Backend"
-url = "http://localhost:3000"
-"""
-    overlay_toml = """\
-[[status.url]]
-label = "Backend"
-url = "http://localhost:4100"
-"""
-    abs_committed = _CONFIG_DIR / _COMMITTED_PATH
-    abs_local = _CONFIG_DIR / _LOCAL_PATH
-    fake_fs = FakeFilesystemReader({abs_committed: committed_toml, abs_local: overlay_toml})
-    reader = ManifestReader(fake_fs)
-
-    # Parse the committed dict manually so we can inspect it after merge.
-    import tomllib
-
-    committed_doc = tomllib.loads(committed_toml)
-    original_url = committed_doc["status"]["url"][0]["url"]
-    assert original_url == "http://localhost:3000"
-
-    # Invoke reader.read() — internally calls _merge(committed, local).
-    reader.read(_CONFIG_DIR)
-
-    # The committed_doc must be unchanged — no aliased mutation.
-    assert committed_doc["status"]["url"][0]["url"] == "http://localhost:3000", (
-        "overlay merge mutated the committed dict's nested 'status' table"
-    )
 
 
 # ---------------------------------------------------------------------------

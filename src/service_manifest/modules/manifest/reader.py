@@ -21,7 +21,6 @@ from service_manifest.modules.manifest.model import (
     Service,
     ServiceManifest,
     StartupPolicy,
-    StatusUrl,
     Target,
 )
 
@@ -50,8 +49,7 @@ class ManifestReader:
       (preserving position).  A new name is *appended* after all committed
       services.  An entry's ``scope`` (``"project"`` default, or ``"workspace"``)
       travels inside the entry, so an override carries/sets its own scope.
-    * **``[[status.url]]``**: merged keyed by ``label`` — same
-      override-or-append rule as ``[[service]]``.
+    * **``[[status.url]]``**: silently ignored — this feature has been removed.
     """
 
     def __init__(self, fs: IFilesystemReader) -> None:
@@ -147,12 +145,12 @@ class ManifestReader:
         """Merge *local* overlay on top of *committed* document.
 
         Scalar fields are replaced by the overlay value when present.
-        ``[[service]]`` and ``[[status.url]]`` use keyed override-or-append
-        (the single ``[[service]]`` list carries per-entry ``scope``, so an
-        overlay override keeps/sets its own scope).  ``[logs]`` merges per-key — an overlay
-        ``[logs]`` replaces only the keys it sets, keeping committed values for
-        the rest.  All other top-level keys are replaced wholesale by the
-        overlay value.
+        ``[[service]]`` uses keyed override-or-append (the single ``[[service]]``
+        list carries per-entry ``scope``, so an overlay override keeps/sets its
+        own scope).  ``[logs]`` merges per-key — an overlay ``[logs]`` replaces
+        only the keys it sets, keeping committed values for the rest.  All other
+        top-level keys are replaced wholesale by the overlay value.
+        ``[[status.url]]`` entries in the overlay are silently ignored.
         """
         if not local:
             return committed
@@ -181,15 +179,6 @@ class ManifestReader:
                 [_norm(e) for e in local["service"]],
                 "name",
             )
-
-        # --- [[status.url]]: keyed by "label", override-or-append ---
-        if "status" in local and "url" in local.get("status", {}):
-            merged_urls = ManifestReader._merge_keyed(
-                list(committed.get("status", {}).get("url", [])),
-                local["status"]["url"],
-                "label",
-            )
-            result["status"] = {**committed.get("status", {}), "url": merged_urls}
 
         return result
 
@@ -386,16 +375,6 @@ class ManifestReader:
         services = [svc for svc, scope in parsed_services if scope == "project"]
         workspace_services = [svc for svc, scope in parsed_services if scope == "workspace"]
 
-        # --- [[status.url]] ---
-        raw_urls: list[dict] = doc.get("status", {}).get("url", [])  # type: ignore[type-arg]
-        status_urls: list[StatusUrl] = []
-        for raw_url in raw_urls:
-            label = raw_url.get("label", "")
-            if not isinstance(label, str):
-                raise ManifestError(f"[[status.url]] entry: label must be a string, got {type(label).__name__}")
-            url = raw_url.get("url", "")
-            status_urls.append(StatusUrl(label=label, url=url))
-
         # --- [logs] ---
         raw_logs: dict = doc.get("logs", {})  # type: ignore[type-arg]
         _log_int_fields = ("rotate_size_bytes", "max_rotations", "retention_seconds")
@@ -413,7 +392,6 @@ class ManifestReader:
             env_file=env_file,
             layout_hook=layout_hook,
             services=tuple(services),
-            status_urls=tuple(status_urls),
             logs=logs,
             workspace_services=tuple(workspace_services),
             workspace_layout_hook=workspace_layout_hook,
