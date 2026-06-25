@@ -1,6 +1,6 @@
 # Testing changed orchestrator code against a worktree
 
-The env-root `./up`/`./down`/`./status`/`./restart` symlinks resolve to the **installed** extension (`.winter/ext/service-tmux/workflow/<script>`), not your in-progress worktree — so they run committed code until you repoint them. To exercise changed orchestrator code, override the symlink at the worktree's copy, run the real entrypoint, then restore it (using `alpha` as the example env):
+The env-root `./up`/`./down`/`./status`/`./restart` symlinks resolve to the **installed** extension (`winter-service-tmux:/workflow/<script>`), not your in-progress worktree — so they run committed code until you repoint them. To exercise changed orchestrator code, override the symlink at the worktree's copy, run the real entrypoint, then restore it (using `alpha` as the example env):
 
 ```bash
 readlink alpha/up                                          # record original: ../.winter/ext/service-tmux/workflow/up

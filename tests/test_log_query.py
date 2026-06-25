@@ -76,8 +76,7 @@ def test_parse_tail_invalid_writes_exact_warning() -> None:
     sink = io.StringIO()
     parse_tail("notanumber", err_sink=sink)
     assert (
-        sink.getvalue().strip()
-        == "orchestrate: --tail 'notanumber' is not a valid integer or 'all'; treating as 'all'"
+        sink.getvalue().strip() == "orchestrate: --tail 'notanumber' is not a valid integer or 'all'; treating as 'all'"
     )
 
 

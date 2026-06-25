@@ -123,20 +123,20 @@ class _FakeContainer:
 
         # tmux seam
         class _FakeTmux:
-            def list_sessions(inner_self) -> list[str]:
+            def list_sessions(inner_self) -> list[str]:  # pyright: ignore[reportSelfClsParameterName]  — `inner_self` keeps the enclosing `self` reachable
                 return list(self._sessions)
 
         self.tmux = _FakeTmux()
 
         # builder seam
         class _FakeBuilder:
-            def build(inner_self, env: str, *, workspace_root=None) -> SessionContext:
+            def build(inner_self, env: str, *, workspace_root=None) -> SessionContext:  # pyright: ignore[reportSelfClsParameterName]  — `inner_self` keeps the enclosing `self` reachable
                 self.build_calls.append(env)
                 if self._build_raises is not None:
                     raise self._build_raises
                 return _make_ctx(env)
 
-            def build_workspace(inner_self, *, workspace_root=None) -> SessionContext:
+            def build_workspace(inner_self, *, workspace_root=None) -> SessionContext:  # pyright: ignore[reportSelfClsParameterName]  — `inner_self` keeps the enclosing `self` reachable
                 self.build_workspace_calls.append(workspace_root)
                 if self._build_raises is not None:
                     raise self._build_raises

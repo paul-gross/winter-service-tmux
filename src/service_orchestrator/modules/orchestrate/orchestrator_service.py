@@ -256,9 +256,7 @@ class OrchestratorService:
                 # direct children, so a lingering grandchild or defunct process
                 # would otherwise let a second copy stack into the same pane.
                 self._reaper.reap_descendants([pid])
-                self._stdout.write(
-                    f"Retrying '{svc.name}' (attempt {attempt}/{retries}) in {ctx.session}:{target}\n"
-                )
+                self._stdout.write(f"Retrying '{svc.name}' (attempt {attempt}/{retries}) in {ctx.session}:{target}\n")
                 self._stdout.flush()
                 self._tmux.send_keys(ctx.session, target, line)
                 self._clock.sleep(svc.startup.retry_delay)

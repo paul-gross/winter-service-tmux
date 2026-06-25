@@ -1291,7 +1291,9 @@ def test_status_env_document_populates_declared_health() -> None:
             "pgrep -f frontend": False,
         }
     )
-    svc = _make_service(tmux=tmux, reaper=FakeProcessReaper(children_set={10, 20}), health_checker=health, stdout=io.StringIO())
+    svc = _make_service(
+        tmux=tmux, reaper=FakeProcessReaper(children_set={10, 20}), health_checker=health, stdout=io.StringIO()
+    )
 
     doc = svc.status_env_document(ctx)
 
