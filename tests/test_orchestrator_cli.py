@@ -127,7 +127,7 @@ class _FakeContainer:
 
         # builder seam
         class _FakeBuilder:
-            def build(inner_self, env: str, *, workspace_root=None) -> SessionContext:  # pyright: ignore[reportSelfClsParameterName]  — `inner_self` keeps the enclosing `self` reachable
+            def build(inner_self, env: str, *, workspace_root=None, skip_env_file: bool = False) -> SessionContext:  # pyright: ignore[reportSelfClsParameterName]  — `inner_self` keeps the enclosing `self` reachable
                 self.build_calls.append(env)
                 if self._build_raises is not None:
                     raise self._build_raises
@@ -270,20 +270,28 @@ def test_main_up_down_passthrough_nonzero(
 # ---------------------------------------------------------------------------
 
 
-def test_main_status_zero_patterns_calls_status_for_all_running_envs(
+def test_main_status_zero_patterns_returns_empty_document(
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    # Two running envs: alpha and beta
+    """0 patterns → no scope supplied by core → empty document, no enumeration.
+
+    Phase 4 (winter#109): the status path no longer enumerates live tmux
+    sessions when no pattern is given.  Core always supplies a scope-qualified
+    pattern; 0 patterns is a no-op returning {"envs": []}.
+    """
+    import json
+
     fake = _install(
         monkeypatch,
         _FakeContainer(sessions=["mp-alpha", "mp-beta"]),
     )
     rc = main(["status"])
     assert rc == 0
-    envs_called = [ctx.env for ctx, _ in fake.status_calls]
-    assert "alpha" in envs_called
-    assert "beta" in envs_called
-    assert len(fake.status_calls) == 2
+    # No enumeration: zero status calls despite running sessions
+    assert len(fake.status_calls) == 0
+    doc = json.loads(capsys.readouterr().out)
+    assert doc == {"envs": []}
 
 
 def test_main_status_zero_patterns_no_sessions(
@@ -627,7 +635,7 @@ def test_main_uses_winter_workspace_dir_for_up(
     build_kwargs: list[dict] = []
 
     class _RecordingBuilder:
-        def build(self, env: str, *, workspace_root=None) -> SessionContext:
+        def build(self, env: str, *, workspace_root=None, skip_env_file: bool = False) -> SessionContext:
             build_kwargs.append({"env": env, "workspace_root": workspace_root})
             return _make_ctx(env)
 
@@ -648,7 +656,7 @@ def test_main_no_winter_workspace_dir_passes_none_for_up(
     build_kwargs: list[dict] = []
 
     class _RecordingBuilder:
-        def build(self, env: str, *, workspace_root=None) -> SessionContext:
+        def build(self, env: str, *, workspace_root=None, skip_env_file: bool = False) -> SessionContext:
             build_kwargs.append({"env": env, "workspace_root": workspace_root})
             return _make_ctx(env)
 
@@ -671,11 +679,15 @@ def test_main_status_emits_envs_document(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """The status entrypoint emits exactly one ``{"envs": [...]}`` document on
-    stdout, aggregating every env in scope, regardless of any flag."""
+    stdout, aggregating every env in scope, regardless of any flag.
+
+    Core always passes scope-qualified patterns; use explicit patterns here to
+    exercise the two-env aggregation path (Phase 4: no 0-pattern enumeration).
+    """
     import json
 
     _install(monkeypatch, _FakeContainer(sessions=["mp-alpha", "mp-beta"]))
-    rc = main(["status"])
+    rc = main(["status", "alpha/*", "beta/*"])
     assert rc == 0
 
     out_lines = [ln for ln in capsys.readouterr().out.splitlines() if ln.strip()]
@@ -973,22 +985,26 @@ def test_main_restart_workspace_glob_expands_against_workspace_services(
 # ---------------------------------------------------------------------------
 
 
-def test_main_status_zero_patterns_mixed_env_and_workspace_sessions(
+def test_main_status_explicit_patterns_workspace_and_env_routes_correctly(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """THE CRITICAL RISK #1 TEST.
+    """THE CRITICAL RISK #1 TEST (Phase 4 form).
 
-    When both mp-alpha (env) and mp-workspace (workspace singleton) are running:
-    - status with 0 patterns must include BOTH sessions
-    - the workspace session must be built via build_workspace (worktree_dir=ws_root)
-    - the env session must be built via build (worktree_dir=ws_root/alpha)
-    - NO phantom ws_root/workspace context must be created
+    When core supplies both workspace/* and alpha/* patterns (as it does in the
+    Phase 4 call-matrix), the status path must:
+    - build the workspace ctx via build_workspace (worktree_dir=ws_root)
+    - build the env ctx via build (worktree_dir=ws_root/alpha)
+    - NOT call build('workspace', ...) for the workspace scope
+
+    Phase 4 (winter#109): the 0-pattern self-enumeration has been removed; core
+    always passes explicit scope-qualified patterns.  This test exercises the
+    N-pattern path with both workspace and env patterns.
     """
     fake = _install(
         monkeypatch,
         _FakeContainer(sessions=["mp-alpha", "mp-workspace"]),
     )
-    rc = main(["status"])
+    rc = main(["status", "alpha/*", "workspace"])
     assert rc == 0
 
     # Exactly two status calls — one for alpha, one for workspace
@@ -1004,16 +1020,15 @@ def test_main_status_zero_patterns_mixed_env_and_workspace_sessions(
         f"expected {_WORKSPACE!r} (must be ws_root, not ws_root/workspace)"
     )
 
-    # build_workspace was called (for workspace session)
+    # build_workspace was called (for workspace scope)
     assert len(fake.build_workspace_calls) >= 1
 
     # "workspace" must NOT appear in build_calls (no env-scoped build for workspace)
     assert "workspace" not in fake.build_calls, (
-        "build('workspace', ...) was called — this is the Risk #1 bug: "
-        "workspace session must be routed through build_workspace, not build"
+        "build('workspace', ...) was called — workspace scope must be routed through build_workspace, not build"
     )
 
-    # Env session ctx has worktree_dir == ws_root/alpha
+    # Env ctx has worktree_dir == ws_root/alpha
     alpha_ctx = next(ctx for ctx, _ in fake.status_calls if ctx.env == "alpha")
     assert alpha_ctx.worktree_dir == _WORKSPACE / "alpha"
 

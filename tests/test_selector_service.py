@@ -87,7 +87,7 @@ class _FakeBuilder:
         self.build_calls: list[str] = []
         self.build_workspace_calls: list[Path | None] = []
 
-    def build(self, env: str, *, workspace_root: Path | None = None) -> SessionContext:
+    def build(self, env: str, *, workspace_root: Path | None = None, skip_env_file: bool = False) -> SessionContext:
         self.build_calls.append(env)
         if self._build_raises is not None:
             raise self._build_raises

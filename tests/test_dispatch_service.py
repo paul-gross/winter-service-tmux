@@ -92,7 +92,7 @@ class _FakeBuilder:
         self.build_calls: list[str] = []
         self.build_workspace_calls: list[Path | None] = []
 
-    def build(self, env: str, *, workspace_root: Path | None = None) -> SessionContext:
+    def build(self, env: str, *, workspace_root: Path | None = None, skip_env_file: bool = False) -> SessionContext:
         self.build_calls.append(env)
         if self._raises is not None:
             raise self._raises
@@ -235,7 +235,7 @@ def test_collect_status_all_envs_build_error_folds_rc() -> None:
     err = StringIO()
 
     class _FlakeyBuilder:
-        def build(self, env: str, *, workspace_root=None) -> SessionContext:
+        def build(self, env: str, *, workspace_root=None, skip_env_file: bool = False) -> SessionContext:
             if env == "alpha":
                 raise OrchestratorError("session not found")
             return _make_ctx(env)

@@ -1,5 +1,11 @@
 # Testing changed orchestrator code against a worktree
 
+**Verifying the `status` path requires the feature core too.** Since winter#109, `status` env enumeration and `.winter.env` sourcing live in winter-cli core, not this provider. If you are verifying a change that touches the status path, also point at the feature core with `--winter` (see `workspace:/ai/winter-cli/root-flags.md`):
+
+```bash
+winter --winter=./alpha/winter --service-orchestrator=./alpha/winter-service-tmux service status alpha
+```
+
 The env-root `./up`/`./down`/`./status`/`./restart` symlinks resolve to the **installed** extension (`winter-service-tmux:/workflow/<script>`), not your in-progress worktree — so they run committed code until you repoint them. To exercise changed orchestrator code, override the symlink at the worktree's copy, run the real entrypoint, then restore it (using `alpha` as the example env):
 
 ```bash

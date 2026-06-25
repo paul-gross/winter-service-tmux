@@ -10,7 +10,7 @@ Action-specific argv shapes (patterns are ``<env>/<svc>`` segment-globs):
 
 - ``up <env>``              — single env, no patterns
 - ``down <env>``            — single env, no patterns
-- ``status [<pattern>...]`` — 0 or more patterns; 0 means all running envs
+- ``status [<pattern>...]`` — 0 or more patterns; core always supplies a scope-qualified pattern
 - ``restart <pattern>...``  — 1 or more patterns (non-zero if none given)
 - ``logs <pattern>... [render flags]`` — 1 or more patterns, plus render flags
 
@@ -42,7 +42,6 @@ import sys
 from pathlib import Path
 
 from service_orchestrator.container import Container
-from service_orchestrator.modules.orchestrate.env_enumerator import running_envs
 from service_orchestrator.modules.orchestrate.log_query import (
     LogRenderOptions,
     parse_log_args,
@@ -50,10 +49,6 @@ from service_orchestrator.modules.orchestrate.log_query import (
 from service_orchestrator.modules.orchestrate.request_parser import (
     ParseError,
     parse_request,
-)
-from service_orchestrator.modules.orchestrate.session_context_builder import (
-    WORKSPACE_TARGET,
-    build_for_target,
 )
 from service_orchestrator.modules.orchestrate.status_report import build_status_document
 
@@ -67,38 +62,23 @@ def _collect_status_docs(
 
     Returns ``(env_docs, rc)``.  Diagnostics go to stderr; the caller owns
     serialising the aggregate document to stdout exactly once.
+
+    On the status path, core (winter-cli) always supplies exactly one
+    scope-qualified pattern per invocation (e.g. ``alpha/*`` or
+    ``workspace/*``).  The provider must NOT enumerate live tmux sessions
+    to discover scopes — core owns scope enumeration.  With 0 patterns
+    (legacy direct invocation) no scopes are known and an empty document
+    is returned.
     """
     selector = container.selector
     dispatch = container.dispatch
 
     if not patterns:
-        # 0 patterns → status all running envs.
-        sessions = container.tmux.list_sessions()
-        if not sessions:
-            return [], 0
-
-        # Derive prefix from the first session to enumerate envs.
-        # Prefer a non-workspace seed for prefix resolution (workspace ctx
-        # carries the same prefix, but a regular env seed is more robust when
-        # workspace_services is empty).
-        candidate_session = sessions[0]
-        candidate_env_name = candidate_session.split("-", 1)[1] if "-" in candidate_session else candidate_session
-        if candidate_env_name == WORKSPACE_TARGET and len(sessions) > 1:
-            alt = sessions[1]
-            candidate_env_name = alt.split("-", 1)[1] if "-" in alt else alt
-        try:
-            seed_ctx = build_for_target(
-                container.session_context_builder,
-                candidate_env_name,
-                workspace_root=workspace_root,
-            )
-        except Exception as exc:
-            print(f"orchestrate: could not read manifest: {exc}", file=sys.stderr)
-            return [], 1
-
-        prefix = seed_ctx.session_prefix
-        envs = running_envs(container.tmux, prefix)
-        return dispatch.collect_status_all_envs(envs, workspace_root)
+        # 0 patterns: no scope supplied by core.  Core always passes at least
+        # one scope-qualified pattern.  Return an empty document without
+        # enumerating live tmux sessions (self-enumeration is removed on the
+        # status path per Phase 4 of winter#109).
+        return [], 0
 
     # N patterns → split workspace vs env patterns.
     workspace_pats, env_pats = selector.split_workspace_patterns(patterns)

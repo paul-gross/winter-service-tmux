@@ -169,6 +169,7 @@ def build_for_target(
     target: str,
     *,
     workspace_root: Path | None = None,
+    skip_env_file: bool = False,
 ) -> SessionContext:
     """Dispatcher: route *target* to the correct context builder.
 
@@ -184,7 +185,10 @@ def build_for_target(
         target: Either ``WORKSPACE_TARGET`` or a feature-env name (e.g. ``"alpha"``).
         workspace_root: Optional workspace root override forwarded to the
             underlying builder method.
+        skip_env_file: When ``True``, forwarded to ``builder.build()`` so that
+            env-file reading is skipped on the status path.  Ignored for the
+            workspace target (``build_workspace`` never reads an env file).
     """
     if target == WORKSPACE_TARGET:
         return builder.build_workspace(workspace_root=workspace_root)
-    return builder.build(target, workspace_root=workspace_root)
+    return builder.build(target, workspace_root=workspace_root, skip_env_file=skip_env_file)
