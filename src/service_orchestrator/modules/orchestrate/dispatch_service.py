@@ -67,74 +67,29 @@ class DispatchService:
     # Private shared skeleton
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Context builders — all actions skip env-file reading.
+    #
+    # Winter-cli core computes WINTER_ENV / WINTER_ENV_INDEX / WINTER_PORT_BASE /
+    # WINTER_WORKSPACE_PORT_BASE and any [env.vars] entries via
+    # EnvProvisionerService and injects them into the provider subprocess
+    # environment before invoking any action (up/down/restart/logs/status).
+    # The provider must therefore read these vars from os.environ rather than
+    # sourcing .winter.env itself.
+    #
+    # _build_ctx and _build_workspace_ctx are the shared
+    # implementations: they build a SessionContext with skip_env_file=True
+    # (no filesystem read) and overlay the current process environment as
+    # env_vars so that _port_base() and _service_health() see the
+    # core-injected values.
+    # ------------------------------------------------------------------
+
     def _build_ctx(
         self,
         target: str,
         workspace_root: Path | None,
-        *,
-        manifest_error_infix: bool = False,
     ) -> tuple[SessionContext | None, int]:
-        """Build a SessionContext for *target*.
-
-        Returns ``(ctx, 0)`` on success, ``(None, 1)`` on failure.
-
-        When *manifest_error_infix* is True (up/down path), ManifestError
-        produces ``orchestrate: env '<target>': manifest error: <exc>`` rather
-        than the plain ``orchestrate: env '<target>': <exc>`` used by all other
-        actions.
-        """
-        try:
-            ctx = build_for_target(self._builder, target, workspace_root=workspace_root)
-            return ctx, 0
-        except ManifestError as exc:
-            if manifest_error_infix:
-                print(
-                    f"orchestrate: env '{target}': manifest error: {exc}",
-                    file=self._err,
-                )
-            else:
-                print(f"orchestrate: env '{target}': {exc}", file=self._err)
-            return None, 1
-        except (OSError, OrchestratorError) as exc:
-            print(f"orchestrate: env '{target}': {exc}", file=self._err)
-            return None, 1
-
-    def _build_workspace_ctx(
-        self,
-        workspace_root: Path | None,
-        action: str,
-    ) -> tuple[SessionContext | None, int]:
-        """Build workspace SessionContext; print workspace-scoped error on failure."""
-        try:
-            ctx = build_for_target(self._builder, WORKSPACE_TARGET, workspace_root=workspace_root)
-            return ctx, 0
-        except (ManifestError, OSError, OrchestratorError) as exc:
-            print(f"orchestrate: {action}: workspace: {exc}", file=self._err)
-            return None, 1
-
-    # ------------------------------------------------------------------
-    # Status-path context builders (Phase 4: env-vars from process env)
-    #
-    # On the status path, core (winter-cli) sources the scope's env file
-    # and injects WINTER_ENV / WINTER_ENV_INDEX / WINTER_PORT_BASE plus
-    # every .winter.env variable into the provider subprocess environment
-    # before calling ``status <scope>/*``.  The provider must therefore
-    # read WINTER_PORT_BASE from os.environ rather than self-sourcing the
-    # env file.  These helpers build a SessionContext with skip_env_file=True
-    # (no filesystem read) and then inject the current os.environ as env_vars
-    # so that _port_base() and _service_health() on the status path read from
-    # the core-injected process environment.
-    #
-    # up / down / restart / logs are NOT routed through these helpers; they
-    # continue to source .winter.env via the standard _build_ctx path.
-    # ------------------------------------------------------------------
-
-    def _build_status_ctx(
-        self,
-        target: str,
-        workspace_root: Path | None,
-    ) -> tuple[SessionContext | None, int]:
-        """Build a SessionContext for the STATUS path, injecting os.environ as env_vars.
+        """Build a SessionContext for any action, injecting os.environ as env_vars.
 
         Skips env-file reading (``skip_env_file=True``) and replaces
         ``env_vars`` with the current process environment so that
@@ -147,18 +102,18 @@ class DispatchService:
             ctx = dataclasses.replace(ctx, env_vars=dict(os.environ))
             return ctx, 0
         except ManifestError as exc:
-            print(f"orchestrate: env '{target}': {exc}", file=self._err)
+            print(f"orchestrate: env '{target}': manifest error: {exc}", file=self._err)
             return None, 1
         except (OSError, OrchestratorError) as exc:
             print(f"orchestrate: env '{target}': {exc}", file=self._err)
             return None, 1
 
-    def _build_workspace_status_ctx(
+    def _build_workspace_ctx(
         self,
         workspace_root: Path | None,
         action: str,
     ) -> tuple[SessionContext | None, int]:
-        """Build workspace SessionContext for the STATUS path, injecting os.environ.
+        """Build workspace SessionContext for any action, injecting os.environ.
 
         ``build_workspace`` already sets env_vars=None; we overlay os.environ so
         that any WINTER_WORKSPACE_PORT_BASE core injects for the workspace scope
@@ -209,7 +164,10 @@ class DispatchService:
 
     def up(self, env: str, workspace_root: Path | None) -> int:
         """Build ctx for *env* and call orchestrator.up.  Returns exit code."""
-        ctx, rc = self._build_ctx(env, workspace_root, manifest_error_infix=(env != WORKSPACE_TARGET))
+        if env == WORKSPACE_TARGET:
+            ctx, rc = self._build_workspace_ctx(workspace_root, "up")
+        else:
+            ctx, rc = self._build_ctx(env, workspace_root)
         if ctx is None:
             return rc
         try:
@@ -220,7 +178,10 @@ class DispatchService:
 
     def down(self, env: str, workspace_root: Path | None) -> int:
         """Build ctx for *env* and call orchestrator.down.  Returns exit code."""
-        ctx, rc = self._build_ctx(env, workspace_root, manifest_error_infix=(env != WORKSPACE_TARGET))
+        if env == WORKSPACE_TARGET:
+            ctx, rc = self._build_workspace_ctx(workspace_root, "down")
+        else:
+            ctx, rc = self._build_ctx(env, workspace_root)
         if ctx is None:
             return rc
         try:
@@ -249,7 +210,7 @@ class DispatchService:
     ) -> tuple[list[dict], int]:  # type: ignore[type-arg]
         """Build a per-env status document for each (env, svc_names) pair.
 
-        Builds ctx per env via ``_build_status_ctx`` (env-vars from process
+        Builds ctx per env via ``_build_ctx`` (env-vars from process
         environment, no self-sourcing) then calls
         ``orchestrator.status_env_document``.  Collects the returned dicts in
         iteration order; catches ``OrchestratorError`` per env (rc=1, env
@@ -258,7 +219,7 @@ class DispatchService:
         rc = current_rc
         docs: list[dict] = []  # type: ignore[type-arg]
         for env, svc_names in env_services.items():
-            ctx, build_rc = self._build_status_ctx(env, workspace_root)
+            ctx, build_rc = self._build_ctx(env, workspace_root)
             if ctx is None:
                 rc = build_rc
                 continue
@@ -304,12 +265,12 @@ class DispatchService:
     ) -> tuple[list[dict], int]:  # type: ignore[type-arg]
         """Collect the workspace-scope status document for workspace patterns.
 
-        Builds the workspace context via ``_build_workspace_status_ctx``
+        Builds the workspace context via ``_build_workspace_ctx``
         (env-vars from process environment), expands svc-globs against workspace
         services, and calls ``orchestrator.status_env_document`` with the
         matched subset.  Returns ``([], 1)`` on a dead pattern.
         """
-        ctx, build_rc = self._build_workspace_status_ctx(workspace_root, action)
+        ctx, build_rc = self._build_workspace_ctx(workspace_root, action)
         if ctx is None:
             return [], build_rc
 

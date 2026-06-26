@@ -220,24 +220,33 @@ class OrchestratorService:
 
         Captured: non-empty command AND log=FILE → writer-wrapped.
         Bare: empty command OR log!=FILE → plain launch line.
+
+        Each pane self-sources its scope environment via
+        ``eval "$(winter env <scope>)"`` when *ctx.inject_scope* is not ``None``.
+        When *ctx.env_file_path* is not ``None``, the manifest machine-creds
+        file is also dot-sourced after the scope eval.
+        Local/env-less mode (``inject_scope=None``, ``env_file_path=None``)
+        omits both prefixes.
         """
         captured = bool(svc.cmd) and svc.log == LogMode.FILE
         if captured:
             logfile = self._log_repo.log_path(ctx.worktree_dir, svc.name)
             return build_launch_line(
                 ctx.worktree_dir,
-                ctx.env_file_path,
+                ctx.inject_scope,
                 svc.name,
                 svc.cmd,
+                env_file_path=ctx.env_file_path,
                 logfile=logfile,
                 rotate_size_bytes=ctx.logs.rotate_size_bytes,
                 max_rotations=ctx.logs.max_rotations,
             )
         return build_launch_line(
             ctx.worktree_dir,
-            ctx.env_file_path,
+            ctx.inject_scope,
             svc.name,
             svc.cmd,
+            env_file_path=ctx.env_file_path,
         )
 
     def _await_startup(self, ctx: SessionContext, pane_pids: dict[str, int]) -> list[str]:
@@ -488,9 +497,10 @@ class OrchestratorService:
 
         line = build_launch_line(
             ctx.worktree_dir,
-            ctx.env_file_path,
+            ctx.inject_scope,
             service.name,
             service.cmd,
+            env_file_path=ctx.env_file_path,
         )
         self._tmux.send_keys(ctx.session, target, line)
         self._stdout.write(f"Restarted '{service_name}' in {ctx.session}:{target}\n")
@@ -533,14 +543,13 @@ class OrchestratorService:
         Provides the WINTER_TMUX_* contract documented in
         ``workflow/layout-hook.sh.example``.
         """
+        # base inherits WINTER_ENV_INDEX, WINTER_PORT_BASE, and all other
+        # core-injected vars directly from os.environ (set by core before
+        # invoking this subprocess on up/down/status).  No explicit pass-through
+        # from ctx.env_vars is needed: in every production call path ctx.env_vars
+        # is either dict(os.environ) (identical to base's source) or None.
         base: dict[str, str] = dict(os.environ)
         base["WINTER_TMUX_SESSION"] = ctx.session
         base["WINTER_TMUX_WORKTREE_DIR"] = str(ctx.worktree_dir)
         base["WINTER_ENV"] = ctx.env
-        # WINTER_ENV_INDEX and WINTER_PORT_BASE are set in .winter.env when
-        # present; pass them through from env_vars if available.
-        env_vars = ctx.env_vars or {}
-        for key in ("WINTER_ENV_INDEX", "WINTER_PORT_BASE"):
-            if key in env_vars:
-                base[key] = env_vars[key]
         return base

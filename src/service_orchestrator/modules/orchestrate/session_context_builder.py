@@ -10,7 +10,11 @@ Resolution decisions (see ``00-plan.md`` resolved decisions #1, #2, R1):
 - ``layout_hook`` / ``workspace_layout_hook`` are resolved relative to the
   **config dir** — they are bare filenames in the manifest.
 - Env file path is resolved relative to the **worktree dir** (per-env file).
-- ``env_vars=None`` / ``env_file_path=None`` are the "local" mode signals.
+- ``inject_scope=None`` is the local/env-less signal for pane scope-sourcing.
+- ``env_file_path`` is the resolved absolute path to the manifest machine-creds
+  file (``manifest.env_file`` joined to ``worktree_dir``); it drives POSIX
+  dot-sourcing in the pane launch prefix and is set independently of
+  ``skip_env_file`` (which only governs in-process ``env_vars`` resolution).
 
 Extension-declared services
 ----------------------------
@@ -80,9 +84,10 @@ class SessionContextBuilder:
                 resolved, as a ``Path | None``).  Pass ``None`` explicitly to
                 force no env file.  Omit (pass the sentinel) to let the
                 manifest's ``env_file`` field drive resolution.
-            skip_env_file: When ``True``, env file resolution is skipped and
-                ``env_vars``/``env_file_path`` are both set to ``None``
-                (the "local" mode used by ``env_cli.py``).
+            skip_env_file: When ``True``, in-process env-file resolution is
+                skipped and ``env_vars`` is set to ``None`` (the path used by
+                ``env_cli.py``).  ``env_file_path`` is still set from the
+                manifest — it drives pane dot-sourcing independently.
         """
         ws_root = workspace_root if workspace_root is not None else self._locator.workspace_root()
         cfg_dir = self._locator.config_dir()
@@ -90,15 +95,16 @@ class SessionContextBuilder:
         manifest = self._manifest_reader.read(cfg_dir)
         manifest = _apply_ext_manifest(manifest)
 
+        # env_file_path: always derive from the manifest for pane dot-sourcing,
+        # regardless of skip_env_file (which only governs in-process env_vars).
+        env_file_path = worktree_dir / manifest.env_file if manifest.env_file is not None else None
+
         if skip_env_file:
-            env_file_path: Path | None = None
             env_vars: dict[str, str] | None = None
         elif env_file_override is not _SENTINEL:
-            env_file_path = env_file_override  # type: ignore[assignment]
-            env_vars = self._env_reader.resolve(env_file_path)
+            env_vars = self._env_reader.resolve(env_file_override)  # type: ignore[arg-type]
         else:
             # Derive from manifest declaration: resolve relative to worktree.
-            env_file_path = worktree_dir / manifest.env_file if manifest.env_file is not None else None
             env_vars = self._env_reader.resolve(env_file_path)
 
         return SessionContext(
@@ -111,6 +117,7 @@ class SessionContextBuilder:
             layout_hook=manifest.layout_hook,
             logs=manifest.logs,
             env_vars=env_vars,
+            inject_scope=env,
             env_file_path=env_file_path,
         )
 
@@ -130,7 +137,8 @@ class SessionContextBuilder:
         The session's services/layout are selected from the manifest's
         ``workspace_*`` fields, so ``OrchestratorService`` consumes them
         identically to a feature-env session.  No env file is loaded
-        (``env_vars=None``, ``env_file_path=None``).
+        (``env_vars=None``, ``env_file_path=None`` — workspace services do not
+        dot-source a per-env machine-creds file).
         """
         ws_root = workspace_root if workspace_root is not None else self._locator.workspace_root()
         cfg_dir = self._locator.config_dir()
@@ -146,6 +154,7 @@ class SessionContextBuilder:
             layout_hook=manifest.workspace_layout_hook,
             logs=manifest.logs,
             env_vars=None,
+            inject_scope=None,
             env_file_path=None,
         )
 

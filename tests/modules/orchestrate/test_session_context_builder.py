@@ -2,7 +2,7 @@
 
 Covers:
 - build_workspace: worktree_dir==workspace_root, env=="workspace",
-  session=="<prefix>-workspace", env_vars is None, env_file_path is None,
+  session=="<prefix>-workspace", env_vars is None, inject_scope is None,
   ctx.services == the manifest's workspace_services (scope selected directly).
 - build_for_target: routes "workspace" to build_workspace, routes any other
   name to build().
@@ -141,6 +141,7 @@ def _make_workspace_ctx(
         layout_hook=manifest.workspace_layout_hook,
         logs=manifest.logs,
         env_vars=None,
+        inject_scope=None,
         env_file_path=None,
     )
 
@@ -178,6 +179,38 @@ def test_build_config_dir_from_locator() -> None:
     builder = _make_builder()
     ctx = builder.build("alpha")
     assert ctx.config_dir == _CONFIG_DIR
+
+
+def test_build_env_file_path_resolved_from_manifest() -> None:
+    """build() sets env_file_path = worktree_dir / manifest.env_file when declared."""
+    builder = _make_builder()
+    ctx = builder.build("alpha")
+    expected = _WORKSPACE / "alpha" / ".winter.env"
+    assert ctx.env_file_path == expected
+
+
+def test_build_env_file_path_is_none_when_manifest_omits_env_file() -> None:
+    """When the manifest declares no env_file, env_file_path is None."""
+    toml = """\
+session_prefix = "mp"
+
+[[service]]
+name = "backend"
+target = "0.0"
+cmd = "cmd"
+"""
+    builder = _make_builder(toml)
+    ctx = builder.build("alpha")
+    assert ctx.env_file_path is None
+
+
+def test_build_env_file_path_set_even_when_skip_env_file_true() -> None:
+    """skip_env_file only skips in-process env_vars; env_file_path is always set from manifest."""
+    builder = _make_builder()
+    ctx = builder.build("alpha", skip_env_file=True)
+    expected = _WORKSPACE / "alpha" / ".winter.env"
+    assert ctx.env_file_path == expected
+    assert ctx.env_vars is None  # skip_env_file DID suppress in-process reading
 
 
 def test_build_workspace_config_dir_from_locator() -> None:
@@ -234,7 +267,14 @@ def test_build_workspace_env_vars_is_none() -> None:
     assert ctx.env_vars is None
 
 
+def test_build_workspace_inject_scope_is_none() -> None:
+    builder = _make_builder()
+    ctx = builder.build_workspace()
+    assert ctx.inject_scope is None
+
+
 def test_build_workspace_env_file_path_is_none() -> None:
+    """Workspace sessions never dot-source a per-env machine-creds file."""
     builder = _make_builder()
     ctx = builder.build_workspace()
     assert ctx.env_file_path is None

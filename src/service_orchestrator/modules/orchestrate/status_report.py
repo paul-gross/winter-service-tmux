@@ -42,18 +42,36 @@ def logwriter_path() -> Path:
 
 def build_launch_line(
     worktree_dir: Path,
-    env_file_path: Path | None,
+    scope: str | None,
     name: str,
     command: str,
+    env_file_path: Path | None = None,
     logfile: Path | None = None,
     rotate_size_bytes: int | None = None,
     max_rotations: int | None = None,
 ) -> str:
     """Build the tmux send-keys launch line for one service.
 
-    Reproduces the bash ``winter_tmux_send_service`` assembly exactly::
+    Assembles the pane launch line::
 
-        cd '<worktree_dir>' && [source '<env_file_path>' &&] echo '=== <name> ===' [&& <command>]
+        cd '<worktree_dir>' [&& eval "$(winter env '<scope>')"] [&& . '<env_file>']
+            && echo '=== <name> ===' [&& <command>]
+
+    When *scope* is not ``None`` the pane shell self-sources the full scope
+    environment via POSIX ``eval "$(winter env <scope>)"`` before the banner.
+    This brings all ``WINTER_*`` base vars and ``[env.vars]`` entries into the
+    pane without the orchestrator process executing ``winter`` itself — the
+    entry shim already sourced the scope env before ``exec python3``, and each
+    pane self-sources independently.
+
+    When *env_file_path* is not ``None`` a POSIX dot-source (``&&
+    . '<env_file_path>'``) is appended after the ``eval "$(winter env ...)"``
+    segment (or after ``cd <wt>`` when *scope* is ``None``).  This layers
+    machine-specific credentials from the manifest ``env_file`` (e.g.
+    ``.env.local``) on top of winter's scope vars.
+
+    When *scope* is ``None`` (local/env-less mode or the workspace session) no
+    eval prefix is added — just ``cd <wt>``.
 
     When *command* is empty (an interactive ``shell`` pane), the trailing
     ``&& <command>`` is omitted — the pane gets the banner and sits at a
@@ -63,7 +81,7 @@ def build_launch_line(
     **and** *command* is non-empty, the command is wrapped so its stdout and
     stderr pipe through the capture writer::
 
-        cd '<wt>' && source '<env>' && echo '=== <name> ===' &&
+        cd '<wt>' [&& eval "$(winter env '<scope>')"] [&& . '<env_file>'] && echo '=== <name> ===' &&
         { <command> ; } 2>&1 | python3 '<writer>' '<logfile>'
         --rotate-size <N> --max-rotations <M>
 
@@ -72,8 +90,10 @@ def build_launch_line(
     echoes every raw line to stdout so the pane stays live.
     """
     prefix = f"cd {shlex.quote(str(worktree_dir))}"
+    if scope is not None:
+        prefix = f'{prefix} && eval "$(winter env {shlex.quote(scope)})"'
     if env_file_path is not None:
-        prefix = f"{prefix} && source {shlex.quote(str(env_file_path))}"
+        prefix = f"{prefix} && . {shlex.quote(str(env_file_path))}"
 
     quoted_banner = shlex.quote(f"=== {name} ===")
     line = f"{prefix} && echo {quoted_banner}"

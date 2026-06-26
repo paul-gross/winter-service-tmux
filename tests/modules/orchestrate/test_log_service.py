@@ -54,7 +54,8 @@ def _make_ctx(manifest: ServiceManifest) -> SessionContext:
         layout_hook=manifest.layout_hook,
         logs=manifest.logs,
         env_vars=None,
-        env_file_path=None,
+        inject_scope="alpha",
+        env_file_path=_WORKTREE / ".winter.env",
     )
 
 
@@ -881,7 +882,8 @@ def _make_ctx_env(env: str, manifest: ServiceManifest) -> SessionContext:
         layout_hook=manifest.layout_hook,
         logs=manifest.logs,
         env_vars=None,
-        env_file_path=None,
+        inject_scope="alpha",
+        env_file_path=worktree / ".winter.env",
     )
 
 

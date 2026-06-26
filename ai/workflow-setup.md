@@ -24,7 +24,7 @@ This is a guided walkthrough, not a script. Your job is to teach the user how th
 
 When an agent spins up a feature environment, it runs `./up` to start all the services needed to use the application. `config.toml` tells the orchestrator exactly what to launch and in which tmux pane. Without it, `./up` errors out in every worktree.
 
-This extension does **not** own `.winter.env`. The workspace base seeds it during `winter ws init <name>` with `WINTER_ENV`, `WINTER_ENV_INDEX`, and `WINTER_PORT_BASE`. The project's own `project-setup.md` appends project-specific variables (e.g. `BACKEND_PORT`, `DATABASE_URL`) below the managed block. This extension just *reads* `.winter.env` — when `env_file = ".winter.env"` is set in `config.toml`, the orchestrator sources it before launching each service pane, so every service starts with whatever vars the workspace and the project have populated.
+This extension does **not** own the environment. Winter-cli core computes each scope's environment — `WINTER_ENV`, `WINTER_ENV_INDEX`, `WINTER_PORT_BASE`, and any `[env.vars]` entries declared in the workspace config — and injects it into the provider process on `up`, `down`, and `status` only (not `restart` or `logs`). On `restart`, the relaunched pane self-sources its env via `eval "$(winter env <scope>)"` — the same mechanism every pane uses on `up` — rather than receiving a fresh provider-level injection. Each pane's launch line includes this self-source prefix so panes always carry the correct scope env regardless of which action started them; no `.winter.env` file is written or sourced by core. When you run services directly from an env directory (e.g. `alpha/up`), the entry shim sources `eval "$(winter env <env>)"` before launching the orchestrator, so the process environment is already populated. The `env_file` key in `config.toml` is optional: set it only when a service command or health probe needs additional vars from a local file (e.g. machine-specific secrets) beyond what core injects.
 
 ## Prerequisites
 
@@ -78,7 +78,7 @@ Ask **one** question:
 
 - "automatic": tell the user "Spawning a research agent — it'll look at start scripts, server entry points, docker-compose, and READMEs across the project repos and report back what it finds." Then spawn an Opus subagent (always from the workspace root per the workspace rules) with a self-contained prompt:
   - Tell it which repos to inspect (read from `workspace:/.winter/config.toml` `[[project_repository]]` entries)
-  - Ask it to find: start commands per service (`npm run dev`, `python manage.py runserver`, etc.), the directory each runs from, ports each service binds to, env vars each consumes from `.winter.env`, any docker-compose services that need to be `up`'d
+  - Ask it to find: start commands per service (`npm run dev`, `python manage.py runserver`, etc.), the directory each runs from, ports each service binds to, any env vars each consumes beyond the WINTER_* base vars injected by core, any docker-compose services that need to be `up`'d
   - Cap the response under 600 words
   - Tell it to be honest if a repo has no runtime services
   - Have it end with a synthesis: which services the manifest should declare, in what order, with what start commands
@@ -88,7 +88,7 @@ When the subagent reports back, present the findings to the user and ask **"Use 
 
 ### 3. Identify services
 
-**Explain first:** "Each service becomes one tmux pane. For each one I need five things: the start command, the directory it runs from, any env vars it depends on from `.winter.env`, whether it has a readiness probe, and whether it should be retried if it crashes on boot. We'll go service by service — one at a time."
+**Explain first:** "Each service becomes one tmux pane. For each one I need five things: the start command, the directory it runs from, any env vars it needs beyond the WINTER_* base vars injected automatically by core, whether it has a readiness probe, and whether it should be retried if it crashes on boot. We'll go service by service — one at a time."
 
 Ask **one** question:
 
@@ -98,8 +98,8 @@ Once the user lists them, **for each service** ask in turn (one question per tur
 
 1. **"What's the start command for `<service>`?"** (e.g. `npm run dev`, `cargo run`, `python manage.py runserver`)
 2. **"Which directory does it run from?"** (relative to the worktree root, e.g. `apps/backend`)
-3. **"Which env vars from `.winter.env` does it need?"** (e.g. `$BACKEND_PORT`, `$DATABASE_URL`) — accept "none" as an answer.
-4. **"Does `<service>` bind to a port?"** Accept "none". If yes, ask whether it is a fixed port (a bare integer, e.g. `5432`) or an env-relative port (an offset expression, e.g. `WINTER_PORT_BASE + 10`). A bare integer is an absolute port number — use it when the port is the same in every environment (e.g. a fixed database port). The `WINTER_PORT_BASE + <offset>` form is resolved at status time against the per-env `WINTER_PORT_BASE` seeded into `.winter.env` — use it when each feature env needs its own isolated port. Record the value exactly: `port = 5432` for a literal or `port = "WINTER_PORT_BASE + 10"` for an offset expression. Services without a declared port show a blank `PORTS` column in `winter service status`.
+3. **"Which env vars does it need that are NOT provided by the injected WINTER_* base vars?"** (e.g. `$BACKEND_PORT` declared in `[env.vars]`, or machine-specific secrets) — accept "none" as an answer.
+4. **"Does `<service>` bind to a port?"** Accept "none". If yes, ask whether it is a fixed port (a bare integer, e.g. `5432`) or an env-relative port (an offset expression, e.g. `WINTER_PORT_BASE + 10`). A bare integer is an absolute port number — use it when the port is the same in every environment (e.g. a fixed database port). The `WINTER_PORT_BASE + <offset>` form is resolved at status time against the per-env `WINTER_PORT_BASE` injected by core — use it when each feature env needs its own isolated port. Record the value exactly: `port = 5432` for a literal or `port = "WINTER_PORT_BASE + 10"` for an offset expression. Services without a declared port show a blank `PORTS` column in `winter service status`.
 5. **"Does `<service>` have a status health probe?"** Accept "none". This is reported by `status`; it does not make `./up` wait. For HTTP health checks, record `type = "url"` and the health URL (e.g. `http://localhost:${BACKEND_PORT}/health`). For shell checks, record `type = "cmd"` and the command that should exit 0 when ready (e.g. `pgrep -f my-worker`, run from the worktree root). Ask for a timeout only if the user wants a non-default value; otherwise omit it and use the default 5 seconds.
 6. **"Should `<service>` be re-launched if it dies immediately on boot?"** Accept "no". If yes, record `retries` (e.g. 3) and ask whether a non-default retry delay is needed (default is 2 seconds); otherwise omit `retry_delay`. This startup retry policy is honored by `winter service up`; the env-root `./up` symlink is a thin no-retry door and does not honor it.
 
@@ -126,16 +126,11 @@ Record the confirmed value as `session_prefix`.
 
 ### 5. Environment file
 
-**Explain first:** "If any service command or status health probe needs vars from `.winter.env` (the seeded `WINTER_PORT_BASE`, or anything `project-setup.md` appends), the orchestrator can source it before launching each pane and use it for health probe interpolation. If neither commands nor probes reference env vars, `env_file` can be left unset and panes start in a clean shell."
+**Explain first:** "WINTER_* base vars (`WINTER_ENV`, `WINTER_ENV_INDEX`, `WINTER_PORT_BASE`) and any `[env.vars]` entries are self-sourced into each pane shell via `eval \"$(winter env <scope>)\"` in the launch line — no `env_file` is needed for those. Set `env_file` only when a service command needs additional vars from a local file (e.g. machine-specific credentials not managed by core) or when a health probe target uses `${VAR}` placeholders that must be resolved from a file. Most workspaces can omit it entirely."
 
-Look back at the env vars collected for each service command and health probe target. If **any** service answered with a non-"none" env var dependency, tell the user: "At least one service command or health probe uses `.winter.env` — I'll set `env_file = \".winter.env\"`." and continue.
+Look back at the env-var dependencies collected for each service command and health probe target. If **any** declared a local file dependency (vars that are NOT in the core-injected set), tell the user: "One or more services or probes need vars from a local file — set `env_file` to its path." and ask which path (relative to the worktree root).
 
-If **no** service command or health probe uses env vars, ask **one** question:
-
-**"No service command or health probe declared env-var dependencies. Set `env_file = \".winter.env\"` anyway (so worktree-managed vars like `$WINTER_PORT_BASE` are available in the shell pane), or leave it unset?"**
-
-- "set" / "yes": record `env_file = ".winter.env"`.
-- "unset" / "no": omit `env_file`.
+If **no** service or probe has file-based env-var dependencies, omit `env_file` and move on without prompting — core injection covers WINTER_* vars automatically.
 
 ### 6. Tmux session layout
 
@@ -161,11 +156,11 @@ Tell the user: "Writing `config.toml` with `session_prefix = "<prefix>"`, `env_f
 Then write the file. Read `config.toml.example` and reproduce its structure, substituting:
 
 - `session_prefix` ← the value confirmed in the session-prefix step.
-- `env_file` ← `".winter.env"` if the env-file step recorded one; omit the key otherwise.
+- `env_file` ← the path recorded in the env-file step, if any; omit the key when the step concluded no local file is needed.
 - `layout_hook` ← `"layout-hook.sh"` (the bare filename — resolved relative to the config dir where this file lives).
 - `[[service]]` entries ← one table per service, with `name`, `target`, and `cmd`. Empty cmd (`cmd = ""`) for interactive panes.
 - `port` field ← add to the `[[service]]` table when the service declared a port. Use `port = <int>` for a literal port (e.g. `port = 5432`) or `port = "WINTER_PORT_BASE + <offset>"` for an env-relative offset expression (e.g. `port = "WINTER_PORT_BASE + 10"`). Omit the key entirely when no port was declared.
-- `[service.health]` subtables ← only for services that declared a status health probe. Place each subtable immediately after its matching `[[service]]`, before the next `[[service]]`. Use `type = "url"` or `type = "cmd"`, `target = "..."`, and optional `timeout = <seconds>`. `${VAR}` placeholders in `target` are resolved from `env_file`; bare `$VAR` is not interpolated.
+- `[service.health]` subtables ← only for services that declared a status health probe. Place each subtable immediately after its matching `[[service]]`, before the next `[[service]]`. Use `type = "url"` or `type = "cmd"`, `target = "..."`, and optional `timeout = <seconds>`. `${VAR}` placeholders in `target` are resolved from the scope's injected env (WINTER_* base vars and `[env.vars]` entries); bare `$VAR` is not interpolated.
 - `[service.startup]` subtables ← only for services that declared a startup retry policy. Place each subtable immediately after its matching `[[service]]` (and after any `[service.health]`), before the next `[[service]]`. Use `retries = <int>` and optional `retry_delay = <seconds>`.
 
 Confirm: "`config.toml` written at `workspace:/.winter/config/winter-service-tmux/config.toml`."

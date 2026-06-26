@@ -1,6 +1,6 @@
 # Testing changed orchestrator code against a worktree
 
-**Verifying the `status` path requires the feature core too.** Since winter#109, `status` env enumeration and `.winter.env` sourcing live in winter-cli core, not this provider. If you are verifying a change that touches the status path, also point at the feature core with `--winter` (see `workspace:/ai/winter-cli/root-flags.md`):
+**Verifying the `status` path requires the feature core too.** `status` env enumeration lives in winter-cli core, not this provider — core computes each scope's environment and injects it on `up`, `down`, and `status`. If you are verifying a change that touches the status path, also point at the feature core with `--winter` (see `workspace:/ai/winter-cli/root-flags.md`):
 
 ```bash
 winter --winter=./alpha/winter --service-orchestrator=./alpha/winter-service-tmux service status alpha

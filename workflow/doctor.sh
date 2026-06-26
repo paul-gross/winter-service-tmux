@@ -158,12 +158,23 @@ else
       [[ "$session" == "$session_prefix"-* ]] || continue
       env_name="${session#"$session_prefix"-}"
       # A session is "ours" iff `<workspace>/<env_name>/` is a feature env —
-      # i.e. has a `.winter.env` file (seeded by `winter ws init`). Plain
-      # directory existence is too weak: the workspace root also contains
-      # source checkouts, helper dirs (`tools/`, `projects/`, `docs/`), and
+      # detected by a worktree-marker .git FILE in any immediate child
+      # directory (git worktrees add a .git FILE; source checkouts and
+      # extension clones have a .git DIRECTORY, not a file). Plain directory
+      # existence is too weak: the workspace root also contains source
+      # checkouts, helper dirs (`tools/`, `projects/`, `docs/`), and
       # standalone extension clones whose names could otherwise mask a real
       # collision.
-      if [[ -f "$WORKSPACE_DIR/$env_name/.winter.env" ]]; then
+      is_own_session=false
+      if [[ -d "$WORKSPACE_DIR/$env_name" ]]; then
+        for _child in "$WORKSPACE_DIR/$env_name"/*/; do
+          if [[ -f "${_child}.git" ]]; then
+            is_own_session=true
+            break
+          fi
+        done
+      fi
+      if [[ "$is_own_session" == "true" ]]; then
         continue
       fi
       conflicting+=("$session")

@@ -40,7 +40,6 @@ from tests.fakes import FakeFilesystemReader
 _WORKSPACE = Path("/fake/workspace")
 _CONFIG_DIR = _WORKSPACE / ".winter" / "config" / "winter-service-tmux"
 _WORKTREE = _WORKSPACE / "alpha"
-_ENV_FILE = _WORKTREE / ".winter.env"
 
 # A two-service manifest (backend 0.0, frontend 0.1) with a layout hook.
 # layout_hook is a bare filename — resolved relative to config_dir at runtime.
@@ -61,7 +60,6 @@ cmd = "npm run dev"
 """
 
 _MANIFEST_COMMITTED_PATH = Path("config.toml")
-_ENV_FILE_REL = Path(".winter.env")
 
 
 def _make_sm_container(toml_content: str = _MANIFEST_TOML) -> sm_container_mod.Container:
@@ -79,7 +77,8 @@ def _make_manifest(toml_content: str = _MANIFEST_TOML) -> ServiceManifest:
 def _make_ctx(
     manifest: ServiceManifest | None = None,
     env_vars: dict[str, str] | None = None,
-    env_file_path: Path | None = _ENV_FILE,
+    inject_scope: str | None = "alpha",
+    env_file_path: Path | None = None,
 ) -> SessionContext:
     if manifest is None:
         manifest = _make_manifest()
@@ -93,6 +92,7 @@ def _make_ctx(
         layout_hook=manifest.layout_hook,
         logs=manifest.logs,
         env_vars=env_vars,
+        inject_scope=inject_scope,
         env_file_path=env_file_path,
     )
 
@@ -177,12 +177,12 @@ def test_up_sends_one_send_keys_per_service() -> None:
     assert targets == {"0.0", "0.1"}
 
 
-def test_up_send_keys_exact_launch_line_with_env_file() -> None:
-    """Captured services get the writer-wrapped launch line; log=False gets bare."""
+def test_up_send_keys_exact_launch_line_with_scope() -> None:
+    """Captured services get the writer-wrapped launch line with eval "$(winter env <scope>)"."""
     tmux = FakeTmuxRepository()
     hook = FakeLayoutHookRunner()
     log_repo = FakeLogRepository()
-    ctx = _make_ctx(env_file_path=_ENV_FILE)
+    ctx = _make_ctx(inject_scope="alpha")
     svc = _make_service(tmux=tmux, hook_runner=hook, log_repo=log_repo)
 
     def _add_panes() -> None:
@@ -202,7 +202,7 @@ def test_up_send_keys_exact_launch_line_with_env_file() -> None:
     backend_line = next(line for _, t, line in tmux.sent if t == "0.0")
     backend_logfile = log_repo.log_path(_WORKTREE, "backend")
     expected_backend = (
-        f"cd {shlex.quote(str(_WORKTREE))} && source {shlex.quote(str(_ENV_FILE))}"
+        f'cd {shlex.quote(str(_WORKTREE))} && eval "$(winter env alpha)"'
         f" && echo {shlex.quote('=== backend ===')} && "
         f"{{ npm run start:dev ; }} 2>&1 | "
         f"python3 {shlex.quote(str(writer))} {shlex.quote(str(backend_logfile))} "
@@ -214,7 +214,7 @@ def test_up_send_keys_exact_launch_line_with_env_file() -> None:
     frontend_line = next(line for _, t, line in tmux.sent if t == "0.1")
     frontend_logfile = log_repo.log_path(_WORKTREE, "frontend")
     expected_frontend = (
-        f"cd {shlex.quote(str(_WORKTREE))} && source {shlex.quote(str(_ENV_FILE))}"
+        f'cd {shlex.quote(str(_WORKTREE))} && eval "$(winter env alpha)"'
         f" && echo {shlex.quote('=== frontend ===')} && "
         f"{{ npm run dev ; }} 2>&1 | "
         f"python3 {shlex.quote(str(writer))} {shlex.quote(str(frontend_logfile))} "
@@ -226,12 +226,12 @@ def test_up_send_keys_exact_launch_line_with_env_file() -> None:
     assert log_repo.ensure_log_dir_calls == [_WORKTREE]
 
 
-def test_up_send_keys_exact_launch_line_without_env_file() -> None:
-    """Without env_file_path, the source step is omitted; captured service still wrapped."""
+def test_up_send_keys_exact_launch_line_without_scope() -> None:
+    """Without inject_scope (local mode), no eval prefix; captured service still wrapped."""
     tmux = FakeTmuxRepository()
     hook = FakeLayoutHookRunner()
     log_repo = FakeLogRepository()
-    ctx = _make_ctx(env_file_path=None)
+    ctx = _make_ctx(inject_scope=None)
     svc = _make_service(tmux=tmux, hook_runner=hook, log_repo=log_repo)
 
     def _add_panes() -> None:
@@ -295,7 +295,7 @@ cmd = "npm run start:dev"
     tmux = FakeTmuxRepository()
     hook = FakeLayoutHookRunner()
     manifest = _make_manifest(toml)
-    ctx = _make_ctx(manifest=manifest, env_file_path=None)
+    ctx = _make_ctx(manifest=manifest, inject_scope=None)
     svc = _make_service(tmux=tmux, hook_runner=hook)
 
     # Patch new_session to also seed pane 0.0 (what real tmux does).
@@ -572,7 +572,7 @@ def test_restart_reaps_children_and_resends() -> None:
     tmux = FakeTmuxRepository()
     tmux.seed_session("mp-alpha", {"0.0": 10, "0.1": 20})
     reaper = FakeProcessReaper(descendant_map={10: [100, 101]})
-    ctx = _make_ctx(env_file_path=_ENV_FILE)
+    ctx = _make_ctx(inject_scope="alpha")
     svc = _make_service(tmux=tmux, reaper=reaper)
 
     result = svc.restart(ctx, "backend")
@@ -586,7 +586,7 @@ def test_restart_reaps_children_and_resends() -> None:
     assert session == "mp-alpha"
     assert target == "0.0"
     expected = (
-        f"cd {shlex.quote(str(_WORKTREE))} && source {shlex.quote(str(_ENV_FILE))}"
+        f'cd {shlex.quote(str(_WORKTREE))} && eval "$(winter env alpha)"'
         f" && echo {shlex.quote('=== backend ===')} && npm run start:dev"
     )
     assert line == expected
@@ -654,7 +654,7 @@ target = "0.0"
 cmd = "cmd"
 """
     manifest = _make_manifest(toml)
-    ctx2 = _make_ctx(manifest=manifest, env_file_path=None)
+    ctx2 = _make_ctx(manifest=manifest, inject_scope=None)
     svc2 = _make_service(tmux=tmux, reaper=reaper)
 
     svc2.restart(ctx2, "backend")
@@ -680,7 +680,7 @@ cmd = ""
     tmux = FakeTmuxRepository()
     hook = FakeLayoutHookRunner()
     manifest = _make_manifest(toml)
-    ctx = _make_ctx(manifest=manifest, env_file_path=None)
+    ctx = _make_ctx(manifest=manifest, inject_scope=None)
 
     # No layout_hook declared → hook never called → seed pane via new_session patch.
     _orig_new_session = tmux.new_session
@@ -722,7 +722,7 @@ max_rotations = 3
     hook = FakeLayoutHookRunner()
     log_repo = FakeLogRepository()
     manifest = _make_manifest(toml)
-    ctx = _make_ctx(manifest=manifest, env_file_path=None)
+    ctx = _make_ctx(manifest=manifest, inject_scope=None)
 
     _orig_new_session = tmux.new_session
 
@@ -762,7 +762,7 @@ log = "pane"
     tmux = FakeTmuxRepository()
     log_repo = FakeLogRepository()
     manifest = _make_manifest(toml)
-    ctx = _make_ctx(manifest=manifest, env_file_path=None)
+    ctx = _make_ctx(manifest=manifest, inject_scope=None)
 
     _orig_new_session = tmux.new_session
 
@@ -796,7 +796,7 @@ log = "memory"
     tmux = FakeTmuxRepository()
     log_repo = FakeLogRepository()
     manifest = _make_manifest(toml)
-    ctx = _make_ctx(manifest=manifest, env_file_path=None)
+    ctx = _make_ctx(manifest=manifest, inject_scope=None)
 
     _orig_new_session = tmux.new_session
 
@@ -828,7 +828,7 @@ log = "file"
     tmux = FakeTmuxRepository()
     log_repo = FakeLogRepository()
     manifest = _make_manifest(toml)
-    ctx = _make_ctx(manifest=manifest, env_file_path=None)
+    ctx = _make_ctx(manifest=manifest, inject_scope=None)
 
     _orig_new_session = tmux.new_session
 
@@ -893,6 +893,7 @@ def _make_prune_ctx(retention_seconds: int = 604800) -> SessionContext:
         layout_hook=manifest.layout_hook,
         logs=manifest.logs,
         env_vars=None,
+        inject_scope=None,
         env_file_path=None,
     )
 
@@ -1461,7 +1462,7 @@ def test_restart_message_goes_through_stdout_seam() -> None:
     """restart() writes its 'Restarted' message to the injected stdout seam."""
     tmux = FakeTmuxRepository()
     tmux.seed_session("mp-alpha", {"0.0": 10, "0.1": 20})
-    ctx = _make_ctx(env_file_path=_ENV_FILE)
+    ctx = _make_ctx(inject_scope="alpha")
     out = io.StringIO()
     svc = _make_service(tmux=tmux, stdout=out)
 
@@ -1519,7 +1520,7 @@ retry_delay = 1.0
 def _make_startup_ctx(toml: str = _MANIFEST_WITH_STARTUP_TOML) -> SessionContext:
     """Build a ctx from a manifest with a startup policy on backend."""
     manifest = _make_manifest(toml)
-    return _make_ctx(manifest=manifest, env_file_path=None)
+    return _make_ctx(manifest=manifest, inject_scope=None)
 
 
 def _up_with_panes(
@@ -1549,7 +1550,7 @@ def _up_with_panes(
     tmux.new_session = _new_session_with_panes  # type: ignore[method-assign]
 
     manifest = _make_manifest(toml)
-    ctx = _make_ctx(manifest=manifest, env_file_path=None)
+    ctx = _make_ctx(manifest=manifest, inject_scope=None)
     svc = _make_service(tmux=tmux, reaper=reaper, clock=clock, stdout=out, stderr=err)
     rc = svc.up(ctx, retry=retry)
     return rc, tmux, out, err
@@ -1844,8 +1845,8 @@ def test_status_env_document_offset_expression_resolved_against_port_base() -> N
     doc = svc.status_env_document(ctx)
 
     by_name = {s["name"]: s for s in doc["services"]}
-    assert by_name["web"]["ports"] == [4070]   # 4060 + 10
-    assert by_name["api"]["ports"] == [4071]   # 4060 + 11
+    assert by_name["web"]["ports"] == [4070]  # 4060 + 10
+    assert by_name["api"]["ports"] == [4071]  # 4060 + 11
 
 
 def test_status_env_document_no_port_renders_blank() -> None:

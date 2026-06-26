@@ -62,6 +62,7 @@ def _make_ctx(env: str, env_vars: dict[str, str] | None = None) -> SessionContex
         layout_hook=_MANIFEST.layout_hook,
         logs=_MANIFEST.logs,
         env_vars=env_vars,
+        inject_scope=env,
         env_file_path=None,
     )
 
@@ -77,6 +78,7 @@ def _make_workspace_ctx(env_vars: dict[str, str] | None = None) -> SessionContex
         layout_hook=_MANIFEST.workspace_layout_hook,
         logs=_MANIFEST.logs,
         env_vars=env_vars,
+        inject_scope=None,
         env_file_path=None,
     )
 
@@ -90,7 +92,7 @@ class _RecordingBuilder:
     """Fake builder that records whether skip_env_file was passed for each build call.
 
     build() is called with skip_env_file=True on the status path (from
-    _build_status_ctx) and with skip_env_file=False from selector.read_manifest_context
+    _build_ctx) and with skip_env_file=False from selector.read_manifest_context
     and the non-status paths (up/down/restart/logs).
 
     The ctx returned always has env_vars=None (mirroring skip_env_file=True
@@ -140,7 +142,7 @@ def test_status_port_base_comes_from_process_env_not_env_file(
     """Prove the STATUS path reads WINTER_PORT_BASE from os.environ, not .winter.env.
 
     The sentinel value 9999 is set only in os.environ (the file would have a
-    different value, or be absent).  After _build_status_ctx replaces env_vars
+    different value, or be absent).  After _build_ctx replaces env_vars
     with dict(os.environ), the orchestrator's ctx.env_vars must contain 9999.
     """
     monkeypatch.setenv("WINTER_PORT_BASE", "9999")

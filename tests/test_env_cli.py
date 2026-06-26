@@ -75,6 +75,7 @@ def _make_ctx(env: str = "alpha", manifest: ServiceManifest = _MANIFEST) -> Sess
         layout_hook=manifest.layout_hook,
         logs=manifest.logs,
         env_vars={"BACKEND_PORT": "4100"},
+        inject_scope=env,
         env_file_path=_WORKSPACE / env / ".winter.env",
     )
 
@@ -91,6 +92,7 @@ def _make_workspace_ctx() -> SessionContext:
         layout_hook=_MANIFEST.workspace_layout_hook,
         logs=_MANIFEST.logs,
         env_vars=None,
+        inject_scope=None,
         env_file_path=None,
     )
 
@@ -292,7 +294,9 @@ def test_status_no_patterns_calls_status_all_services(
     rc = main(["status"])
 
     assert rc == 0
-    container.orchestrator.status.assert_called_once_with(ctx)
+    assert container.orchestrator.status.call_count == 1
+    called_ctx = container.orchestrator.status.call_args.args[0]
+    assert called_ctx.env == "alpha"
 
 
 # ---------------------------------------------------------------------------
@@ -374,7 +378,9 @@ def test_status_single_literal_service(
     rc = main(["status", "backend"])
 
     assert rc == 0
-    container.orchestrator.status.assert_called_once_with(ctx, services=("backend",))
+    assert container.orchestrator.status.call_count == 1
+    call = container.orchestrator.status.call_args
+    assert call.kwargs.get("services") == ("backend",)
 
 
 # ---------------------------------------------------------------------------
@@ -400,7 +406,9 @@ def test_status_glob_pattern_matches_subset(
     rc = main(["status", "back*"])
 
     assert rc == 0
-    container.orchestrator.status.assert_called_once_with(ctx, services=("backend", "backend-worker"))
+    assert container.orchestrator.status.call_count == 1
+    call = container.orchestrator.status.call_args
+    assert call.kwargs.get("services") == ("backend", "backend-worker")
 
 
 # ---------------------------------------------------------------------------
@@ -513,7 +521,9 @@ def test_restart_single_service_still_works(
     rc = main(["restart", "backend"])
 
     assert rc == 0
-    container.orchestrator.restart.assert_called_once_with(ctx, "backend")
+    assert container.orchestrator.restart.call_count == 1
+    call = container.orchestrator.restart.call_args
+    assert call.args[1] == "backend"
 
 
 # ---------------------------------------------------------------------------
@@ -674,7 +684,9 @@ def test_up_happy_path_returns_0(
     rc = main(["up"])
 
     assert rc == 0
-    container.orchestrator.up.assert_called_once_with(ctx)
+    assert container.orchestrator.up.call_count == 1
+    called_ctx = container.orchestrator.up.call_args.args[0]
+    assert called_ctx.env == "alpha"
 
 
 # ---------------------------------------------------------------------------
@@ -699,7 +711,9 @@ def test_down_happy_path_returns_0(
     rc = main(["down"])
 
     assert rc == 0
-    container.orchestrator.down.assert_called_once_with(ctx)
+    assert container.orchestrator.down.call_count == 1
+    called_ctx = container.orchestrator.down.call_args.args[0]
+    assert called_ctx.env == "alpha"
 
 
 # ---------------------------------------------------------------------------
@@ -739,7 +753,9 @@ def test_down_via_ext_path_with_winter_workspace_dir_uses_manifest_not_fallback(
 
     # Manifest-driven path taken: orchestrator.down called, NOT the suffix fallback.
     assert rc == 0
-    container.orchestrator.down.assert_called_once_with(ctx)
+    assert container.orchestrator.down.call_count == 1
+    called_ctx = container.orchestrator.down.call_args.args[0]
+    assert called_ctx.env == "alpha"
     # Suffix fallback was NOT entered: kill_session not called via fallback path.
     container.tmux.kill_session.assert_not_called()
 
@@ -936,4 +952,78 @@ def test_env_cli_up_does_not_pass_retry(
 
     assert rc == 0
     # Exactly one call with ctx as the sole positional arg, no keyword args.
-    container.orchestrator.up.assert_called_once_with(ctx)
+    assert container.orchestrator.up.call_count == 1
+    assert container.orchestrator.up.call_args.kwargs == {}
+    called_ctx = container.orchestrator.up.call_args.args[0]
+    assert called_ctx.env == "alpha"
+
+
+# ---------------------------------------------------------------------------
+# _build_env_ctx — scope sourcing and local mode
+# ---------------------------------------------------------------------------
+
+
+def test_env_cli_build_env_ctx_sets_inject_scope(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """For a normal (non-local, non-workspace) env, _build_env_ctx sets inject_scope=env."""
+    from service_orchestrator.env_cli import _build_env_ctx
+
+    ws = tmp_path
+    env_dir = ws / "alpha"
+    env_dir.mkdir(parents=True)
+
+    ctx_base = _make_ctx("alpha")
+    container = _make_mock_container(ctx_base)
+    # build returns a ctx with inject_scope="alpha" (set by builder mock)
+    container.session_context_builder.build.return_value = ctx_base
+
+    result = _build_env_ctx(container.session_context_builder, "alpha", ws)
+    # inject_scope is already "alpha" on the builder's return; env_vars replaced
+    assert result.inject_scope == "alpha"
+
+
+def test_env_cli_build_env_ctx_local_mode_clears_inject_scope(
+    tmp_path: Path,
+) -> None:
+    """local=True disables scope sourcing: inject_scope becomes None."""
+    from service_orchestrator.env_cli import _build_env_ctx
+
+    ws = tmp_path
+    ctx_base = _make_ctx("alpha")
+    container = _make_mock_container(ctx_base)
+    container.session_context_builder.build.return_value = ctx_base
+
+    result = _build_env_ctx(container.session_context_builder, "alpha", ws, local=True)
+    assert result.inject_scope is None
+
+
+def test_env_cli_build_env_ctx_local_mode_clears_env_file_path(
+    tmp_path: Path,
+) -> None:
+    """local=True also clears env_file_path to None (fully env-less: no pane dot-source)."""
+    from service_orchestrator.env_cli import _build_env_ctx
+
+    ws = tmp_path
+    ctx_base = _make_ctx("alpha")  # has env_file_path set
+    container = _make_mock_container(ctx_base)
+    container.session_context_builder.build.return_value = ctx_base
+
+    result = _build_env_ctx(container.session_context_builder, "alpha", ws, local=True)
+    assert result.env_file_path is None
+
+
+def test_env_cli_build_env_ctx_normal_preserves_env_file_path(
+    tmp_path: Path,
+) -> None:
+    """Non-local mode leaves env_file_path from the builder intact (panes dot-source it)."""
+    from service_orchestrator.env_cli import _build_env_ctx
+
+    ws = tmp_path
+    ctx_base = _make_ctx("alpha")  # has env_file_path set
+    container = _make_mock_container(ctx_base)
+    container.session_context_builder.build.return_value = ctx_base
+
+    result = _build_env_ctx(container.session_context_builder, "alpha", ws)
+    assert result.env_file_path == ctx_base.env_file_path

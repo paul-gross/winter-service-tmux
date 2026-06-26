@@ -7,8 +7,8 @@ feature-env session (``env == "alpha"``) and the shared workspace-singleton
 session (``env == "workspace"``).  Each build path selects the right scope's
 service/layout/status values from the manifest and stores them here directly —
 there is no env-shaped-manifest projection.  Building a ``SessionContext`` —
-loading the manifest, resolving the env file path, selecting the scope — is the
-builder's responsibility; this module only defines the dataclass.
+loading the manifest, selecting the scope — is the builder's responsibility;
+this module only defines the dataclass.
 """
 
 from __future__ import annotations
@@ -45,10 +45,23 @@ class SessionContext:
         layout_hook: Optional bash layout hook for this session (bare filename,
             resolved relative to ``config_dir``), or ``None``.
         logs: Log-capture configuration.
-        env_vars: Parsed key-value mapping from the env file, or ``None``
-            when no env file was declared or the file was absent.
-        env_file_path: Absolute path to the resolved env file, or ``None``
-            when not applicable.
+        env_vars: Key-value mapping available in-process (used by the layout
+            hook and port/health resolution), or ``None`` when not applicable.
+            For the ``winter service`` door this comes from the env file; for
+            the direct door it is ``os.environ`` (sourced by the entry shim).
+        inject_scope: When not ``None``, each pane's launch prefix includes
+            ``eval "$(winter env <inject_scope>)"`` so the pane shell
+            self-sources the full scope environment.  ``None`` for local/env-
+            less mode (e.g. ``./up local``) and for the workspace session.
+        env_file_path: Absolute path to the manifest's machine-credentials env
+            file (e.g. ``<worktree>/.env.local``), or ``None`` when the
+            manifest declares no ``env_file``.  When not ``None``, each pane's
+            launch prefix appends ``&& . '<env_file_path>'`` after the
+            ``eval "$(winter env ...)"`` segment so machine-specific vars
+            (credentials not managed by core) are also available to service
+            commands.  This is independent of ``inject_scope``: the file is
+            sourced even when ``inject_scope`` is not ``None``, and vice versa.
+            ``None`` in local/env-less mode and for the workspace session.
     """
 
     env: str
@@ -60,6 +73,7 @@ class SessionContext:
     layout_hook: str | None
     logs: LogConfig
     env_vars: dict[str, str] | None
+    inject_scope: str | None
     env_file_path: Path | None
 
     @property

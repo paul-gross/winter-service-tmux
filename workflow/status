@@ -13,6 +13,11 @@ _SRC="$(cd "$(dirname "$_SELF")/.." && pwd)/src"
 # Passed as argv[0] so env_cli._resolve_from_argv0 can infer env name + workspace.
 _SHIM_ABS="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 
+# Source the scope's winter env so the orchestrator process has WINTER_* vars
+# available for port/health resolution.  Best-effort, POSIX, silent on failure.
+_ENV="${WINTER_ENV:-$(basename "$(dirname "$_SHIM_ABS")")}"
+if command -v winter >/dev/null 2>&1; then eval "$(winter env "$_ENV" 2>/dev/null)" || true; fi
+
 export PYTHONPATH="$_SRC${PYTHONPATH:+:$PYTHONPATH}"
 exec python3 -c "
 import sys, runpy

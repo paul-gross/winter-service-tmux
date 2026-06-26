@@ -25,9 +25,15 @@
 # e.g., "mp" produces "mp-alpha", "mp-beta"
 session_prefix = "mp"
 
-# Environment file to load for ${VAR} interpolation and pane env sourcing
-# (relative to the worktree root, optional).
-env_file = ".winter.env"
+# Environment file for ${VAR} interpolation in health probe targets
+# (relative to the worktree root, optional). Omit when all required vars
+# come from core injection — WINTER_ENV / WINTER_ENV_INDEX /
+# WINTER_PORT_BASE and [env.vars] entries are exported inline to each
+# pane by the launch line, so no env_file is needed for those. Set only
+# when services need additional vars from a local file (e.g.
+# machine-specific credentials) or a health probe target uses ${VAR}
+# placeholders that reference file-sourced vars.
+# env_file = ".env.local"
 
 # Optional bash layout hook — invoked once per ./up, AFTER the tmux session is
 # created. The hook creates the windows/panes; the orchestrator sends each

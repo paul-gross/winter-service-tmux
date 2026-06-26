@@ -24,9 +24,15 @@ Door-local arg shapes (NOT part of the winter contract):
 - ``status [--all] [<pattern>...]``
 - ``restart <pattern>...``
 
-``local`` mode builds an env-less ``SessionContext`` (no env file sourced);
-``up local`` and ``down local`` are symmetric — both use the inferred env
-name with ``skip_env_file=True``.
+The direct door does NOT execute ``winter`` itself.  Instead, the entry shims
+(``workflow/up`` and ``workflow/status``) source ``eval "$(winter env <env>)"``
+before ``exec python3``, so the orchestrator process has the scope env in
+``os.environ``.  Each pane launch line also contains ``eval "$(winter env
+<scope>)"`` so panes self-source independently.
+
+``local`` mode skips pane scope-sourcing (env-less ``SessionContext``
+— useful for lightweight testing without env injection); ``up local``
+and ``down local`` are symmetric.
 ``-a``/``--attach`` execs ``tmux attach-session`` after ``up``.
 ``status --all`` loops every ``<prefix>-`` session.
 ``down`` falls back to env-suffix session matching when the manifest is
@@ -35,6 +41,7 @@ unreadable (so ``winter ws destroy`` never gets stuck).
 
 from __future__ import annotations
 
+import dataclasses
 import fnmatch
 import os
 import sys
@@ -45,13 +52,51 @@ from service_orchestrator.container import Container
 from service_orchestrator.core.internal.env_workspace_locator import EnvWorkspaceLocator
 from service_orchestrator.modules.orchestrate.env_enumerator import running_envs
 from service_orchestrator.modules.orchestrate.errors import OrchestratorError
+from service_orchestrator.modules.orchestrate.session_context import SessionContext
 from service_orchestrator.modules.orchestrate.session_context_builder import (
     WORKSPACE_TARGET,
+    SessionContextBuilder,
     build_for_target,
 )
 from service_orchestrator.modules.orchestrate.tmux_repository import ITmuxRepository
 
 _ACTIONS = ("up", "down", "status", "restart")
+
+
+# ---------------------------------------------------------------------------
+# Direct-door env injection
+# ---------------------------------------------------------------------------
+
+
+def _build_env_ctx(
+    builder: SessionContextBuilder,
+    env: str,
+    workspace_root: Path,
+    *,
+    local: bool = False,
+) -> SessionContext:
+    """Build a ``SessionContext`` for the direct-door path.
+
+    The direct door does NOT execute ``winter``.  The entry shim (``workflow/up``
+    and ``workflow/status``) sources ``eval "$(winter env <env>)"`` before
+    ``exec python3``, so ``os.environ`` already carries the scope env when the
+    orchestrator process starts.  Each pane self-sources via
+    ``eval "$(winter env <scope>)"`` in its launch prefix (``inject_scope``).
+
+    ``local`` mode disables pane scope-sourcing (``inject_scope=None``) and
+    leaves ``env_vars`` unset — useful for lightweight testing without any env
+    injection.  The workspace target always has ``inject_scope=None`` (no per-env
+    vars) and is returned unchanged.
+    """
+    ctx = build_for_target(builder, env, workspace_root=workspace_root, skip_env_file=True)
+    if env == WORKSPACE_TARGET:
+        return ctx
+    if local:
+        # Fully env-less: disable both pane scope-sourcing and pane dot-sourcing.
+        return dataclasses.replace(ctx, inject_scope=None, env_file_path=None)
+    # Non-local env: expose os.environ in-process (for the layout hook and
+    # port/health resolution) — the shim sourced "winter env" before exec.
+    return dataclasses.replace(ctx, env_vars=dict(os.environ))
 
 
 # ---------------------------------------------------------------------------
@@ -180,11 +225,7 @@ def _handle_up(
                 workspace_root=workspace_root,
             )
         else:
-            ctx = container.session_context_builder.build(
-                env,
-                workspace_root=workspace_root,
-                skip_env_file=local,
-            )
+            ctx = _build_env_ctx(container.session_context_builder, env, workspace_root, local=local)
     except ManifestError as exc:
         print(f"up: env '{env}': manifest error: {exc}", file=sys.stderr)
         return 1
@@ -223,11 +264,7 @@ def _handle_down(
                 workspace_root=workspace_root,
             )
         else:
-            ctx = container.session_context_builder.build(
-                env,
-                workspace_root=workspace_root,
-                skip_env_file=local,
-            )
+            ctx = _build_env_ctx(container.session_context_builder, env, workspace_root, local=local)
     except ManifestError as exc:
         # Manifest unreadable → fall back to env-suffix session kill.
         print(
@@ -270,7 +307,7 @@ def _handle_status(
         return _handle_status_all(env, workspace_root, container)
 
     try:
-        ctx = build_for_target(container.session_context_builder, env, workspace_root=workspace_root)
+        ctx = _build_env_ctx(container.session_context_builder, env, workspace_root)
     except ManifestError as exc:
         print(f"status: env '{env}': manifest error: {exc}", file=sys.stderr)
         return 1
@@ -319,7 +356,7 @@ def _handle_status_all(
     matching ``<prefix>-`` and reports each.
     """
     try:
-        seed_ctx = build_for_target(container.session_context_builder, env, workspace_root=workspace_root)
+        seed_ctx = _build_env_ctx(container.session_context_builder, env, workspace_root)
         prefix = seed_ctx.session_prefix
     except (ManifestError, OSError) as exc:
         print(f"status --all: cannot read manifest: {exc}", file=sys.stderr)
@@ -338,10 +375,10 @@ def _handle_status_all(
     for env_name in env_names:
         try:
             # Risk #1: running_envs() returns the literal "workspace" for the
-            # <prefix>-workspace session.  Route through build_for_target so it
+            # <prefix>-workspace session.  Route through _build_env_ctx so it
             # never goes through env-scoped build() (which would set
             # worktree_dir = ws_root/workspace instead of ws_root itself).
-            env_ctx = build_for_target(container.session_context_builder, env_name, workspace_root=workspace_root)
+            env_ctx = _build_env_ctx(container.session_context_builder, env_name, workspace_root)
             r = container.orchestrator.status(env_ctx)
             if r != 0:
                 rc = r
@@ -359,7 +396,7 @@ def _handle_restart(
 ) -> int:
     if not argv or argv[0].startswith("-"):
         try:
-            ctx = build_for_target(container.session_context_builder, env, workspace_root=workspace_root)
+            ctx = _build_env_ctx(container.session_context_builder, env, workspace_root)
             declared = ", ".join(s.name for s in ctx.services)
         except (ManifestError, OSError, OrchestratorError):
             declared = "(manifest unreadable)"
@@ -371,7 +408,7 @@ def _handle_restart(
         return 1
 
     try:
-        ctx = build_for_target(container.session_context_builder, env, workspace_root=workspace_root)
+        ctx = _build_env_ctx(container.session_context_builder, env, workspace_root)
     except ManifestError as exc:
         print(f"restart: env '{env}': manifest error: {exc}", file=sys.stderr)
         return 1

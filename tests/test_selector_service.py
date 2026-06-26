@@ -56,6 +56,7 @@ def _make_ctx(env: str = "alpha") -> SessionContext:
         layout_hook=_MANIFEST.layout_hook,
         logs=_MANIFEST.logs,
         env_vars=None,
+        inject_scope=env,
         env_file_path=None,
     )
 
@@ -71,6 +72,7 @@ def _make_workspace_ctx() -> SessionContext:
         layout_hook=_MANIFEST.workspace_layout_hook,
         logs=_MANIFEST.logs,
         env_vars=None,
+        inject_scope=None,
         env_file_path=None,
     )
 
