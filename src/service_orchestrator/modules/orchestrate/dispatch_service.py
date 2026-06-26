@@ -161,7 +161,8 @@ class DispatchService:
         """Build workspace SessionContext for the STATUS path, injecting os.environ.
 
         ``build_workspace`` already sets env_vars=None; we overlay os.environ so
-        that any WINTER_PORT_BASE core injects for the workspace scope is visible.
+        that any WINTER_WORKSPACE_PORT_BASE core injects for the workspace scope
+        is visible.
         """
         try:
             ctx = build_for_target(self._builder, WORKSPACE_TARGET, workspace_root=workspace_root, skip_env_file=True)

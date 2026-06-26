@@ -20,6 +20,7 @@ from service_orchestrator.modules.orchestrate.layout_hook_runner import ILayoutH
 from service_orchestrator.modules.orchestrate.log_repository import ILogRepository
 from service_orchestrator.modules.orchestrate.reaper import IProcessReaper
 from service_orchestrator.modules.orchestrate.session_context import SessionContext
+from service_orchestrator.modules.orchestrate.session_context_builder import WORKSPACE_TARGET
 from service_orchestrator.modules.orchestrate.status_report import (
     build_env_status,
     build_launch_line,
@@ -369,13 +370,17 @@ class OrchestratorService:
 
     @staticmethod
     def _port_base(ctx: SessionContext) -> int | None:
-        """Resolve the env's port base from ``WINTER_PORT_BASE`` in the env file.
+        """Resolve the scope's port base from the injected env.
 
-        Returns ``None`` when unset or non-integer (e.g. the workspace scope,
-        which has no port base).
+        Per-env scopes read ``WINTER_PORT_BASE`` (the env's own band); the
+        workspace scope reads ``WINTER_WORKSPACE_PORT_BASE`` (the index-0 band)
+        — the workspace scope has no ``WINTER_PORT_BASE``, so reading it there
+        would always yield ``None``.  Returns ``None`` when the relevant variable
+        is unset or non-integer.
         """
         env_vars = ctx.env_vars or {}
-        raw = env_vars.get("WINTER_PORT_BASE")
+        port_base_var = "WINTER_WORKSPACE_PORT_BASE" if ctx.env == WORKSPACE_TARGET else "WINTER_PORT_BASE"
+        raw = env_vars.get(port_base_var)
         if raw is None:
             return None
         try:

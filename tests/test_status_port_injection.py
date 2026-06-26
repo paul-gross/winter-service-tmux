@@ -310,8 +310,8 @@ def test_status_core_scope_pattern_no_live_session_needed(
 def test_status_workspace_scope_reads_port_base_from_process_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """workspace scope reads WINTER_PORT_BASE from os.environ via env_vars injection."""
-    monkeypatch.setenv("WINTER_PORT_BASE", "7777")
+    """workspace scope reads WINTER_WORKSPACE_PORT_BASE from os.environ via env_vars injection."""
+    monkeypatch.setenv("WINTER_WORKSPACE_PORT_BASE", "7777")
 
     builder = _RecordingBuilder()
     capturing_orch = _EnvCapturingOrchestrator()
@@ -331,12 +331,12 @@ def test_status_workspace_scope_reads_port_base_from_process_env(
     assert rc == 0
     assert len(docs) == 1
 
-    # env_vars injected into the workspace ctx must contain WINTER_PORT_BASE from os.environ
+    # env_vars injected into the workspace ctx must contain WINTER_WORKSPACE_PORT_BASE from os.environ
     assert capturing_orch.captured_env_vars
     env_vars = capturing_orch.captured_env_vars[0]
     assert env_vars is not None
-    assert env_vars.get("WINTER_PORT_BASE") == "7777", (
-        f"workspace ctx.env_vars['WINTER_PORT_BASE'] = {env_vars.get('WINTER_PORT_BASE')!r}; "
+    assert env_vars.get("WINTER_WORKSPACE_PORT_BASE") == "7777", (
+        f"workspace ctx.env_vars['WINTER_WORKSPACE_PORT_BASE'] = {env_vars.get('WINTER_WORKSPACE_PORT_BASE')!r}; "
         "expected '7777' from os.environ"
     )
     # build_workspace was called exactly once

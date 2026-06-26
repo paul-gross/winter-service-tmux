@@ -6,6 +6,7 @@ are made; all I/O is mediated through the fakes defined in tests/conftest.py.
 
 from __future__ import annotations
 
+import dataclasses
 import io
 import shlex
 from pathlib import Path
@@ -1368,6 +1369,27 @@ def test_status_env_document_port_base_from_env_vars() -> None:
 
     doc_without = svc.status_env_document(_make_ctx())
     assert doc_without["port_base"] is None
+
+
+def test_status_env_document_workspace_port_base_from_workspace_var() -> None:
+    """workspace scope reads WINTER_WORKSPACE_PORT_BASE; the per-env WINTER_PORT_BASE is ignored."""
+    tmux = FakeTmuxRepository()
+    reaper = FakeProcessReaper()
+    svc = _make_service(tmux=tmux, reaper=reaper, stdout=io.StringIO())
+
+    # Workspace band present (plus a stray per-env var that must be ignored).
+    ws_ctx = dataclasses.replace(
+        _make_ctx(env_vars={"WINTER_WORKSPACE_PORT_BASE": "4000", "WINTER_PORT_BASE": "4020"}),
+        env="workspace",
+    )
+    assert svc.status_env_document(ws_ctx)["port_base"] == 4000
+
+    # No workspace band -> None, even with a per-env WINTER_PORT_BASE in scope.
+    ws_ctx_absent = dataclasses.replace(
+        _make_ctx(env_vars={"WINTER_PORT_BASE": "4020"}),
+        env="workspace",
+    )
+    assert svc.status_env_document(ws_ctx_absent)["port_base"] is None
 
 
 def test_status_env_document_services_filter() -> None:
