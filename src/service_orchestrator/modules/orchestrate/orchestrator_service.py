@@ -322,7 +322,7 @@ class OrchestratorService:
 
         Returns the env-scoped fragment of winter's env-keyed ``status``
         document (see the ``status`` wire contract in winter's
-        ``ai/winter-cli/usage/service.md``).  The winter service entrypoint
+        ``context/winter-cli/usage/service.md``).  The winter service entrypoint
         (``cli.py``) aggregates one of these per env into the top-level
         ``{"envs": [...]}`` document and serialises it once; this method writes
         nothing to stdout.

@@ -921,7 +921,7 @@ def test_workspace_services_parsed() -> None:
     """[[service]] entries with scope="workspace" partition into workspace_services."""
     content = """\
 session_prefix = "mp"
-workspace_layout_hook = "ai/project/workspace-layout-hook.sh"
+workspace_layout_hook = "context/project/workspace-layout-hook.sh"
 
 [[service]]
 name = "docker"
@@ -945,7 +945,7 @@ scope = "workspace"
     assert manifest.workspace_services[0].cmd == "docker compose up"
     assert manifest.workspace_services[1].name == "watcher"
     assert manifest.workspace_services[1].log == LogMode.PANE
-    assert manifest.workspace_layout_hook == "ai/project/workspace-layout-hook.sh"
+    assert manifest.workspace_layout_hook == "context/project/workspace-layout-hook.sh"
 
 
 def test_services_partitioned_by_scope() -> None:
@@ -1275,11 +1275,11 @@ scope = "workspace"
 def test_overlay_workspace_layout_hook_replaces_committed() -> None:
     committed = """\
 session_prefix = "mp"
-workspace_layout_hook = "ai/project/workspace-layout-hook.sh"
+workspace_layout_hook = "context/project/workspace-layout-hook.sh"
 """
-    overlay = 'workspace_layout_hook = "ai/project/workspace-layout-hook.local.sh"\n'
+    overlay = 'workspace_layout_hook = "context/project/workspace-layout-hook.local.sh"\n'
     manifest = _read({_COMMITTED_PATH: committed, _LOCAL_PATH: overlay})
-    assert manifest.workspace_layout_hook == "ai/project/workspace-layout-hook.local.sh"
+    assert manifest.workspace_layout_hook == "context/project/workspace-layout-hook.local.sh"
 
 
 def test_overlay_workspace_service_partial_override_keeps_existing_fields() -> None:
@@ -1338,7 +1338,7 @@ scope = "workspace"
 def test_read_takes_config_dir_directly() -> None:
     """read() receives the config dir directly — config.toml lives at the root of that dir."""
     content = 'session_prefix = "mp"\n'
-    # The committed file is at _CONFIG_DIR / "config.toml" — no ai/project/ prefix.
+    # The committed file is at _CONFIG_DIR / "config.toml" — no context/project/ prefix.
     abs_committed = _CONFIG_DIR / "config.toml"
     fake_fs = FakeFilesystemReader({abs_committed: content})
     reader = ManifestReader(fake_fs)

@@ -223,10 +223,10 @@ def test_service_manifest_workspace_fields_explicit() -> None:
         layout_hook=None,
         services=(),
         workspace_services=(ws_svc,),
-        workspace_layout_hook="ai/project/workspace-layout-hook.sh",
+        workspace_layout_hook="context/project/workspace-layout-hook.sh",
     )
     assert manifest.workspace_services == (ws_svc,)
-    assert manifest.workspace_layout_hook == "ai/project/workspace-layout-hook.sh"
+    assert manifest.workspace_layout_hook == "context/project/workspace-layout-hook.sh"
 
 
 # ---------------------------------------------------------------------------

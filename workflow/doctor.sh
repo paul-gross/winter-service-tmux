@@ -2,7 +2,7 @@
 # Doctor probe for winter-service-tmux.
 #
 # Emits NDJSON to stdout per the contract documented in
-# workspace:/ai/winter-cli/configuration/doctor.md#probe-output-contract. One object per line:
+# workspace:/context/winter-cli/configuration/doctor.md#probe-output-contract. One object per line:
 #   {"name": "...", "status": "pass|warn|fail", "message"?: "...", "remediation"?: "..."}
 #
 # Four checks:

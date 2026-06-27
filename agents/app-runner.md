@@ -36,7 +36,7 @@ winter service logs '*/backend' -f     # follow backend across every running env
 
 `-f` follows ALL matched `(env, service)` streams concurrently, interleaving their lines into one output until Ctrl-C. **`-f` blocks forever** — an agent must bound it: `timeout -s INT <seconds> winter service logs alpha -f`, or use the Bash tool's `run_in_background` facility. Calling it bare hangs the tool.
 
-File-mode logs persist to `<env>/.winter/logs/<service>.log` on `up`, survive `down` and teardown, and carry per-line timestamps — prefer this path for diagnosis. The flag surface and rendering rules live in `workspace:/ai/winter-cli/usage/service.md`.
+File-mode logs persist to `<env>/.winter/logs/<service>.log` on `up`, survive `down` and teardown, and carry per-line timestamps — prefer this path for diagnosis. The flag surface and rendering rules live in `workspace:/context/winter-cli/usage/service.md`.
 
 **Per-mode read path — match `log` to the right tool:**
 
@@ -64,7 +64,7 @@ Use this only when the service's `log` mode is `"pane"` or you need to see the r
 
 ## Workspace-scoped services
 
-Services with `scope = "workspace"` run in a shared `<session_prefix>-workspace` session. See `winter-service-tmux:/ai/workspace-singletons.md` for the full commands and rules. Operationally:
+Services with `scope = "workspace"` run in a shared `<session_prefix>-workspace` session. See `winter-service-tmux:/context/workspace-singletons.md` for the full commands and rules. Operationally:
 
 - To check a singleton, use `winter service status workspace` — not `./status`, which only shows this env's per-env services.
 - Prefer `winter service up <env>` over `alpha/up` — the former ensures workspace singletons are running before the env session starts; the env-root `./up` skips that check.
