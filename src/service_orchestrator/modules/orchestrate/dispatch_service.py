@@ -71,7 +71,7 @@ class DispatchService:
     # Context builders — all actions skip env-file reading.
     #
     # Winter-cli core computes WINTER_ENV / WINTER_ENV_INDEX / WINTER_PORT_BASE /
-    # WINTER_WORKSPACE_PORT_BASE and any [env.vars] entries via
+    # WINTER_WORKSPACE_PORT_BASE and the scope's env-var band entries ([env.workspace.vars] / [env.feature.vars]) via
     # EnvProvisionerService and injects them into the provider subprocess
     # environment before invoking any action (up/down/restart/logs/status).
     # The provider must therefore read these vars from os.environ rather than
