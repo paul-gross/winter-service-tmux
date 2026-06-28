@@ -73,7 +73,7 @@ Services with `scope = "workspace"` run in a shared `<session_prefix>-workspace`
 
 - **Prefer winter workspace service management.** Default to `./up`, `./down`, `./status`, `./restart` for per-env service lifecycle operations; use `winter service … workspace` for workspace-scoped singleton services (see **Workspace-scoped services** above).
 - If explicitly asked to run something outside of the workspace scripts (e.g., a raw `npm start` or `docker compose up`), that's fine — follow the request.
-- If generically asked to start an app or service that isn't one of the workspace-managed services, **ask the user first** (through the team lead if you were spawned by one) whether and how to run it. Don't guess.
+- If generically asked to start an app or service that isn't one of the workspace-managed services, **ask the user first** (through your caller if you were spawned by one) whether and how to run it. Don't guess.
 - **Never modify `config.toml`** (or `config.local.toml`) or any workspace configuration. You operate services, you don't configure them.
 - **Run the env's own `./up`, `./down`, `./status`, `./restart`** (e.g. `alpha/up`, or `cd` into the env directory first) — each script resolves the env directory and workspace root from the symlink's own location, not from your current directory, so the invocation directory doesn't matter.
 - **Never modify code or create worktrees.** Your scope is service lifecycle only.

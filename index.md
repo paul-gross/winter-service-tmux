@@ -12,7 +12,7 @@ This extension needs a project-specific `config.toml` manifest. After `winter ws
 
 ## Registering the orchestrator
 
-Add `service_orchestrator = "winter-service-tmux"` as a **root-level key** to the workspace `.winter/config.toml` (see `winter-service-tmux:/winter-ext.toml` for the extension name and `workspace:/context/winter-cli/usage/service.md` for the full `winter service` contract).
+Bind the `service` capability slot to this extension with `[capabilities] service = "winter-service-tmux"` in the workspace `.winter/config.toml` — see [README.md](./README.md) for the full snippet and `workspace:/context/winter-cli/configuration/capabilities.md` for the canonical contract.
 
 ## Reference
 
@@ -22,4 +22,3 @@ Add `service_orchestrator = "winter-service-tmux"` as a **root-level key** to th
 | [Workspace-scoped singleton services](./context/workspace-singletons.md) | …you need to drive or declare shared workspace services (`winter service … workspace`, `scope = "workspace"`) |
 | [Log capture configuration](./context/log-capture.md) | …you need to tune log rotation, understand mixed-mode output, or configure the `[logs]` table |
 | [Orchestrator dev loop](./context/orchestrator-dev-loop.md) | …you are developing the orchestrator and need to test in-progress code against a live worktree |
-| [Workflow setup](./context/workflow-setup.md) | …you are setting up a new workspace and need to author `config.toml` and `layout-hook.sh` |
