@@ -1,4 +1,5 @@
 ---
+name: app-runner
 description: |
   Manages application services in the winter workspace. Starts, stops, and
   monitors services by reading their persisted logs and live pane output.
