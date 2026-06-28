@@ -1,10 +1,9 @@
 ---
 name: app-runner
 description: |
-  Manages application services in the winter workspace. Starts, stops, and
-  monitors services by reading their persisted logs and live pane output.
-  Use when: starting/stopping services, checking if apps are healthy, reading
-  logs, diagnosing startup failures.
+  Starts, stops, and monitors application services in the winter workspace by
+  reading their logs and live pane output. Use this agent to run services, check
+  health, or diagnose startup failures.
 model: haiku
 tools:
   - Bash
