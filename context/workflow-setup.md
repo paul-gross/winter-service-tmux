@@ -6,19 +6,19 @@ Run it on a fresh workspace, or any time you want to (re)configure how services 
 
 **Idempotent:** safe to re-run at any time. Before each step, check the current state of `workspace:/.winter/config/winter-service-tmux/config.toml`. If the step is already done, **say so explicitly** ("`session_prefix` is already set to `wws` — skipping") and move on. Don't silent skip.
 
+## Caller contract
+
+This guide is invoked by the `ws-setup` service-orchestration sub-guide (`workspace:/context/setup-service-orchestration.md`, Step 4) after it has already discovered and assigned services. The caller provides:
+
+- **The set of services assigned to `winter-service-tmux`**, each with a **scope**: `"project"` (per-env) or `"workspace"`.
+
+This guide does not re-discover or re-assign services. It collects the tmux-specific wiring (pane targets, start commands, layout) for the assigned set and writes `config.toml` and `layout-hook.sh`.
+
 ## How to run this guide
 
 This is a guided walkthrough, not a script. Your job is to teach the user how their service orchestration is wired together while configuring it. Be verbose, be explicit, and be patient.
 
-**Pacing rules — strict, no exceptions:**
-
-- **One question at a time.** Never ask the user two things at once. No compound "and / or" questions. If a step needs three pieces of info, ask three times across three turns.
-- **One step at a time.** Don't preemptively run a later step's commands while the current step is still in progress. Finish the work for the current step before starting the next.
-- **Don't say step numbers.** Don't say "step 1 of 9" or "step 3" or "next step" — just describe what's happening and what's next. The user shouldn't be tracking a counter.
-- **Speak before acting.** At the start of every step, send a short message that describes what's about to happen and *why* it matters. Don't dive straight into a question or a command.
-- **Narrate actions.** Before running a command or editing a file, tell the user what's about to happen ("Writing `config.toml` with `session_prefix = "wws"` and a single shell service..."). After it runs, tell them what changed.
-- **Don't pause between steps.** When a step's work is done, report what changed in one line and move directly into the next step. Don't ask "ready for the next one?" — just continue. The user can interrupt at any time.
-- **Show, don't hide.** When you skip a step because the state is already correct, *show* what you found ("`config.toml` already declares 3 services: `backend`, `frontend`, `shell`. Skipping service declaration."). Never silent skip.
+**Follow the pacing rules of the setup process you're engaged in.** This guide is normally entered mid-walkthrough from `/ws-setup`, so honor that walkthrough's pacing throughout — one question per turn, speak before acting, narrate actions, don't pause between steps, and show what you found rather than silent-skipping.
 
 ## Why this matters
 
@@ -68,54 +68,11 @@ fi
 
 **If `config.toml` does not exist**, tell the user: "No `config.toml` yet — let's build one from scratch." Then continue.
 
-### 2. Decide research vs. guided approach
-
-**Explain first:** "Two ways to figure out what services need to run: I can research the project repos automatically (look at `package.json` scripts, `Procfile`, `docker-compose.yml`, server entry points, README/docs), or you can walk me through it. Researching is faster when there's an existing app to read; guided is better when you're starting fresh or have constraints the code doesn't capture."
-
-Ask **one** question:
-
-**"Want me to research automatically, or walk through it together?"**
-
-- "automatic": tell the user "Spawning a research agent — it'll look at start scripts, server entry points, docker-compose, and READMEs across the project repos and report back what it finds." Then spawn an Opus subagent (always from the workspace root per the workspace rules) with a self-contained prompt:
-  - Tell it which repos to inspect (read from `workspace:/.winter/config.toml` `[[project_repository]]` entries)
-  - Ask it to find: start commands per service (`npm run dev`, `python manage.py runserver`, etc.), the directory each runs from, ports each service binds to, any env vars each consumes beyond the WINTER_* base vars injected by core, any docker-compose services that need to be `up`'d
-  - Cap the response under 600 words
-  - Tell it to be honest if a repo has no runtime services
-  - Have it end with a synthesis: which services the manifest should declare, in what order, with what start commands
-- "guided": fall through to the next step.
-
-When the subagent reports back, present the findings to the user and ask **"Use these as the basis for `config.toml`?"** before proceeding.
-
-### 3. Identify services
-
-**Explain first:** "Each service becomes one tmux pane. For each one I need five things: the start command, the directory it runs from, any env vars it needs beyond the WINTER_* base vars injected automatically by core, whether it has a readiness probe, and whether it should be retried if it crashes on boot. We'll go service by service — one at a time."
-
-Ask **one** question:
-
-**"What services need to run for the application to work? (e.g. backend API, frontend dev server, background worker, shell)"**
-
-Once the user lists them, **for each service** ask in turn (one question per turn):
-
-1. **"What's the start command for `<service>`?"** (e.g. `npm run dev`, `cargo run`, `python manage.py runserver`)
-2. **"Which directory does it run from?"** (relative to the worktree root, e.g. `apps/backend`)
-3. **"Which env vars does it need that are NOT provided by the injected WINTER_* base vars?"** (e.g. `$BACKEND_PORT` declared in `[env.feature.vars]`, or machine-specific secrets) — accept "none" as an answer.
-4. **"Does `<service>` bind to a port?"** Accept "none". If yes, ask whether it is a fixed port (a bare integer, e.g. `5432`) or an env-relative port (an offset expression, e.g. `WINTER_PORT_BASE + 10`). A bare integer is an absolute port number — use it when the port is the same in every environment (e.g. a fixed database port). The `WINTER_PORT_BASE + <offset>` form is resolved at status time against the per-env `WINTER_PORT_BASE` injected by core — use it when each feature env needs its own isolated port. Record the value exactly: `port = 5432` for a literal or `port = "WINTER_PORT_BASE + 10"` for an offset expression. Services without a declared port show a blank `PORTS` column in `winter service status`.
-5. **"Does `<service>` have a status health probe?"** Accept "none". This is reported by `status`; it does not make `./up` wait. For HTTP health checks, record `type = "url"` and the health URL (e.g. `http://localhost:${BACKEND_PORT}/health`). For shell checks, record `type = "cmd"` and the command that should exit 0 when ready (e.g. `pgrep -f my-worker`, run from the worktree root). Ask for a timeout only if the user wants a non-default value; otherwise omit it and use the default 5 seconds.
-6. **"Should `<service>` be re-launched if it dies immediately on boot?"** Accept "no". If yes, record `retries` (e.g. 3) and ask whether a non-default retry delay is needed (default is 2 seconds); otherwise omit `retry_delay`. This startup retry policy is honored by `winter service up`; the env-root `./up` symlink is a thin no-retry door and does not honor it.
-
-The start command and run directory combine into one `cmd` field in the manifest: a service that runs from the worktree root is just its command (`cmd = "npm run dev"`); a service in a subdirectory prepends a *relative* `cd` (`cmd = "cd apps/backend && npm run dev"`). Keep that `cd` relative — the orchestrator resets each pane to the worktree root before running, so the same command works on both `./up` and `./restart`.
-
-Record each answer before moving to the next service. After all services are described, summarise back: "OK — you have `<n>` services: `<service-1>` running `<cmd-1>` from `<dir-1>`, `<service-2>` running `<cmd-2>` from `<dir-2>`, ..." and ask **"Anything to add, change, or remove?"** before continuing.
-
-A common pattern is one pane per service plus an extra `shell` pane for ad-hoc commands. Suggest it if the user didn't include one: **"Add a `shell` pane for ad-hoc commands?"** (A shell pane uses an empty cmd: `cmd = ""`.)
-
-### 4. Session prefix
+### 2. Session prefix
 
 **Explain first:** "Each worktree gets its own tmux session, named `<prefix>-<worktree>` — e.g. `<prefix>-alpha`, `<prefix>-beta`. The prefix should be short (2-4 chars), lowercase, alphanumeric, and distinct enough not to collide with other tmux sessions on the user's machine."
 
-Suggest a prefix derived from the workspace directory name or the primary project name (initials of the workspace directory, an obvious acronym from the project, etc.) and **always prompt the user to confirm or override it** — never pick silently.
-
-Ask **one** question:
+Suggest a prefix derived from the workspace directory name or the primary project name (initials of the workspace directory, an obvious acronym from the project, etc.) and ask **one** question:
 
 **"I suggest `<derived>` as the tmux session prefix (sessions would be named `<derived>-alpha`, `<derived>-beta`, ...). Confirm, or enter a different prefix?"**
 
@@ -124,109 +81,69 @@ Ask **one** question:
 
 Record the confirmed value as `session_prefix`.
 
-### 5. Environment file
+### 3. Wire per-env services
 
-**Explain first:** "WINTER_* base vars (`WINTER_ENV`, `WINTER_ENV_INDEX`, `WINTER_PORT_BASE`) and the scope's env-var band entries (`[env.workspace.vars]` / `[env.feature.vars]`) are self-sourced into each pane shell via `eval \"$(winter env <scope>)\"` in the launch line — no `env_file` is needed for those. Set `env_file` only when a service command needs additional vars from a local file (e.g. machine-specific credentials not managed by core) or when a health probe target uses `${VAR}` placeholders that must be resolved from a file. Most workspaces can omit it entirely."
+**Explain first:** "Now I'll wire the per-env services (scope `"project"`) into `config.toml` and write the layout hook. Per-env services run in a separate tmux session per feature env (`<session_prefix>-<env>`). Panes are addressed as `<window>.<pane>` (both zero-based); these `target` values in the manifest must exactly match the windows and panes the layout hook creates."
 
-Look back at the env-var dependencies collected for each service command and health probe target. If **any** declared a local file dependency (vars that are NOT in the core-injected set), tell the user: "One or more services or probes need vars from a local file — set `env_file` to its path." and ask which path (relative to the worktree root).
+If there are **no** per-env services in the assigned set, tell the user "No per-env services assigned — skipping to workspace services." and move on.
 
-If **no** service or probe has file-based env-var dependencies, omit `env_file` and move on without prompting — core injection covers WINTER_* vars automatically.
+Skip any service already declared in `config.toml` with a matching `[[service]]` entry — show what you found.
 
-### 6. Tmux session layout
+**Resolve the wiring yourself — don't interrogate the user field by field.** For each remaining per-env service, infer its tmux wiring from the project: `package.json` scripts, `Procfile`, framework entry points (`manage.py`, `mix phx.server`, `rails server`), README, and env-var declarations. Resolve:
 
-**Explain first:** "tmux organises services along two axes: **windows** (separate full-screen tabs) and **splits** within a window (horizontal or vertical). The `layout-hook.sh` creates the pane geometry; the orchestrator then sends each service's command into its pane. Panes are addressed as `<window>.<pane>` (both zero-based) — these `target` values in the manifest must exactly match what the layout hook creates. See `winter-service-tmux:/workflow/layout-hook.sh.example` for a 2-window layout."
+- **cmd** — the start command. A service at the worktree root is just its command (`cmd = "npm run dev"`); a service in a subdirectory prepends a relative `cd` (`cmd = "cd apps/backend && npm run dev"`). Keep the `cd` relative — the orchestrator resets each pane to the worktree root before running, so the same command works on both `./up` and `./restart`.
+- **target** — the pane address (`<window>.<pane>`, both zero-based). Pick a layout that keeps related services together (e.g. backend + frontend in window 0, a shell pane in window 1). Every target must be unique across per-env services.
+- **port** — the port the service binds. Two forms: `port = 5432` for a fixed absolute port (the same in every env); `port = "WINTER_PORT_BASE + <offset>"` for a per-env isolated port resolved at status time from the env's `WINTER_PORT_BASE`. Omit when the service declares no port.
+- **health probe** — `type = "url"` with an HTTP health URL (passes on 2xx/3xx) or `type = "cmd"` with a shell command that exits 0 when ready. `${VAR}` placeholders in the `target` string resolve from the injected env (core WINTER_* vars and the scope's env-var band entries); bare `$VAR` is not interpolated. Default timeout is 5 seconds; omit `timeout` unless non-default. Omit the probe when the service has no observable readiness signal.
+- **startup retry** — `retries` (max re-launch attempts after the first failure) and optional `retry_delay` (seconds between attempts, default 2). Include only for services likely to fail transiently on boot. This policy is honored by `winter service up`; the env-root `./up` symlink does not honor it.
+- **env_file** — a path relative to the worktree root if any service command or health probe needs vars beyond core injection (WINTER_* base vars and the scope's env-var band entries are auto-injected; no env_file is needed for those). Omit if not needed.
 
-Based on the services collected, pick a default layout that keeps related services together (e.g. backend + frontend top, shell bottom). Tell the user: "Proposed layout for `<n>` panes: `<service-0>` → `0.0`, `<service-1>` → `0.1`, `<service-2>` → `1.0`." (Adjust to the actual count.)
+If something genuinely cannot be inferred (e.g. a bespoke start command with no evidence in the project), ask the user specifically about that one thing before presenting the proposal.
 
-Ask **one** question:
+Also suggest a `shell` pane (empty `cmd = ""`) if the service set doesn't already include one: **"Add a `shell` pane for ad-hoc commands?"**
 
-**"Use this layout, or describe a different one?"**
+Then **present the full proposed wiring** and ask **one** question:
 
-- "use this": continue.
-- different layout: take the user's description literally — they know their screen.
+**"Here's how I'll wire your per-env services — for each: pane target, `cmd`, port (if any), health probe (if any), and startup policy (if any); plus `env_file` if needed and the layout the hook will create. Confirm, or tell me what to change?"**
 
-Record each service's `<window>.<pane>` target. Every target must be unique.
+- "confirm": apply (below).
+- changes: fold in the user's corrections and re-present the proposal until they confirm.
 
-### 7. Write config.toml
+On confirmation, **update `config.toml` and write `layout-hook.sh`**, following the schema in `winter-service-tmux:/workflow/config.toml.example` and the contract in `winter-service-tmux:/workflow/layout-hook.sh.example`. Winter-specific rules the schema docs assume:
 
-**Explain first:** "Now I have everything needed to write `workspace:/.winter/config/winter-service-tmux/config.toml`. The annotated schema reference is `winter-service-tmux:/workflow/config.toml.example` — follow its structure and substitute the values we just collected."
+- `layout_hook = "layout-hook.sh"` — bare filename, resolved relative to the config dir; place the hook alongside `config.toml`.
+- `[service.health]` and `[service.startup]` subtables must be placed immediately after their parent `[[service]]`, before the next `[[service]]`.
+- `${VAR}` placeholders in health `target` strings resolve from the injected env; bare `$VAR` is not interpolated.
+- The layout hook must only create windows and panes — do not `tmux send-keys`, source env files, or `cd` in the hook; the orchestrator handles all of that. After writing, mark it executable: `chmod +x ./.winter/config/winter-service-tmux/layout-hook.sh`.
 
-Tell the user: "Writing `config.toml` with `session_prefix = "<prefix>"`, `env_file = "<value-or-omitted>"`, `<n>` services..."
+**Machine-specific overrides (mention, don't prompt):** tell the user: "If you ever need machine-specific overrides, drop a gitignored `config.local.toml` next to `config.toml` and it'll be merged on top." Create it only if explicitly asked.
 
-Then write the file. Read `config.toml.example` and reproduce its structure, substituting:
+Then summarise: "Per-env services wired: `<name-list>`. `config.toml` and `layout-hook.sh` written."
 
-- `session_prefix` ← the value confirmed in the session-prefix step.
-- `env_file` ← the path recorded in the env-file step, if any; omit the key when the step concluded no local file is needed.
-- `layout_hook` ← `"layout-hook.sh"` (the bare filename — resolved relative to the config dir where this file lives).
-- `[[service]]` entries ← one table per service, with `name`, `target`, and `cmd`. Empty cmd (`cmd = ""`) for interactive panes.
-- `port` field ← add to the `[[service]]` table when the service declared a port. Use `port = <int>` for a literal port (e.g. `port = 5432`) or `port = "WINTER_PORT_BASE + <offset>"` for an env-relative offset expression (e.g. `port = "WINTER_PORT_BASE + 10"`). Omit the key entirely when no port was declared.
-- `[service.health]` subtables ← only for services that declared a status health probe. Place each subtable immediately after its matching `[[service]]`, before the next `[[service]]`. Use `type = "url"` or `type = "cmd"`, `target = "..."`, and optional `timeout = <seconds>`. `${VAR}` placeholders in `target` are resolved from the scope's injected env (WINTER_* base vars and the scope's env-var band entries (`[env.workspace.vars]` / `[env.feature.vars]`)); bare `$VAR` is not interpolated.
-- `[service.startup]` subtables ← only for services that declared a startup retry policy. Place each subtable immediately after its matching `[[service]]` (and after any `[service.health]`), before the next `[[service]]`. Use `retries = <int>` and optional `retry_delay = <seconds>`.
+### 4. Wire workspace singleton services
 
-Confirm: "`config.toml` written at `workspace:/.winter/config/winter-service-tmux/config.toml`."
+**Explain first:** "Workspace-scoped services (scope `"workspace"`) run once under `<session_prefix>-workspace` at the workspace root, shared across all feature envs. Their start commands must run in the foreground — the orchestrator reaps the tmux session to shut them down, so commands that daemonise or detach won't be reaped cleanly."
 
-**Machine-specific overrides (mention, don't prompt):** the committed `config.toml` can be paired with a gitignored `config.local.toml` in the same directory for per-machine tweaks. The reader merges it on top using the same key-based semantics (scalars replace; services merge by `name`). Don't create one as part of this guide — just tell the user it exists: "If you ever need machine-specific overrides, drop a gitignored `config.local.toml` next to this file and it'll be merged on top." Only create it if the user explicitly asks; if you do, ensure it's gitignored.
+If there are **no** workspace-scoped services in the assigned set, tell the user: "No workspace-level services were assigned to this orchestrator — skipping." and continue.
 
-### 8. Write layout-hook.sh
+Skip any service already declared with `scope = "workspace"` in `config.toml` — show what you found.
 
-**Explain first:** "The orchestrator calls `layout-hook.sh` once per `./up`, after creating the tmux session and before sending any service commands. Its only job is to create the windows and panes the manifest's `[[service]]` targets refer to — nothing else. The annotated contract is `winter-service-tmux:/workflow/layout-hook.sh.example`."
+**Resolve the wiring yourself.** For each remaining workspace-scoped service, infer from the project its **blocking foreground start command** (e.g. `postgres -D /usr/local/var/postgres`, `rabbitmq-server`, `docker run -p 5432:5432 postgres:16`) and its **pane target** (`<window>.<pane>`). Workspace pane targets are independent of per-env targets — the same address may appear in both scopes without conflict (they live in different tmux sessions).
 
-Tell the user: "Writing `layout-hook.sh` to create the pane geometry we designed..."
+Then **present the full proposed wiring** and ask **one** question:
 
-Then write the file at `workspace:/.winter/config/winter-service-tmux/layout-hook.sh`. Read `layout-hook.sh.example` and follow its contract exactly:
+**"Here's how I'll wire your workspace singletons — for each: pane target, `cmd`, and `scope = "workspace"`. Confirm, or tell me what to change?"**
 
-- `set -euo pipefail`
-- Assert `WINTER_TMUX_SESSION` and `WINTER_TMUX_WORKTREE_DIR` are set (the orchestrator always provides them).
-- Create windows/panes to match the targets declared in `config.toml`. Pane `0.0` always exists after `tmux new-session` — don't create it. Use `tmux split-window` for splits within a window; use `tmux new-window` for additional windows.
-- **DO NOT** `tmux send-keys`, source env files, or `cd`. The orchestrator does all of that.
-- End with a `tmux select-pane` (and optionally `tmux select-window`) to set the focus on attach.
+- "confirm": apply.
+- changes: fold in the user's corrections and re-present until they confirm.
 
-After writing, mark it executable:
+On confirmation, **update `config.toml` and write `workspace-layout-hook.sh`**, following the schema in `winter-service-tmux:/workflow/config.toml.example` and the contract in `winter-service-tmux:/workflow/layout-hook.sh.example`. Winter-specific rules to honor: each workspace service entry needs `scope = "workspace"`; set `workspace_layout_hook = "workspace-layout-hook.sh"` (bare filename, resolved relative to the config dir); the workspace hook follows the same layout-only contract as `layout-hook.sh` but the orchestrator supplies `WINTER_ENV=workspace` and `WINTER_TMUX_WORKTREE_DIR=<workspace-root>` — `WINTER_ENV_INDEX` and `WINTER_PORT_BASE` are **not** set for the workspace hook. After writing, mark it executable: `chmod +x ./.winter/config/winter-service-tmux/workspace-layout-hook.sh`.
 
-```bash
-chmod +x ./.winter/config/winter-service-tmux/layout-hook.sh
-```
+**Note on shutdown:** `winter service down workspace` reaps the tmux session and kills each pane's process tree — best-effort. A service that forks to the background or detaches from the pane's process group may survive. Run commands in the foreground so the session reap reaches them.
 
-Confirm: "`layout-hook.sh` written and executable at `workspace:/.winter/config/winter-service-tmux/layout-hook.sh`."
+Then summarise: "Workspace singletons wired: `<name-list>`. Drive them with `winter service up/down workspace`."
 
-### 9. Workspace singleton services (optional)
-
-**Explain first:** "If your workspace needs shared infrastructure that should run once for the whole workspace — a database, a message broker, a container registry — you can mark a `[[service]]` entry with `scope = "workspace"` alongside the per-env ones (`scope` defaults to `"project"`). These run in a separate `<prefix>-workspace` tmux session at the workspace root, started via `winter service up workspace`. `winter service up <env>` ensures the workspace session is running first — so workspace singletons are guaranteed to be up when any env spins up via `winter service up`. Note: the env-root `./up` symlink does NOT auto-start the workspace session; if you use `alpha/up`, run `winter service up workspace` separately first."
-
-Ask **one** question:
-
-**"Does your workspace need any shared singleton services (e.g. a shared database or broker that all feature envs should share)? If yes, name them."**
-
-- "no" / "none": skip this step and continue.
-- otherwise: for each workspace service, ask in turn:
-  1. **"What's the start command for `<service>`?"** — this is typically a blocking foreground command (e.g. `postgres -D /usr/local/var/postgres`, `rabbitmq-server`, `docker run -p 5432:5432 postgres:16`). The orchestrator kills the session to shut it down, so the command must run in the foreground.
-  2. **"Which pane should it occupy?"** (e.g. `0.0`, `0.1`) — workspace pane targets are independent of env targets; the same address may appear in both without conflict.
-
-After all workspace services are described, summarise back and ask **"Anything to add or change?"** before continuing.
-
-**Write the workspace section.** Append to `workspace:/.winter/config/winter-service-tmux/config.toml`:
-
-```toml
-workspace_layout_hook = "workspace-layout-hook.sh"
-
-[[service]]
-name    = "<name>"
-target  = "<window>.<pane>"
-cmd     = "<blocking-foreground-command>"
-scope   = "workspace"
-```
-
-Then write `workspace:/.winter/config/winter-service-tmux/workspace-layout-hook.sh`, following the same contract as `layout-hook.sh` (layout only; see `winter-service-tmux:/workflow/layout-hook.sh.example`), but the orchestrator will supply `WINTER_ENV=workspace` and `WINTER_TMUX_WORKTREE_DIR=<workspace-root>` instead of per-env values (`WINTER_ENV_INDEX` and `WINTER_PORT_BASE` are **not** set for the workspace hook). Mark it executable:
-
-```bash
-chmod +x ./.winter/config/winter-service-tmux/workspace-layout-hook.sh
-```
-
-**Note on shutdown:** workspace services are shut down by `winter service down workspace`, which reaps the tmux session and kills each pane's process tree. This is best-effort — a service that forks to the background or detaches from the pane's process group may survive. Run commands in the foreground so the session reap reaches them.
-
-Confirm: "Workspace singletons added to `config.toml`; `workspace-layout-hook.sh` written."
-
-### 10. Validate
+### 5. Validate
 
 **Explain first:** "Before testing live, validate the manifest — the validator catches schema errors, duplicate targets, and missing-service issues before they reach a running tmux session."
 
@@ -243,7 +160,7 @@ If the validator reports errors, fix them in `config.toml` (or `layout-hook.sh` 
 
 Confirm: "Manifest validates cleanly."
 
-### 11. Smoke test (optional)
+### 6. Smoke test (optional)
 
 **Explain first:** "Before declaring done, you can verify the full lifecycle in a real worktree."
 
