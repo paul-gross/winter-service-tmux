@@ -6,16 +6,14 @@
 winter --winter=./alpha/winter --service-orchestrator=./alpha/winter-service-tmux service status alpha
 ```
 
-The env-root `./up`/`./down`/`./status`/`./restart` symlinks resolve to the **installed** extension (`winter-service-tmux:/workflow/<script>`), not your in-progress worktree — so they run committed code until you repoint them. To exercise changed orchestrator code, override the symlink at the worktree's copy, run the real entrypoint, then restore it (using `alpha` as the example env):
+The env-root `./up`/`./down`/`./status`/`./restart` symlinks resolve to the **installed** extension (`winter-service-tmux:/workflow/<script>`), not your in-progress worktree — so they run committed code unless you override it. Set `WINTER_EXT_DIR` to your in-progress worktree before invoking the env-root script; the shims prefer `$WINTER_EXT_DIR/src` when set, so no symlink surgery or restore is needed:
 
 ```bash
-readlink alpha/up                                          # record original: ../.winter/ext/service-tmux/workflow/up
-ln -sfn winter-service-tmux/workflow/up alpha/up           # override -> alpha/winter-service-tmux/workflow/up (sibling-relative)
-cd alpha && ./up && ./status                               # exercise via the real entrypoint
-ln -sfn ../.winter/ext/service-tmux/workflow/up alpha/up   # restore — always, even if the test failed
+WINTER_EXT_DIR=$PWD/alpha/winter-service-tmux ./alpha/up
+WINTER_EXT_DIR=$PWD/alpha/winter-service-tmux ./alpha/status
 ```
 
-Repeat per script you changed. **Restore is mandatory** — a left-over override silently makes every later service call in that env run worktree code.
+Pass `WINTER_EXT_DIR` as an inline prefix on each invocation, scoped to that single command — do **not** `export` it. An exported override has no auto-cleanup and silently routes *every* later `./up`/`./down`/`./status`/`./restart` in that shell through worktree code, reintroducing the footgun the symlink dance had.
 
 The shims (`workflow/up` etc.) are thin Python launchers that call `python3 -m service_orchestrator.env_cli <action>`. To run the package's unit tests directly, see the repo `CONTRIBUTING.md`.
 

@@ -3,11 +3,15 @@
 # This script is symlinked into feature env dirs (e.g. alpha/restart).
 # The symlink's parent directory is the worktree; used to derive env + workspace.
 
-_SELF="$0"
-while [ -L "$_SELF" ]; do
-    _SELF="$(readlink "$_SELF")"
-done
-_SRC="$(cd "$(dirname "$_SELF")/.." && pwd)/src"
+if [ -n "${WINTER_EXT_DIR:-}" ]; then
+    _SRC="$WINTER_EXT_DIR/src"
+else
+    _SELF="$0"
+    while [ -L "$_SELF" ]; do
+        _SELF="$(readlink "$_SELF")"
+    done
+    _SRC="$(cd "$(dirname "$_SELF")/.." && pwd)/src"
+fi
 
 # Resolve the symlink's absolute path (the env-dir entry, not the real script).
 # Passed as argv[0] so env_cli._resolve_from_argv0 can infer env name + workspace.
