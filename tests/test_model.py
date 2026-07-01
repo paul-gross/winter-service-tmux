@@ -92,6 +92,17 @@ def test_service_manifest_optional_fields_none() -> None:
     assert manifest.services == ()
 
 
+def test_service_manifest_session_prefix_is_optional() -> None:
+    """session_prefix=None is legal — it's an optional per-provider override."""
+    manifest = ServiceManifest(
+        session_prefix=None,
+        env_file=None,
+        layout_hook=None,
+        services=(),
+    )
+    assert manifest.session_prefix is None
+
+
 def test_service_manifest_is_frozen() -> None:
     import pytest
 

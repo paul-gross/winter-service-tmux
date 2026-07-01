@@ -70,7 +70,7 @@ def _make_ctx(env: str = "alpha", manifest: ServiceManifest = _MANIFEST) -> Sess
         workspace_root=_WORKSPACE,
         worktree_dir=_WORKSPACE / env,
         config_dir=_CONFIG_DIR,
-        session_prefix=manifest.session_prefix,
+        session_prefix="mp",
         services=manifest.services,
         layout_hook=manifest.layout_hook,
         logs=manifest.logs,
@@ -87,7 +87,7 @@ def _make_workspace_ctx() -> SessionContext:
         workspace_root=_WORKSPACE,
         worktree_dir=_WORKSPACE,  # NOT _WORKSPACE/workspace
         config_dir=_CONFIG_DIR,
-        session_prefix=_MANIFEST.session_prefix,
+        session_prefix="mp",
         services=_MANIFEST.workspace_services,
         layout_hook=_MANIFEST.workspace_layout_hook,
         logs=_MANIFEST.logs,

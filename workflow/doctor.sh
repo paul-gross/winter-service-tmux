@@ -65,7 +65,13 @@ fi
 #
 # The manifest is now live config (not optional). A missing or invalid manifest
 # is a real finding (fail). Validates via the service_manifest CLI (stdlib-only,
-# python3 required). Populates session_prefix for probe 3.
+# python3 required). Resolves session_prefix for probe 3 — the OPTIONAL
+# manifest override wins when declared, otherwise this falls back to
+# WINTER_SERVICE_PREFIX (a base extension var, present on every dispatch
+# action, including doctor), mirroring _resolve_session_prefix. Probe 3
+# checks the collision against that resolved prefix, so it runs under the
+# recommended no-override default too, and only skips when neither source
+# resolves.
 #
 # Config dir is resolved via WINTER_EXT_CONFIG_DIR (set by winter on every
 # orchestrator dispatch) or falls back to
@@ -132,9 +138,15 @@ print("; ".join(violations))
     fi
 
     # Extract session_prefix from the TOML for probe 3 (simple grep; the field
-    # is a top-level scalar so the pattern is reliable).
+    # is a top-level scalar so the pattern is reliable). Manifest override
+    # wins when declared; otherwise fall back to WINTER_SERVICE_PREFIX, the
+    # same resolution order as _resolve_session_prefix — this doctor dispatch
+    # receives that var like every other dispatch action.
     session_prefix=$(grep -E '^[[:space:]]*session_prefix[[:space:]]*=' "$MANIFEST_PATH" \
       | sed 's/.*=[[:space:]]*//' | tr -d '"'"'"' ')
+    if [[ -z "$session_prefix" ]]; then
+      session_prefix="${WINTER_SERVICE_PREFIX:-}"
+    fi
   fi
 fi
 
@@ -145,7 +157,8 @@ if [[ "$tmux_ok" != true ]]; then
 elif [[ "$manifest_ok" != true ]]; then
   emit "session-name collision" warn "skipped: manifest absent or invalid"
 elif [[ -z "$session_prefix" ]]; then
-  emit "session-name collision" warn "skipped: session_prefix not found in config.toml"
+  emit "session-name collision" warn \
+    "skipped: no session_prefix resolved (neither a manifest override nor WINTER_SERVICE_PREFIX is set)"
 else
   # `tmux ls` exits non-zero when no tmux server is running; treat that as
   # "no collision possible" rather than an error.

@@ -50,8 +50,6 @@ class ManifestValidator:
         human-readable string that names the offending element.
 
         Checks performed:
-        - ``session_prefix`` is present and non-empty (defensive — reader
-          already requires it, but validate defensively here too).
         - Every service ``name`` is non-empty (both env services and workspace
           services).
         - No duplicate service names (checked GLOBALLY across the merged set of
@@ -75,7 +73,6 @@ class ManifestValidator:
         """
         violations: list[str] = []
 
-        self._check_session_prefix(manifest, violations)
         self._check_service_names(manifest, violations)
         self._check_duplicate_targets(manifest.services, "service", violations)
         self._check_duplicate_targets(manifest.workspace_services, "workspace service", violations)
@@ -99,11 +96,6 @@ class ManifestValidator:
     # ------------------------------------------------------------------
     # Internal checks — each appends to violations, never raises
     # ------------------------------------------------------------------
-
-    @staticmethod
-    def _check_session_prefix(manifest: ServiceManifest, violations: list[str]) -> None:
-        if not manifest.session_prefix:
-            violations.append("'session_prefix' is missing or empty")
 
     @staticmethod
     def _check_service_names(manifest: ServiceManifest, violations: list[str]) -> None:

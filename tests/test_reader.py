@@ -85,10 +85,20 @@ cmd = ""
 
 
 def test_valid_minimal_manifest() -> None:
-    """Only session_prefix is required; all other fields may be absent."""
+    """session_prefix is optional; all top-level fields may be absent."""
     manifest = _read({_COMMITTED_PATH: 'session_prefix = "mp"\n'})
 
     assert manifest.session_prefix == "mp"
+    assert manifest.env_file is None
+    assert manifest.layout_hook is None
+    assert manifest.services == ()
+
+
+def test_valid_manifest_with_no_top_level_scalars() -> None:
+    """Nothing is required at the top level: session_prefix absent → None."""
+    manifest = _read({_COMMITTED_PATH: ""})
+
+    assert manifest.session_prefix is None
     assert manifest.env_file is None
     assert manifest.layout_hook is None
     assert manifest.services == ()
@@ -280,9 +290,17 @@ def test_malformed_toml_raises() -> None:
         _read({_COMMITTED_PATH: "this is not [ valid toml !!!\n"})
 
 
-def test_missing_session_prefix_raises() -> None:
+def test_missing_session_prefix_yields_none() -> None:
+    """session_prefix is optional; absent means resolution falls back to
+    WINTER_SERVICE_PREFIX (SessionContextBuilder's concern, not the reader's)."""
+    manifest = _read({_COMMITTED_PATH: 'env_file = ".env"\n'})
+    assert manifest.session_prefix is None
+
+
+def test_empty_session_prefix_raises() -> None:
+    """A declared session_prefix must be non-empty when present."""
     with pytest.raises(ManifestError, match="session_prefix"):
-        _read({_COMMITTED_PATH: 'env_file = ".env"\n'})
+        _read({_COMMITTED_PATH: 'session_prefix = ""\n'})
 
 
 def test_service_missing_name_raises() -> None:
@@ -416,6 +434,18 @@ def test_overlay_overrides_session_prefix() -> None:
     manifest = _read(
         {
             _COMMITTED_PATH: 'session_prefix = "committed"\n',
+            _LOCAL_PATH: 'session_prefix = "local"\n',
+        }
+    )
+    assert manifest.session_prefix == "local"
+
+
+def test_overlay_sets_session_prefix_when_committed_omits_it() -> None:
+    """A machine-local override can opt in to a manifest override even when
+    the committed config.toml declares none (relying on WINTER_SERVICE_PREFIX)."""
+    manifest = _read(
+        {
+            _COMMITTED_PATH: "",
             _LOCAL_PATH: 'session_prefix = "local"\n',
         }
     )

@@ -17,7 +17,7 @@ from service_manifest.modules.manifest.validator import ManifestValidator
 
 
 def _make_manifest(
-    session_prefix: str = "mp",
+    session_prefix: str | None = "mp",
     env_file: str | None = None,
     layout_hook: str | None = None,
     services: tuple[Service, ...] = (),
@@ -91,11 +91,11 @@ def test_valid_manifest_env_none_skips_health_var_check() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_empty_session_prefix_is_violation() -> None:
-    manifest = _make_manifest(session_prefix="")
-    violations = _validator.validate(manifest)
-    assert len(violations) == 1
-    assert "session_prefix" in violations[0]
+def test_none_session_prefix_is_not_a_violation() -> None:
+    """session_prefix is an optional override; absence (None) resolves via
+    WINTER_SERVICE_PREFIX at dispatch time and is not a manifest violation."""
+    manifest = _make_manifest(session_prefix=None)
+    assert _validator.validate(manifest) == []
 
 
 # ---------------------------------------------------------------------------

@@ -70,9 +70,9 @@ class ManifestReader:
                 or the ``WINTER_EXT_CONFIG_DIR`` env var.
 
         Raises ``ManifestError`` on: committed file absent, file unreadable,
-        malformed TOML, missing required ``session_prefix``, a ``[[service]]``
-        missing ``name`` or ``target``, or a ``target`` that cannot be split
-        into two integers.
+        malformed TOML, a declared ``session_prefix`` that is not a non-empty
+        string, a ``[[service]]`` missing ``name`` or ``target``, or a
+        ``target`` that cannot be split into two integers.
         """
         committed_path = config_dir / _COMMITTED_NAME
         local_path = config_dir / _LOCAL_NAME
@@ -368,11 +368,13 @@ class ManifestReader:
 
         Raises ``ManifestError`` on missing required fields or unparseable values.
         """
-        # --- required scalar ---
-        if "session_prefix" not in doc:
-            raise ManifestError("manifest is missing required field 'session_prefix'")
-        session_prefix = doc["session_prefix"]
-        if not isinstance(session_prefix, str) or not session_prefix:
+        # --- optional scalar override ---
+        # Absent (None) is the default and recommended setting: the prefix is
+        # then resolved entirely from WINTER_SERVICE_PREFIX by
+        # SessionContextBuilder at dispatch time. When declared, it must be a
+        # non-empty string.
+        session_prefix: str | None = doc.get("session_prefix")
+        if session_prefix is not None and (not isinstance(session_prefix, str) or not session_prefix):
             raise ManifestError("'session_prefix' must be a non-empty string")
 
         env_file: str | None = doc.get("env_file") or None

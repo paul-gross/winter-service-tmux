@@ -20,7 +20,10 @@ def running_envs(tmux: ITmuxRepository, prefix: str) -> list[str]:
     ``<prefix>-``, with the ``<prefix>-`` prefix stripped.
 
     :param tmux: the tmux repository (real or fake).
-    :param prefix: the ``session_prefix`` declared in the manifest (e.g. ``"mp"``).
+    :param prefix: the resolved session-name prefix (e.g. ``"mp"``) — see
+        ``SessionContextBuilder`` for how it is resolved (manifest
+        ``session_prefix`` override, or the ``WINTER_SERVICE_PREFIX``
+        environment variable).
     :returns: list of env names, in the order returned by ``list_sessions``.
     """
     sessions = tmux.list_sessions()

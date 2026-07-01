@@ -25,9 +25,12 @@
 #     override startup locally, restate the whole startup table (retries and
 #     optional retry_delay).
 #
-# Override the session prefix — handy when the committed prefix collides with
-# another project's tmux sessions on a shared machine.
-session_prefix = "myprefix"
+# Override the session-name prefix locally — DEPRECATED, not part of normal
+# setup; the prefix is controlled entirely by winter's workspace-level
+# WINTER_SERVICE_PREFIX. Only uncomment this as a manual escape hatch for the
+# rare case it collides with another project's tmux sessions on this
+# particular machine.
+# session_prefix = "myprefix"
 
 # Override a single [logs] key — the reader merges [logs] per-key, so only
 # the keys you set here replace the committed values; the rest keep their

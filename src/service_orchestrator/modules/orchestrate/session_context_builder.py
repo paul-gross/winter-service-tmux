@@ -23,6 +23,15 @@ that TOML file after loading the committed ``config.toml`` and merges any
 extension-declared services into the manifest.  Services without a ``target``
 field are skipped (tmux requires a pane address).  Providers that predate this
 contract ignore the env var.
+
+Session-name prefix resolution
+-------------------------------
+The tmux session-name prefix is resolved by ``_resolve_session_prefix``: the
+manifest's optional ``session_prefix`` override wins when declared; otherwise
+the builder falls back to the ``WINTER_SERVICE_PREFIX`` environment variable,
+a base extension var that winter injects into the provider process on every
+dispatched action (see
+``workspace:/context/winter-cli/contracts/service-orchestrator.md``).
 """
 
 from __future__ import annotations
@@ -35,10 +44,16 @@ from service_manifest.modules.manifest.ext_reader import ExtManifestMerger
 from service_manifest.modules.manifest.model import ServiceManifest
 from service_manifest.modules.manifest.reader import ManifestReader
 from service_orchestrator.core.workspace_locator import IWorkspaceLocator
+from service_orchestrator.modules.orchestrate.errors import OrchestratorError
 from service_orchestrator.modules.orchestrate.session_context import SessionContext
 
 # Env-var name set by winter-cli when extension-declared services are present.
 _EXT_MANIFEST_ENV = "WINTER_SERVICE_MANIFEST"
+
+# Env-var name winter-cli injects on every dispatched action (a base extension
+# var) carrying the resolved workspace-level service-orchestration namespace
+# prefix.
+_SERVICE_PREFIX_ENV = "WINTER_SERVICE_PREFIX"
 
 # Sentinel so callers can distinguish "pass None explicitly" from "omit".
 _SENTINEL: object = object()
@@ -112,7 +127,7 @@ class SessionContextBuilder:
             workspace_root=ws_root,
             worktree_dir=worktree_dir,
             config_dir=cfg_dir,
-            session_prefix=manifest.session_prefix,
+            session_prefix=_resolve_session_prefix(manifest.session_prefix),
             services=manifest.services,
             layout_hook=manifest.layout_hook,
             logs=manifest.logs,
@@ -149,7 +164,7 @@ class SessionContextBuilder:
             workspace_root=ws_root,
             worktree_dir=ws_root,
             config_dir=cfg_dir,
-            session_prefix=manifest.session_prefix,
+            session_prefix=_resolve_session_prefix(manifest.session_prefix),
             services=manifest.workspace_services,
             layout_hook=manifest.workspace_layout_hook,
             logs=manifest.logs,
@@ -157,6 +172,35 @@ class SessionContextBuilder:
             inject_scope=None,
             env_file_path=None,
         )
+
+
+def _resolve_session_prefix(manifest_override: str | None) -> str:
+    """Resolve the tmux session-name prefix.
+
+    ``manifest_override`` — the manifest's optional ``session_prefix`` key —
+    always wins when declared (a per-provider escape hatch). ``WINTER_SERVICE_PREFIX``
+    is a base extension var present on every dispatched action
+    (``up``/``down``/``status``/``restart``/``logs``), so this override is not
+    needed to cover any of those doors; it exists for the genuine residual
+    case — a raw/direct invocation of this provider's entrypoint outside
+    ``winter service`` dispatch entirely, with a stripped/minimal environment
+    that never had the var injected. Otherwise falls back to the
+    ``WINTER_SERVICE_PREFIX`` environment variable.
+
+    Raises ``OrchestratorError`` when neither source yields a value — this
+    happens when the provider is invoked without winter's env injection (e.g.
+    directly, outside a winter dispatch) and no manifest override is declared.
+    """
+    if manifest_override is not None:
+        return manifest_override
+    env_prefix = os.environ.get(_SERVICE_PREFIX_ENV)
+    if env_prefix:
+        return env_prefix
+    raise OrchestratorError(
+        "cannot resolve the tmux session-name prefix: neither the manifest's "
+        f"'session_prefix' override nor the {_SERVICE_PREFIX_ENV} environment "
+        "variable is set"
+    )
 
 
 def _apply_ext_manifest(manifest: ServiceManifest) -> ServiceManifest:

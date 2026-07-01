@@ -21,9 +21,17 @@
 # the same overlay semantics (scalars replace; [[service]] merges keyed by
 # name). Keep it gitignored.
 
-# Session prefix — tmux sessions will be named <session_prefix>-<env>
-# e.g., "mp" produces "mp-alpha", "mp-beta"
-session_prefix = "mp"
+# Session-name prefix — DEPRECATED, not part of normal setup. Tmux sessions
+# are named <prefix>-<env>, e.g. "mp" produces "mp-alpha", "mp-beta". The
+# prefix is controlled entirely by winter via the WINTER_SERVICE_PREFIX
+# environment variable it injects into the provider process on every
+# dispatched action (up/down/status/restart/logs) — the single
+# workspace-level prefix configured once for the whole workspace. Leave this
+# key unset. It only exists as a manual escape
+# hatch for the rare case this provider's tmux sessions must use a different
+# prefix than the rest of the workspace (e.g. a collision on a shared
+# machine); uncomment and hand-edit only if you specifically need that.
+# session_prefix = "mp"
 
 # Environment file for ${VAR} interpolation in health probe targets
 # (relative to the worktree root, optional). Omit when all required vars

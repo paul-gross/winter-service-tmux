@@ -164,8 +164,12 @@ class ServiceManifest:
     """The fully-parsed, immutable manifest for a feature environment.
 
     Fields:
-        session_prefix: Tmux session name prefix; sessions are named
-            ``<session_prefix>-<env>``.
+        session_prefix: Optional explicit override for the tmux session-name
+            prefix; sessions are named ``<prefix>-<env>``. When declared, this
+            value always wins over winter's injected ``WINTER_SERVICE_PREFIX``
+            environment variable (see ``SessionContextBuilder``). ``None``
+            (the default — omit the key entirely) means the prefix is
+            resolved solely from ``WINTER_SERVICE_PREFIX`` at dispatch time.
         env_file: Path to the env file, relative to the worktree root.
             ``None`` when not declared (env sourcing is skipped).
         layout_hook: Path to the optional bash layout hook, relative to the
@@ -179,7 +183,7 @@ class ServiceManifest:
             session, relative to the workspace root.  ``None`` when not declared.
     """
 
-    session_prefix: str
+    session_prefix: str | None
     env_file: str | None
     layout_hook: str | None
     services: tuple[Service, ...]

@@ -42,7 +42,7 @@ _MANIFEST = ServiceManifest(
 
 _SERVICE_NAMES = [svc.name for svc in _MANIFEST.services]
 _WS_SERVICE_NAMES = [svc.name for svc in _MANIFEST.workspace_services]
-_PREFIX = _MANIFEST.session_prefix
+_PREFIX = "mp"
 
 
 def _make_ctx(env: str = "alpha") -> SessionContext:
@@ -51,7 +51,7 @@ def _make_ctx(env: str = "alpha") -> SessionContext:
         workspace_root=_WORKSPACE,
         worktree_dir=_WORKSPACE / env,
         config_dir=_CONFIG_DIR,
-        session_prefix=_MANIFEST.session_prefix,
+        session_prefix="mp",
         services=_MANIFEST.services,
         layout_hook=_MANIFEST.layout_hook,
         logs=_MANIFEST.logs,
@@ -67,7 +67,7 @@ def _make_workspace_ctx() -> SessionContext:
         workspace_root=_WORKSPACE,
         worktree_dir=_WORKSPACE,
         config_dir=_CONFIG_DIR,
-        session_prefix=_MANIFEST.session_prefix,
+        session_prefix="mp",
         services=_MANIFEST.workspace_services,
         layout_hook=_MANIFEST.workspace_layout_hook,
         logs=_MANIFEST.logs,

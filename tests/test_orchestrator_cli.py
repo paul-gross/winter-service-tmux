@@ -24,16 +24,25 @@ from typing import Any
 
 import pytest
 
+import service_manifest.container as sm_container_mod
 from service_manifest.modules.manifest.errors import ManifestError
 from service_manifest.modules.manifest.model import Service, ServiceManifest, Target
 from service_orchestrator.cli import main
+from service_orchestrator.container import Container
 from service_orchestrator.modules.orchestrate.dispatch_service import DispatchService
 from service_orchestrator.modules.orchestrate.errors import OrchestratorError
 from service_orchestrator.modules.orchestrate.log_query import LogQuery
 from service_orchestrator.modules.orchestrate.selector_service import SelectorService
 from service_orchestrator.modules.orchestrate.session_context import SessionContext
 from service_orchestrator.modules.orchestrate.session_context_builder import WORKSPACE_TARGET
-from tests.fakes import FakeLogService, FakeOrchestrator
+from tests.conftest import (
+    FakeLayoutHookRunner,
+    FakeLogRepository,
+    FakeProcessReaper,
+    FakeTmuxRepository,
+    FakeWorkspaceLocator,
+)
+from tests.fakes import FakeFilesystemReader, FakeLogService, FakeOrchestrator
 
 # ---------------------------------------------------------------------------
 # Helpers / shared fixtures
@@ -64,7 +73,7 @@ def _make_ctx(env: str = "alpha") -> SessionContext:
         workspace_root=_WORKSPACE,
         worktree_dir=_WORKSPACE / env,
         config_dir=_CONFIG_DIR,
-        session_prefix=_MANIFEST.session_prefix,
+        session_prefix="mp",
         services=_MANIFEST.services,
         layout_hook=_MANIFEST.layout_hook,
         logs=_MANIFEST.logs,
@@ -82,7 +91,7 @@ def _make_workspace_ctx() -> SessionContext:
         workspace_root=_WORKSPACE,
         worktree_dir=_WORKSPACE,  # NOT _WORKSPACE/workspace
         config_dir=_CONFIG_DIR,
-        session_prefix=_MANIFEST.session_prefix,
+        session_prefix="mp",
         services=_MANIFEST.workspace_services,
         layout_hook=_MANIFEST.workspace_layout_hook,
         logs=_MANIFEST.logs,
@@ -1120,3 +1129,131 @@ def test_cli_up_passes_retry_true(monkeypatch: pytest.MonkeyPatch) -> None:
     assert rc == 0
     assert len(fake.orchestrator.up_calls) == 1
     assert fake.orchestrator.last_up_retry is True
+
+
+# ---------------------------------------------------------------------------
+# REGRESSION: an unresolved session-prefix error must not be swallowed into
+# a generic "matched no services" message (restart/logs)
+#
+# selector_service.read_manifest_context() used to catch OrchestratorError
+# (raised by SessionContextBuilder._resolve_session_prefix when neither a
+# manifest ``session_prefix`` override nor WINTER_SERVICE_PREFIX is set) and
+# return None, which cli.py then reported as a dead pattern — a misleading
+# "matched no services" message that looked like a bad pattern rather than a
+# config gap.  OrchestratorError now propagates out of read_manifest_context
+# so cli.py can print the specific diagnostic instead.
+# ---------------------------------------------------------------------------
+
+_SESSION_PREFIX_ERROR_MESSAGE = (
+    "cannot resolve the tmux session-name prefix: neither the manifest's "
+    "'session_prefix' override nor the WINTER_SERVICE_PREFIX environment "
+    "variable is set"
+)
+
+
+def test_main_restart_session_prefix_error_reaches_user(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """restart surfaces the specific session-prefix diagnostic, not a generic
+    'matched no services' message, when _resolve_session_prefix raises."""
+    _install(
+        monkeypatch,
+        _FakeContainer(build_raises=OrchestratorError(_SESSION_PREFIX_ERROR_MESSAGE)),
+    )
+    rc = main(["restart", "alpha/backend"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "cannot resolve the tmux session-name prefix" in err
+    assert "matched no services" not in err
+
+
+def test_main_logs_session_prefix_error_reaches_user(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Same regression for logs: the specific diagnostic reaches stderr."""
+    _install(
+        monkeypatch,
+        _FakeContainer(build_raises=OrchestratorError(_SESSION_PREFIX_ERROR_MESSAGE)),
+    )
+    rc = main(["logs", "alpha/backend"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "cannot resolve the tmux session-name prefix" in err
+    assert "matched no services" not in err
+
+
+# ---------------------------------------------------------------------------
+# Integration: restart/logs succeed when only WINTER_SERVICE_PREFIX is set
+# (no manifest session_prefix override) — the now-supported configuration.
+#
+# Uses a REAL Container (real SessionContextBuilder/SelectorService/
+# DispatchService), not _FakeContainer, so _resolve_session_prefix's actual
+# env-var fallback is exercised end-to-end through cli.main() — the exact
+# gap that was previously untested (every prior test either supplied a
+# manifest session_prefix override or exercised the failure path).
+# ---------------------------------------------------------------------------
+
+_TOML_NO_SESSION_PREFIX_ONE_SERVICE = """\
+[[service]]
+name = "backend"
+target = "0.0"
+cmd = "npm run start:dev"
+"""
+
+
+def _make_real_container(tmux: FakeTmuxRepository, toml: str) -> Container:
+    """Build a real Container wired with in-memory fakes (no subprocess/filesystem I/O)."""
+    locator = FakeWorkspaceLocator(root=_WORKSPACE)
+    fake_fs = FakeFilesystemReader({_CONFIG_DIR / "config.toml": toml})
+    sm = sm_container_mod.Container(fs=fake_fs)
+    return Container(
+        tmux=tmux,
+        reaper=FakeProcessReaper(),
+        hook_runner=FakeLayoutHookRunner(),
+        locator=locator,
+        manifest=sm,
+        log_repo=FakeLogRepository(),
+    )
+
+
+def test_main_restart_succeeds_with_only_winter_service_prefix_env_var(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """restart resolves the session prefix from WINTER_SERVICE_PREFIX alone."""
+    monkeypatch.setenv("WINTER_SERVICE_PREFIX", "envprefix")
+    tmux = FakeTmuxRepository(sessions={"envprefix-alpha": {"0.0": 4242}})
+    container = _make_real_container(tmux, _TOML_NO_SESSION_PREFIX_ONE_SERVICE)
+
+    import service_orchestrator.cli as cli_mod
+
+    monkeypatch.setattr(cli_mod, "Container", lambda: container)
+
+    rc = main(["restart", "alpha/backend"])
+
+    assert rc == 0
+    # send_keys was issued against the WINTER_SERVICE_PREFIX-derived session
+    # name ("envprefix-alpha"), proving the prefix actually resolved from the
+    # env var rather than failing silently or matching zero services.
+    assert any(session == "envprefix-alpha" and target == "0.0" for session, target, _ in tmux.sent)
+
+
+def test_main_logs_succeeds_with_only_winter_service_prefix_env_var(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """logs resolves the session prefix from WINTER_SERVICE_PREFIX alone."""
+    monkeypatch.setenv("WINTER_SERVICE_PREFIX", "envprefix")
+    tmux = FakeTmuxRepository(sessions={"envprefix-alpha": {"0.0": 4242}})
+    container = _make_real_container(tmux, _TOML_NO_SESSION_PREFIX_ONE_SERVICE)
+
+    import service_orchestrator.cli as cli_mod
+
+    monkeypatch.setattr(cli_mod, "Container", lambda: container)
+
+    rc = main(["logs", "alpha/backend"])
+
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert err == ""

@@ -2,9 +2,9 @@
 
 This guide is an interactive walkthrough that produces `workspace:/.winter/config/winter-service-tmux/config.toml` and `layout-hook.sh` in the same directory — the declarative manifest and layout hook that configure the service orchestrator (`./up`, `./down`, `./status`, `./restart`) for every feature worktree in the workspace. The manifest defines what services run, how they start, and which tmux panes they occupy. The layout hook creates those panes.
 
-Run it on a fresh workspace, or any time you want to (re)configure how services are launched — add new services, rename panes, change the session prefix, switch which env file gets sourced.
+Run it on a fresh workspace, or any time you want to (re)configure how services are launched — add new services, rename panes, switch which env file gets sourced.
 
-**Idempotent:** safe to re-run at any time. Before each step, check the current state of `workspace:/.winter/config/winter-service-tmux/config.toml`. If the step is already done, **say so explicitly** ("`session_prefix` is already set to `wws` — skipping") and move on. Don't silent skip.
+**Idempotent:** safe to re-run at any time. Before each step, check the current state of `workspace:/.winter/config/winter-service-tmux/config.toml`. If the step is already done, **say so explicitly** ("services are already wired — skipping") and move on. Don't silent skip.
 
 ## Caller contract
 
@@ -46,7 +46,7 @@ Don't wait for a "go" signal — just begin.
 
 ### 1. Check existing config.toml
 
-**Explain first:** "Before changing anything, I need to know what's already there. `workspace:/.winter/config/winter-service-tmux/config.toml` is the canonical source of truth — if it exists, it tells me your current `session_prefix`, `env_file`, and services."
+**Explain first:** "Before changing anything, I need to know what's already there. `workspace:/.winter/config/winter-service-tmux/config.toml` is the canonical source of truth — if it exists, it tells me your current `env_file` and services."
 
 Check the current state:
 
@@ -60,7 +60,7 @@ fi
 
 **If a config already exists**, parse out and report what you found:
 
-> "Your `config.toml` already exists: `session_prefix = "<value>"`, `env_file = "<value or 'unset'>"`, `<n>` services declared (`<name-list>`). Want to keep it as-is, replace it from scratch, or tweak something specific?"
+> "Your `config.toml` already exists: `env_file = "<value or 'unset'>"`, `<n>` services declared (`<name-list>`). Want to keep it as-is, replace it from scratch, or tweak something specific?"
 
 - "keep": skip ahead to the "Validate" step and run the validator against the existing file — it's idempotent. Then offer the smoke test and continue into the final report.
 - "replace": continue from the next step as if no file existed.
@@ -68,22 +68,11 @@ fi
 
 **If `config.toml` does not exist**, tell the user: "No `config.toml` yet — let's build one from scratch." Then continue.
 
-### 2. Session prefix
+### 2. Wire per-env services
 
-**Explain first:** "Each worktree gets its own tmux session, named `<prefix>-<worktree>` — e.g. `<prefix>-alpha`, `<prefix>-beta`. The prefix should be short (2-4 chars), lowercase, alphanumeric, and distinct enough not to collide with other tmux sessions on the user's machine."
+`<prefix>` is `WINTER_SERVICE_PREFIX` — the workspace's `service_prefix`, resolved by winter-cli core and injected on every dispatched action (`up`/`down`/`status`/`restart`/`logs`). This guide does not configure the prefix; it's controlled entirely by the workspace, not per-provider.
 
-Suggest a prefix derived from the workspace directory name or the primary project name (initials of the workspace directory, an obvious acronym from the project, etc.) and ask **one** question:
-
-**"I suggest `<derived>` as the tmux session prefix (sessions would be named `<derived>-alpha`, `<derived>-beta`, ...). Confirm, or enter a different prefix?"**
-
-- "confirm" / "yes" / the same value: use it.
-- different value: validate against the constraints (2-4 chars, lowercase, alphanumeric/`-`). If it fails any constraint, tell the user which one and ask again.
-
-Record the confirmed value as `session_prefix`.
-
-### 3. Wire per-env services
-
-**Explain first:** "Now I'll wire the per-env services (scope `"project"`) into `config.toml` and write the layout hook. Per-env services run in a separate tmux session per feature env (`<session_prefix>-<env>`). Panes are addressed as `<window>.<pane>` (both zero-based); these `target` values in the manifest must exactly match the windows and panes the layout hook creates."
+**Explain first:** "Now I'll wire the per-env services (scope `"project"`) into `config.toml` and write the layout hook. Per-env services run in a separate tmux session per feature env (`<prefix>-<env>`). Panes are addressed as `<window>.<pane>` (both zero-based); these `target` values in the manifest must exactly match the windows and panes the layout hook creates."
 
 If there are **no** per-env services in the assigned set, tell the user "No per-env services assigned — skipping to workspace services." and move on.
 
@@ -120,9 +109,9 @@ On confirmation, **update `config.toml` and write `layout-hook.sh`**, following 
 
 Then summarise: "Per-env services wired: `<name-list>`. `config.toml` and `layout-hook.sh` written."
 
-### 4. Wire workspace singleton services
+### 3. Wire workspace singleton services
 
-**Explain first:** "Workspace-scoped services (scope `"workspace"`) run once under `<session_prefix>-workspace` at the workspace root, shared across all feature envs. Their start commands must run in the foreground — the orchestrator reaps the tmux session to shut them down, so commands that daemonise or detach won't be reaped cleanly."
+**Explain first:** "Workspace-scoped services (scope `"workspace"`) run once under `<prefix>-workspace` at the workspace root, shared across all feature envs. Their start commands must run in the foreground — the orchestrator reaps the tmux session to shut them down, so commands that daemonise or detach won't be reaped cleanly."
 
 If there are **no** workspace-scoped services in the assigned set, tell the user: "No workspace-level services were assigned to this orchestrator — skipping." and continue.
 
@@ -143,7 +132,7 @@ On confirmation, **update `config.toml` and write `workspace-layout-hook.sh`**, 
 
 Then summarise: "Workspace singletons wired: `<name-list>`. Drive them with `winter service up/down workspace`."
 
-### 5. Validate
+### 4. Validate
 
 **Explain first:** "Before testing live, validate the manifest — the validator catches schema errors, duplicate targets, and missing-service issues before they reach a running tmux session."
 
@@ -160,7 +149,7 @@ If the validator reports errors, fix them in `config.toml` (or `layout-hook.sh` 
 
 Confirm: "Manifest validates cleanly."
 
-### 6. Smoke test (optional)
+### 5. Smoke test (optional)
 
 **Explain first:** "Before declaring done, you can verify the full lifecycle in a real worktree."
 
@@ -175,7 +164,6 @@ Ask **one** question:
 
 Summarise everything that happened in a single message:
 - `config.toml` location: `workspace:/.winter/config/winter-service-tmux/config.toml` (created / replaced / unchanged)
-- `session_prefix`
 - `env_file` (value or "unset")
 - Services declared (names and targets)
 - `layout-hook.sh`: `workspace:/.winter/config/winter-service-tmux/layout-hook.sh` (written / unchanged)

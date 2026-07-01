@@ -15,7 +15,6 @@ from pathlib import Path
 
 from service_manifest.modules.manifest.errors import ManifestError
 from service_orchestrator.modules.orchestrate.env_enumerator import running_envs
-from service_orchestrator.modules.orchestrate.errors import OrchestratorError
 from service_orchestrator.modules.orchestrate.pattern_match import matches_any_pattern
 from service_orchestrator.modules.orchestrate.session_context_builder import (
     WORKSPACE_TARGET,
@@ -97,6 +96,14 @@ class SelectorService:
         Seed selection prefers a concrete env-segment from a pattern; else
         the first **non-workspace** running tmux session; else workspace only
         if it is the sole session.
+
+        ``OrchestratorError`` (e.g. the session-prefix resolution failure raised
+        by ``_resolve_session_prefix`` when neither a manifest override nor
+        ``WINTER_SERVICE_PREFIX`` is set) is deliberately NOT caught here — it
+        propagates to the caller so its specific diagnostic reaches the user
+        instead of being folded into a generic "no services matched" message.
+        Only ``ManifestError``/``OSError`` (genuinely missing/unreadable
+        manifest) are swallowed into ``None``.
         """
         candidate_env: str | None = None
 
@@ -138,7 +145,7 @@ class SelectorService:
                 ctx.session_prefix,
                 [svc.name for svc in ctx.services],
             )
-        except (ManifestError, OSError, OrchestratorError):
+        except (ManifestError, OSError):
             return None
 
     def expand_env_patterns(

@@ -23,6 +23,8 @@ from __future__ import annotations
 import shlex
 from pathlib import Path
 
+import pytest
+
 import service_manifest.container as sm_container_mod
 from service_manifest.modules.manifest.model import (
     LogConfig,
@@ -30,6 +32,7 @@ from service_manifest.modules.manifest.model import (
     ServiceManifest,
     Target,
 )
+from service_orchestrator.modules.orchestrate.errors import OrchestratorError
 from service_orchestrator.modules.orchestrate.orchestrator_service import OrchestratorService
 from service_orchestrator.modules.orchestrate.session_context import SessionContext
 from service_orchestrator.modules.orchestrate.session_context_builder import (
@@ -136,7 +139,7 @@ def _make_workspace_ctx(
         workspace_root=_WORKSPACE,
         worktree_dir=_WORKSPACE,
         config_dir=_CONFIG_DIR,
-        session_prefix=manifest.session_prefix,
+        session_prefix="mp",
         services=manifest.workspace_services,
         layout_hook=manifest.workspace_layout_hook,
         logs=manifest.logs,
@@ -332,6 +335,81 @@ scope = "workspace"
     assert [s.name for s in ctx.services] == ["monitor"]
     assert ctx.layout_hook == "workspace-layout-hook.sh"
     assert ctx.session_prefix == "mp"
+
+
+# ---------------------------------------------------------------------------
+# session_prefix resolution — manifest override vs. WINTER_SERVICE_PREFIX
+# ---------------------------------------------------------------------------
+# The manifest's session_prefix key is now an OPTIONAL override.  When absent,
+# SessionContextBuilder falls back to the WINTER_SERVICE_PREFIX environment
+# variable, a base extension var that winter injects into the provider
+# process on every dispatched action.  When declared, the manifest override
+# always wins.
+# ---------------------------------------------------------------------------
+
+_TOML_NO_SESSION_PREFIX = """\
+[[service]]
+name = "backend"
+target = "0.0"
+cmd = "npm run start:dev"
+"""
+
+_TOML_WORKSPACE_NO_SESSION_PREFIX = """\
+[[service]]
+name = "docker"
+target = "0.0"
+cmd = "docker compose up"
+scope = "workspace"
+"""
+
+
+def test_build_session_prefix_falls_back_to_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No manifest override → WINTER_SERVICE_PREFIX from the environment."""
+    monkeypatch.setenv("WINTER_SERVICE_PREFIX", "envprefix")
+    builder = _make_builder(_TOML_NO_SESSION_PREFIX)
+    ctx = builder.build("alpha")
+    assert ctx.session_prefix == "envprefix"
+    assert ctx.session == "envprefix-alpha"
+
+
+def test_build_session_prefix_manifest_override_wins_over_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A declared manifest session_prefix always takes precedence."""
+    monkeypatch.setenv("WINTER_SERVICE_PREFIX", "envprefix")
+    builder = _make_builder()  # _MANIFEST_TOML_ENV_ONLY declares session_prefix = "mp"
+    ctx = builder.build("alpha")
+    assert ctx.session_prefix == "mp"
+
+
+def test_build_session_prefix_raises_when_neither_source_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No manifest override and no WINTER_SERVICE_PREFIX → clear error."""
+    monkeypatch.delenv("WINTER_SERVICE_PREFIX", raising=False)
+    builder = _make_builder(_TOML_NO_SESSION_PREFIX)
+    with pytest.raises(OrchestratorError, match="WINTER_SERVICE_PREFIX"):
+        builder.build("alpha")
+
+
+def test_build_workspace_session_prefix_falls_back_to_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WINTER_SERVICE_PREFIX", "envprefix")
+    builder = _make_builder(_TOML_WORKSPACE_NO_SESSION_PREFIX)
+    ctx = builder.build_workspace()
+    assert ctx.session_prefix == "envprefix"
+    assert ctx.session == "envprefix-workspace"
+
+
+def test_build_workspace_session_prefix_manifest_override_wins_over_env_var(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WINTER_SERVICE_PREFIX", "envprefix")
+    builder = _make_builder()  # _MANIFEST_TOML_ENV_ONLY declares session_prefix = "mp"
+    ctx = builder.build_workspace()
+    assert ctx.session_prefix == "mp"
+
+
+def test_build_workspace_session_prefix_raises_when_neither_source_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("WINTER_SERVICE_PREFIX", raising=False)
+    builder = _make_builder(_TOML_WORKSPACE_NO_SESSION_PREFIX)
+    with pytest.raises(OrchestratorError, match="WINTER_SERVICE_PREFIX"):
+        builder.build_workspace()
 
 
 # ---------------------------------------------------------------------------

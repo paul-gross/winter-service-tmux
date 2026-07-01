@@ -42,6 +42,7 @@ import sys
 from pathlib import Path
 
 from service_orchestrator.container import Container
+from service_orchestrator.modules.orchestrate.errors import OrchestratorError
 from service_orchestrator.modules.orchestrate.log_query import (
     LogRenderOptions,
     parse_log_args,
@@ -97,7 +98,11 @@ def _collect_status_docs(
         docs.extend(ws_docs)
 
     if env_pats:
-        manifest_info = selector.read_manifest_context(env_pats, workspace_root)
+        try:
+            manifest_info = selector.read_manifest_context(env_pats, workspace_root)
+        except OrchestratorError as exc:
+            print(f"orchestrate: status: {exc}", file=sys.stderr)
+            return docs, 1
         if manifest_info is None:
             for pat in env_pats:
                 print(
@@ -162,7 +167,11 @@ def _run_restart(
             return rc
 
     if env_pats:
-        manifest_info = selector.read_manifest_context(env_pats, workspace_root)
+        try:
+            manifest_info = selector.read_manifest_context(env_pats, workspace_root)
+        except OrchestratorError as exc:
+            print(f"orchestrate: restart: {exc}", file=sys.stderr)
+            return 1
         if manifest_info is None:
             for pat in env_pats:
                 print(
@@ -197,7 +206,11 @@ def _run_logs(
     selector = container.selector
     dispatch = container.dispatch
 
-    manifest_info = selector.read_manifest_context(patterns, workspace_root)
+    try:
+        manifest_info = selector.read_manifest_context(patterns, workspace_root)
+    except OrchestratorError as exc:
+        print(f"orchestrate: logs: {exc}", file=sys.stderr)
+        return 1
     if manifest_info is None:
         for pat in patterns:
             print(
