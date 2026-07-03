@@ -88,3 +88,48 @@ def test_unresolved_variable_is_unhealthy_without_running_probe(monkeypatch) -> 
 
     assert not checker.is_healthy(Health(type=HealthType.CMD, target="check ${MISSING}"), {})
     assert called is False
+
+
+def test_log_health_pattern_matched_is_healthy() -> None:
+    checker = SubprocessHealthChecker()
+
+    assert checker.is_healthy(
+        Health(type=HealthType.LOG, target=r"Listening on port \d+"),
+        log_source="booting...\nListening on port 3000\n",
+    )
+
+
+def test_log_health_pattern_not_present_is_unhealthy() -> None:
+    checker = SubprocessHealthChecker()
+
+    assert not checker.is_healthy(
+        Health(type=HealthType.LOG, target=r"Listening on port \d+"),
+        log_source="booting...\nstill starting\n",
+    )
+
+
+def test_log_health_missing_log_source_is_unhealthy() -> None:
+    checker = SubprocessHealthChecker()
+
+    assert not checker.is_healthy(Health(type=HealthType.LOG, target="ready"), log_source=None)
+
+
+def test_log_health_target_is_used_verbatim_no_var_interpolation() -> None:
+    """A '${VAR}' inside a log regex is matched literally, never interpolated."""
+    checker = SubprocessHealthChecker()
+
+    assert checker.is_healthy(
+        Health(type=HealthType.LOG, target=r"price: \$\{2\}"),
+        env={"2": "should-not-be-substituted"},
+        log_source="price: ${2}\n",
+    )
+
+
+def test_log_health_invalid_regex_is_unhealthy_not_a_crash() -> None:
+    """An invalid regex must not crash the probe (validation catches it earlier)."""
+    checker = SubprocessHealthChecker()
+
+    assert not checker.is_healthy(
+        Health(type=HealthType.LOG, target="unclosed("),
+        log_source="anything",
+    )

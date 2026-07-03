@@ -45,6 +45,7 @@ class HealthType(StrEnum):
 
     URL = "url"
     CMD = "cmd"
+    LOG = "log"
 
 
 @dataclass(frozen=True)
@@ -52,8 +53,11 @@ class Health:
     """Optional readiness probe for a declared service.
 
     ``target`` may contain ``${VAR}`` placeholders resolved against the env file
-    before the probe runs.  ``timeout`` is seconds; ``None`` means use the probe
-    runner's default timeout.
+    before the probe runs — EXCEPT for ``HealthType.LOG``, where ``target`` is a
+    regular expression used VERBATIM (no ``${VAR}`` interpolation), so regex
+    syntax is never mangled.  ``timeout`` is seconds; ``None`` means use the
+    probe runner's default timeout (unused by ``log`` probes — a regex match
+    against already-captured output has no I/O to time out).
     """
 
     type: HealthType

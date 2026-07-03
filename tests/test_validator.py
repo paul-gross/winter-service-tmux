@@ -251,6 +251,44 @@ def test_service_health_non_positive_timeout_is_violation() -> None:
     assert any("health.timeout" in v for v in violations)
 
 
+def test_log_health_on_empty_command_service_is_violation() -> None:
+    """A 'log' probe on an interactive (empty-cmd) service has no output to match."""
+    manifest = _make_manifest(
+        services=(
+            Service(name="shell", target=Target(0, 0), cmd="", health=Health(type=HealthType.LOG, target="ready")),
+        )
+    )
+    violations = _validator.validate(manifest)
+
+    assert any("log" in v and "shell" in v for v in violations)
+
+
+def test_log_health_invalid_regex_is_violation() -> None:
+    manifest = _make_manifest(
+        services=(_service_with_health("backend", Health(type=HealthType.LOG, target="unclosed(")),)
+    )
+    violations = _validator.validate(manifest)
+
+    assert any("regex" in v for v in violations)
+
+
+def test_log_health_valid_regex_on_service_with_cmd_is_no_violation() -> None:
+    manifest = _make_manifest(
+        services=(_service_with_health("backend", Health(type=HealthType.LOG, target=r"Listening on \d+")),)
+    )
+
+    assert _validator.validate(manifest) == []
+
+
+def test_log_health_target_with_dollar_brace_is_not_flagged_as_unresolved_var() -> None:
+    """A 'log' target is used verbatim; '${...}' inside it is not a variable reference."""
+    manifest = _make_manifest(
+        services=(_service_with_health("backend", Health(type=HealthType.LOG, target=r"price: \$\{2\}")),)
+    )
+
+    assert _validator.validate(manifest, env={}) == []
+
+
 def test_workspace_service_health_var_is_violation() -> None:
     manifest = _make_manifest(
         workspace_services=(
@@ -265,6 +303,15 @@ def test_workspace_service_health_var_is_violation() -> None:
     assert len(violations) == 1
     assert "workspace service 'docker' health" in violations[0]
     assert "DOCKER_PORT" in violations[0]
+
+
+def test_workspace_service_log_health_dollar_brace_is_not_a_var_violation() -> None:
+    """Workspace-scope 'log' targets are verbatim regex, not ${VAR} templates."""
+    manifest = _make_manifest(
+        workspace_services=(_service_with_health("docker", Health(type=HealthType.LOG, target=r"port \$\{2\} ready")),),
+    )
+
+    assert _validator.validate(manifest, env={}) == []
 
 
 # ---------------------------------------------------------------------------

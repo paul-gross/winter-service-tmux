@@ -170,10 +170,16 @@ class FakeHealthChecker:
 
     def __init__(self, results: dict[str, bool] | None = None) -> None:
         self._results = dict(results or {})
-        self.calls: list[tuple[str, dict[str, str] | None, Path | None]] = []
+        self.calls: list[tuple[str, dict[str, str] | None, Path | None, str | None]] = []
 
-    def is_healthy(self, health, env: dict[str, str] | None = None, cwd: Path | None = None) -> bool:  # type: ignore[no-untyped-def]
-        self.calls.append((health.target, env, cwd))
+    def is_healthy(  # type: ignore[no-untyped-def]
+        self,
+        health,
+        env: dict[str, str] | None = None,
+        cwd: Path | None = None,
+        log_source: str | None = None,
+    ) -> bool:
+        self.calls.append((health.target, env, cwd, log_source))
         return self._results.get(health.target, False)
 
 
@@ -334,6 +340,13 @@ class FakeLogRepository:
     def read_lines(self, path: Path) -> list[str]:
         """Return canned lines for *path* registered by ``segment_files``."""
         return list(self._path_to_lines.get(path, []))
+
+    def read_tail(self, path: Path, max_bytes: int) -> str:
+        """Return the canned live content for *path* (seeded via ``seed_live_content``),
+        truncated to the last *max_bytes* characters, or ``""`` when unset.
+        """
+        content = self._live_content.get(path, "")
+        return content[-max_bytes:] if content else content
 
     def file_size(self, path: Path) -> int:
         """Return canned size for *path*, or 0 if not registered."""

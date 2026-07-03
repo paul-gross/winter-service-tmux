@@ -12,7 +12,7 @@ import os
 import sys
 from typing import IO
 
-from service_manifest.modules.manifest.model import Health, LogMode, Service, parse_port_expression
+from service_manifest.modules.manifest.model import HealthType, LogMode, Service, parse_port_expression
 from service_orchestrator.modules.orchestrate.errors import OrchestratorError
 from service_orchestrator.modules.orchestrate.follow_clock import IFollowClock
 from service_orchestrator.modules.orchestrate.health_checker import IHealthChecker
@@ -36,6 +36,10 @@ _TMUX_HEIGHT = 50
 # Post-launch settle window before the first liveness check in _await_startup.
 # Gives the pane shell a moment to fork the service process after send_keys.
 _STARTUP_SETTLE_SECONDS = 0.5
+
+# Bounded tail read for a 'log'-type health probe against a FILE-mode log —
+# large enough to catch a ready-line without loading the whole file.
+_LOG_HEALTH_TAIL_BYTES = 65536
 
 
 def _resolve_service_port(port: int | str | None, port_base: int | None) -> int | None:
@@ -370,7 +374,7 @@ class OrchestratorService:
             captured = bool(svc.cmd) and svc.log == LogMode.FILE
             log_path = str(self._log_repo.log_path(ctx.worktree_dir, svc.name)) if captured else None
 
-            health = self._service_health(svc.health, state, ctx)
+            health = self._service_health(svc, state, ctx)
             resolved_port = _resolve_service_port(svc.port, self._port_base(ctx))
             ports = [resolved_port] if resolved_port is not None else None
             svc_docs.append(
@@ -435,7 +439,7 @@ class OrchestratorService:
         for svc in in_scope:
             target = f"{svc.target.window}.{svc.target.pane}"
             if target not in pane_map:
-                health_text = self._service_health(svc.health, "stopped", ctx) if svc.health is not None else "-"
+                health_text = self._service_health(svc, "stopped", ctx) if svc.health is not None else "-"
                 if show_health:
                     self._stdout.write(f"  {svc.name + ':':<14} {'missing':<8}  {health_text:<9}\n")
                 else:
@@ -445,7 +449,7 @@ class OrchestratorService:
             pane_pid = pane_map[target]
             running = self._reaper.has_children(pane_pid)
             status_str = "running" if running else "stopped"
-            health = self._service_health(svc.health, status_str, ctx)
+            health = self._service_health(svc, status_str, ctx)
             health_text = health if svc.health is not None else "-"
 
             captured = self._tmux.capture_pane(ctx.session, target)
@@ -460,12 +464,29 @@ class OrchestratorService:
         self._stdout.flush()
         return 0
 
-    def _service_health(self, health: Health | None, state: str, ctx: SessionContext) -> str:
+    def _service_health(self, svc: Service, state: str, ctx: SessionContext) -> str:
+        health = svc.health
         if health is None or self._health_checker is None:
             return "unknown"
         if state != "running":
             return "unhealthy"
-        return "healthy" if self._health_checker.is_healthy(health, ctx.env_vars, ctx.worktree_dir) else "unhealthy"
+        log_source = self._log_source_for_health(svc, ctx) if health.type == HealthType.LOG else None
+        healthy = self._health_checker.is_healthy(health, ctx.env_vars, ctx.worktree_dir, log_source=log_source)
+        return "healthy" if healthy else "unhealthy"
+
+    def _log_source_for_health(self, svc: Service, ctx: SessionContext) -> str:
+        """Return the captured-output text a ``log`` health probe matches against.
+
+        ``LogMode.PANE`` services scan the live tmux pane buffer (the same
+        source ``status`` renders); ``LogMode.FILE`` (and ``MEMORY``, for
+        forward-compat) services scan a bounded tail of the captured log file
+        via ``self._log_repo`` — never the whole file.
+        """
+        if svc.log == LogMode.PANE:
+            target = f"{svc.target.window}.{svc.target.pane}"
+            return self._tmux.capture_pane(ctx.session, target)
+        log_path = self._log_repo.log_path(ctx.worktree_dir, svc.name)
+        return self._log_repo.read_tail(log_path, _LOG_HEALTH_TAIL_BYTES)
 
     def restart(self, ctx: SessionContext, service_name: str) -> int:
         """Restart a single named service in the running session.

@@ -56,6 +56,16 @@ class ILogRepository(Protocol):
         """
         ...
 
+    def read_tail(self, path: Path, max_bytes: int) -> str:
+        """Return up to the last *max_bytes* bytes of *path*, decoded as text.
+
+        Seeks near the end of the file rather than reading it in full, so
+        callers (e.g. a ``log``-type health probe) can scan recent output
+        without loading a large file into memory.  Decodes with
+        ``errors="replace"``.  Returns ``""`` when *path* is absent.
+        """
+        ...
+
     def file_size(self, path: Path) -> int:
         """Return the current byte size of *path*, or 0 if the file is absent."""
         ...

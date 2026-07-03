@@ -14,8 +14,18 @@ from pathlib import Path
 import pytest
 
 import service_manifest.container as sm_container_mod
-from service_manifest.modules.manifest.model import Health, HealthType, LogConfig, Service, ServiceManifest, Target
+from service_manifest.modules.manifest.model import (
+    Health,
+    HealthType,
+    LogConfig,
+    LogMode,
+    Service,
+    ServiceManifest,
+    Target,
+)
 from service_orchestrator.modules.orchestrate.errors import OrchestratorError
+from service_orchestrator.modules.orchestrate.health_checker import IHealthChecker
+from service_orchestrator.modules.orchestrate.internal.subprocess_health_checker import SubprocessHealthChecker
 from service_orchestrator.modules.orchestrate.orchestrator_service import (
     OrchestratorService,
     _resolve_service_port,
@@ -102,7 +112,7 @@ def _make_service(
     reaper: FakeProcessReaper | None = None,
     hook_runner: FakeLayoutHookRunner | None = None,
     log_repo: FakeLogRepository | None = None,
-    health_checker: FakeHealthChecker | None = None,
+    health_checker: IHealthChecker | None = None,
     clock: FakeFollowClock | None = None,
     stdout: io.StringIO | None = None,
     stderr: io.StringIO | None = None,
@@ -1272,8 +1282,8 @@ def test_status_env_document_populates_declared_health() -> None:
     assert by_name["frontend"]["health"] == "unhealthy"
     assert by_name["shell"]["health"] == "unknown"
     assert health.calls == [
-        ("http://localhost:${BACKEND_PORT}/health", {"BACKEND_PORT": "3000"}, _WORKTREE),
-        ("pgrep -f frontend", {"BACKEND_PORT": "3000"}, _WORKTREE),
+        ("http://localhost:${BACKEND_PORT}/health", {"BACKEND_PORT": "3000"}, _WORKTREE, None),
+        ("pgrep -f frontend", {"BACKEND_PORT": "3000"}, _WORKTREE, None),
     ]
 
 
@@ -1357,6 +1367,105 @@ def test_status_env_document_declared_health_is_unhealthy_for_missing_pane() -> 
     assert service["state"] == "stopped"
     assert service["health"] == "unhealthy"
     assert health.calls == []
+
+
+def test_status_env_document_log_health_file_mode_healthy_when_pattern_present() -> None:
+    """A FILE-mode 'log' probe is healthy once the ready-line appears in the captured log tail."""
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 10})
+    manifest = ServiceManifest(
+        session_prefix="mp",
+        env_file=None,
+        layout_hook=None,
+        services=(
+            Service(
+                name="backend",
+                target=Target(0, 0),
+                cmd="npm start",
+                health=Health(type=HealthType.LOG, target=r"Listening on port \d+"),
+            ),
+        ),
+    )
+    ctx = _make_ctx(manifest=manifest)
+    log_repo = FakeLogRepository()
+    svc = _make_service(
+        tmux=tmux,
+        reaper=FakeProcessReaper(children_set={10}),
+        log_repo=log_repo,
+        health_checker=SubprocessHealthChecker(),
+    )
+    log_repo.seed_live_content(log_repo.log_path(_WORKTREE, "backend"), "booting...\nListening on port 3000\n")
+
+    doc = svc.status_env_document(ctx)
+
+    assert doc["services"][0]["health"] == "healthy"
+
+
+def test_status_env_document_log_health_file_mode_unhealthy_when_pattern_absent() -> None:
+    """The same FILE-mode probe is unhealthy while the ready-line has not appeared yet."""
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 10})
+    manifest = ServiceManifest(
+        session_prefix="mp",
+        env_file=None,
+        layout_hook=None,
+        services=(
+            Service(
+                name="backend",
+                target=Target(0, 0),
+                cmd="npm start",
+                health=Health(type=HealthType.LOG, target=r"Listening on port \d+"),
+            ),
+        ),
+    )
+    ctx = _make_ctx(manifest=manifest)
+    log_repo = FakeLogRepository()
+    svc = _make_service(
+        tmux=tmux,
+        reaper=FakeProcessReaper(children_set={10}),
+        log_repo=log_repo,
+        health_checker=SubprocessHealthChecker(),
+    )
+    log_repo.seed_live_content(log_repo.log_path(_WORKTREE, "backend"), "booting...\nstill starting up\n")
+
+    doc = svc.status_env_document(ctx)
+
+    assert doc["services"][0]["health"] == "unhealthy"
+
+
+def test_status_env_document_log_health_pane_mode_scans_capture_pane() -> None:
+    """A PANE-mode 'log' probe matches against the live tmux pane buffer, not the log file."""
+    tmux = FakeTmuxRepository(capture_text={"0.0": "booting...\nready to accept connections\n"})
+    tmux.seed_session("mp-alpha", {"0.0": 10})
+    manifest = ServiceManifest(
+        session_prefix="mp",
+        env_file=None,
+        layout_hook=None,
+        services=(
+            Service(
+                name="shell",
+                target=Target(0, 0),
+                cmd="my-interactive-tool",
+                log=LogMode.PANE,
+                health=Health(type=HealthType.LOG, target="ready to accept connections"),
+            ),
+        ),
+    )
+    ctx = _make_ctx(manifest=manifest)
+    # A file-mode log repo seeded with content that would NOT match, proving
+    # the pane-mode probe reads capture_pane rather than the log file.
+    log_repo = FakeLogRepository()
+    log_repo.seed_live_content(log_repo.log_path(_WORKTREE, "shell"), "not a match\n")
+    svc = _make_service(
+        tmux=tmux,
+        reaper=FakeProcessReaper(children_set={10}),
+        log_repo=log_repo,
+        health_checker=SubprocessHealthChecker(),
+    )
+
+    doc = svc.status_env_document(ctx)
+
+    assert doc["services"][0]["health"] == "healthy"
 
 
 def test_status_env_document_port_base_from_env_vars() -> None:

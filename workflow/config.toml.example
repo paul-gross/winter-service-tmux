@@ -110,11 +110,24 @@ retention_seconds = 604800    # 7 days
 #              type = "url" sends an HTTP GET to target and passes on 2xx/3xx.
 #              type = "cmd" runs target as a shell command from the worktree
 #              root and passes on exit 0.
+#              type = "log" treats target as a regular expression and passes
+#              when it matches (re.search) the service's captured output: the
+#              tmux pane buffer for log = "pane" services, or a bounded tail of
+#              the captured log file for log = "file" services (also accepted
+#              for log = "memory", forward-compat only — memory mode is not
+#              yet implemented, so there is no captured file to read).
+#              Rejected by the validator on an empty-command (interactive)
+#              service — there is no captured output to match — and target
+#              must compile as a valid regex.
 #              target may contain ${VAR} placeholders resolved from env_file;
-#              bare $VAR is not interpolated.
+#              bare $VAR is not interpolated. EXCEPTION: type = "log" targets
+#              are used VERBATIM — never interpolated — so regex syntax is
+#              never mangled by substitution.
 #              Workspace-scoped services do not load env_file, so their health
-#              targets must not contain ${VAR} placeholders.
-#              timeout is optional seconds; default is 5.
+#              targets must not contain ${VAR} placeholders (does not apply to
+#              type = "log", which is never interpolated).
+#              timeout is optional seconds; default is 5 (unused by type = "log",
+#              which has no I/O to time out).
 #   port     (optional) — declared port for this service, surfaced in the
 #              ``PORTS`` column of ``winter service status``.  Two forms:
 #              - Literal integer: ``port = 4070``

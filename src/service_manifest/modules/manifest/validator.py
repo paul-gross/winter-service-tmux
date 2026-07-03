@@ -17,9 +17,10 @@ DATA (the caller decides fatality), not control flow.  See
 from __future__ import annotations
 
 import posixpath
+import re
 
 from service_manifest.modules.manifest.env import interpolate, referenced_vars
-from service_manifest.modules.manifest.model import Service, ServiceManifest, parse_port_expression
+from service_manifest.modules.manifest.model import HealthType, Service, ServiceManifest, parse_port_expression
 
 
 class ManifestValidator:
@@ -73,8 +74,14 @@ class ManifestValidator:
         - Each service's ``cwd``, when declared, is a relative path that does
           not escape its scope root (not absolute, and does not normalize to
           ``..`` or start with ``../``).
+        - A ``health.type = "log"`` probe is not declared on an interactive
+          (empty-command) service, where there is no captured output to match.
+        - A ``health.type = "log"`` probe's ``target`` compiles as a valid
+          regular expression.
         - When *env* is provided: every ``${VAR}`` in a service health target
           resolves against *env*; unresolvable vars are reported per-service.
+          Skipped for ``health.type = "log"`` — its ``target`` is used
+          verbatim, never interpolated.
         """
         violations: list[str] = []
 
@@ -173,6 +180,17 @@ class ManifestValidator:
                 violations.append(f"{label} '{service.name}': health.target must be non-empty")
             if health.timeout is not None and health.timeout <= 0:
                 violations.append(f"{label} '{service.name}': health.timeout must be positive, got {health.timeout:g}")
+            if health.type == HealthType.LOG:
+                if not service.cmd.strip():
+                    violations.append(
+                        f"{label} '{service.name}': a 'log' health probe has no captured output to match on an "
+                        "interactive (empty-command) service"
+                    )
+                elif health.target.strip():
+                    try:
+                        re.compile(health.target)
+                    except re.error as exc:
+                        violations.append(f"{label} '{service.name}': health.target is not a valid regex — {exc}")
 
     @staticmethod
     def _check_startup_config(services: tuple[Service, ...], label: str, violations: list[str]) -> None:
@@ -227,7 +245,9 @@ class ManifestValidator:
     @staticmethod
     def _check_workspace_health_has_no_vars(services: tuple[Service, ...], violations: list[str]) -> None:
         for service in services:
-            if service.health is None:
+            if service.health is None or service.health.type == HealthType.LOG:
+                # 'log' targets are used verbatim (no ${VAR} interpolation), so
+                # a regex that happens to contain '${...}' is not a variable ref.
                 continue
             for var in referenced_vars(service.health.target):
                 violations.append(
@@ -243,7 +263,8 @@ class ManifestValidator:
         violations: list[str],
     ) -> None:
         for service in services:
-            if service.health is None:
+            if service.health is None or service.health.type == HealthType.LOG:
+                # 'log' targets are used verbatim (no ${VAR} interpolation).
                 continue
             _rendered, unresolved = interpolate(service.health.target, env)
             for var in unresolved:

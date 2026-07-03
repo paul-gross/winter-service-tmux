@@ -79,6 +79,21 @@ class LocalLogRepository:
             return []
         return [line.rstrip("\n") for line in text.splitlines()]
 
+    def read_tail(self, path: Path, max_bytes: int) -> str:
+        """Return up to the last *max_bytes* bytes of *path*, decoded as text.
+
+        Seeks near the end of the file instead of reading it in full.
+        Returns ``""`` when *path* is absent.
+        """
+        try:
+            with path.open("rb") as fh:
+                size = fh.seek(0, os.SEEK_END)
+                fh.seek(max(0, size - max_bytes))
+                chunk = fh.read()
+        except FileNotFoundError:
+            return ""
+        return chunk.decode("utf-8", errors="replace")
+
     def file_size(self, path: Path) -> int:
         """Return the current byte size of *path*, or 0 if absent."""
         try:
