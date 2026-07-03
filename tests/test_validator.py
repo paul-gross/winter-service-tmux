@@ -640,3 +640,41 @@ def test_port_workspace_service_malformed_is_violation() -> None:
     manifest = _make_manifest(workspace_services=(svc,))
     violations = _validator.validate(manifest)
     assert any("docker" in v and "port" in v for v in violations)
+
+
+# ---------------------------------------------------------------------------
+# cwd field validation
+# ---------------------------------------------------------------------------
+
+
+def test_cwd_absent_is_clean() -> None:
+    svc = Service(name="web", target=Target(0, 0), cmd="cmd")
+    manifest = _make_manifest(services=(svc,))
+    assert _validator.validate(manifest) == []
+
+
+def test_cwd_nested_relative_is_clean() -> None:
+    svc = Service(name="web", target=Target(0, 0), cmd="cmd", cwd="apps/backend")
+    manifest = _make_manifest(services=(svc,))
+    assert _validator.validate(manifest) == []
+
+
+def test_cwd_absolute_is_violation() -> None:
+    svc = Service(name="web", target=Target(0, 0), cmd="cmd", cwd="/etc/passwd")
+    manifest = _make_manifest(services=(svc,))
+    violations = _validator.validate(manifest)
+    assert any("web" in v and "cwd" in v for v in violations)
+
+
+def test_cwd_escaping_scope_root_is_violation() -> None:
+    svc = Service(name="web", target=Target(0, 0), cmd="cmd", cwd="../other")
+    manifest = _make_manifest(services=(svc,))
+    violations = _validator.validate(manifest)
+    assert any("web" in v and "cwd" in v for v in violations)
+
+
+def test_cwd_workspace_service_escaping_is_violation() -> None:
+    svc = Service(name="docker", target=Target(0, 0), cmd="docker compose up", cwd="foo/../../bar")
+    manifest = _make_manifest(workspace_services=(svc,))
+    violations = _validator.validate(manifest)
+    assert any("docker" in v and "cwd" in v for v in violations)

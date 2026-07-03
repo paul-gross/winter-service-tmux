@@ -356,8 +356,14 @@ class ManifestReader:
                         f"service '{name}': 'port' must be an integer or a string expression "
                         f"(e.g. 'WINTER_PORT_BASE + 10'), got {type(port_raw).__name__}"
                     )
+            cwd_raw = raw.get("cwd")
+            cwd: str | None = None
+            if cwd_raw is not None:
+                if not isinstance(cwd_raw, str):
+                    raise ManifestError(f"service '{name}': cwd must be a string, got {type(cwd_raw).__name__}")
+                cwd = cwd_raw[2:] if cwd_raw.startswith("./") else cwd_raw
             svc = Service(
-                name=name, target=target, cmd=cmd, log=log_mode, health=health, startup=startup, port=port
+                name=name, target=target, cmd=cmd, log=log_mode, health=health, startup=startup, port=port, cwd=cwd
             )
             parsed.append((svc, scope))
         return parsed

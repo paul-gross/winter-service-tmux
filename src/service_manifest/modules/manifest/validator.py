@@ -16,6 +16,8 @@ DATA (the caller decides fatality), not control flow.  See
 
 from __future__ import annotations
 
+import posixpath
+
 from service_manifest.modules.manifest.env import interpolate, referenced_vars
 from service_manifest.modules.manifest.model import Service, ServiceManifest, parse_port_expression
 
@@ -68,6 +70,9 @@ class ManifestValidator:
         - Each service's ``startup.retry_delay`` is non-negative (both lists).
         - A ``startup`` policy with ``retries > 0`` is not declared on an
           interactive (empty-command) service, where it would never fire.
+        - Each service's ``cwd``, when declared, is a relative path that does
+          not escape its scope root (not absolute, and does not normalize to
+          ``..`` or start with ``../``).
         - When *env* is provided: every ``${VAR}`` in a service health target
           resolves against *env*; unresolvable vars are reported per-service.
         """
@@ -86,6 +91,8 @@ class ManifestValidator:
         self._check_log_config(manifest, violations)
         self._check_port_config(manifest.services, "service", violations)
         self._check_port_config(manifest.workspace_services, "workspace service", violations)
+        self._check_cwd_config(manifest.services, "service", violations)
+        self._check_cwd_config(manifest.workspace_services, "workspace service", violations)
 
         if env is not None:
             self._check_health_vars(manifest.services, "service", env, violations)
@@ -203,6 +210,19 @@ class ManifestValidator:
                     f"{label} '{service.name}': port expression {port!r} is not valid; "
                     "expected a positive integer or 'WINTER_PORT_BASE + <offset>'"
                 )
+
+    @staticmethod
+    def _check_cwd_config(services: tuple[Service, ...], label: str, violations: list[str]) -> None:
+        for service in services:
+            cwd = service.cwd
+            if cwd is None:
+                continue
+            if posixpath.isabs(cwd):
+                violations.append(f"{label} '{service.name}': cwd must be a relative path, got absolute {cwd!r}")
+                continue
+            normalized = posixpath.normpath(cwd)
+            if normalized == ".." or normalized.startswith("../"):
+                violations.append(f"{label} '{service.name}': cwd {cwd!r} normalizes outside its scope root")
 
     @staticmethod
     def _check_workspace_health_has_no_vars(services: tuple[Service, ...], violations: list[str]) -> None:

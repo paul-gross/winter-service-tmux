@@ -37,7 +37,9 @@ def _write_manifest(cfg_dir: Path, content: str) -> None:
     (cfg_dir / "config.toml").write_text(content, encoding="utf-8")
 
 
-def test_describe_empty_when_no_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+def test_describe_empty_when_no_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
     """No WINTER_EXT_CONFIG_DIR and no default config → empty services list, exit 0."""
     monkeypatch.delenv("WINTER_EXT_CONFIG_DIR", raising=False)
     monkeypatch.delenv("WINTER_WORKSPACE_DIR", raising=False)

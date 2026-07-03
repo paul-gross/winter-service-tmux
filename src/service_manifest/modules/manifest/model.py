@@ -148,6 +148,15 @@ class Service:
             ``${...}`` substitution (which only performs verbatim string
             replacement), so a small dedicated syntax is used here.  The
             divergence is a conscious design choice, not an inconsistency.
+        cwd: Optional working directory for this service, as a scope-rooted
+            relative path — resolved against the same base ``build_launch_line``
+            already uses (the feature-env root for ``scope="project"``, the
+            workspace root for ``scope="workspace"``).  A leading ``./`` is
+            normalized away by the reader.  ``None`` (the default) means the
+            pane ``cd``s to the scope root, matching prior behavior.  Supersedes
+            the ``cd``-in-``cmd`` idiom.  The validator rejects an absolute
+            value or one that normalizes outside the scope root (e.g.
+            ``"../other"``).
     """
 
     name: str
@@ -157,6 +166,7 @@ class Service:
     health: Health | None = None
     startup: StartupPolicy | None = None
     port: int | str | None = None
+    cwd: str | None = None
 
 
 @dataclass(frozen=True)

@@ -96,6 +96,14 @@ retention_seconds = 604800    # 7 days
 #   scope    (optional, default "project") — "project" runs the service in the
 #              per-env <session_prefix>-<env> session; "workspace" makes it a
 #              workspace-scoped singleton (see the workspace section below).
+#   cwd      (optional) — working directory for this service, as a path
+#              relative to the scope root: the feature-env root for
+#              scope = "project", the workspace root for scope = "workspace".
+#              A leading "./" is normalized away. Omit to cd to the scope root
+#              (prior default behavior). Supersedes the cd-in-cmd idiom — write
+#              cwd = "apps/backend" instead of cmd = "cd apps/backend && npm run dev".
+#              An absolute path, or one that normalizes outside the scope root
+#              (e.g. "../other"), is rejected by the validator.
 #   [service.health] (optional) — readiness probe reported in the status
 #              document's health field and the env-root ./status output. It is
 #              observability only: ./up does not wait for this probe.
@@ -155,8 +163,11 @@ retries = 3      # re-launch up to 3 times if the process dies on boot
 retry_delay = 2  # seconds between attempts
 
 [[service]]
+# cwd is preferred over "cd apps/frontend && npm run dev" — the orchestrator
+# resolves it against the scope root before launching the command.
 name = "frontend"
 target = "0.1"
+cwd = "apps/frontend"
 cmd = "npm run dev"
 port = "WINTER_PORT_BASE + 11"  # resolves to e.g. 4071 when WINTER_PORT_BASE=4060
 

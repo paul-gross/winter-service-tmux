@@ -263,6 +263,30 @@ def test_build_launch_line_bare_when_command_empty_and_logfile_supplied() -> Non
 
 
 # ---------------------------------------------------------------------------
+# build_launch_line — cwd
+# ---------------------------------------------------------------------------
+
+
+def test_build_launch_line_cwd_joins_worktree_dir() -> None:
+    """A declared cwd is joined onto worktree_dir in the leading cd."""
+    line = build_launch_line(_WORKTREE, _SCOPE, "backend", "npm run start:dev", cwd="apps/backend")
+    expected_dir = _WORKTREE / "apps/backend"
+    expected = (
+        f'cd {shlex.quote(str(expected_dir))} && eval "$(winter env {shlex.quote(_SCOPE)})"'
+        f" && echo {shlex.quote('=== backend ===')} && npm run start:dev"
+    )
+    assert line == expected
+
+
+def test_build_launch_line_cwd_absent_unchanged() -> None:
+    """No cwd → identical to the pre-existing plain cd '<worktree_dir>' behavior."""
+    with_cwd_none = build_launch_line(_WORKTREE, _SCOPE, "backend", "npm run start:dev", cwd=None)
+    without_cwd_arg = build_launch_line(_WORKTREE, _SCOPE, "backend", "npm run start:dev")
+    assert with_cwd_none == without_cwd_arg
+    assert with_cwd_none.startswith(f"cd {shlex.quote(str(_WORKTREE))} ")
+
+
+# ---------------------------------------------------------------------------
 # last_non_blank_line
 # ---------------------------------------------------------------------------
 

@@ -1572,3 +1572,63 @@ port = true
 """
     with pytest.raises(ManifestError, match="port"):
         _read({_COMMITTED_PATH: content})
+
+
+# ---------------------------------------------------------------------------
+# cwd field — bare relative, "./"-normalization, absent
+# ---------------------------------------------------------------------------
+
+
+def test_service_cwd_bare_relative_parsed() -> None:
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "web"
+target = "0.0"
+cmd = "npm run start"
+cwd = "apps/backend"
+"""
+    manifest = _read({_COMMITTED_PATH: content})
+    assert manifest.services[0].cwd == "apps/backend"
+
+
+def test_service_cwd_leading_dot_slash_normalized() -> None:
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "web"
+target = "0.0"
+cmd = "npm run start"
+cwd = "./apps/backend"
+"""
+    manifest = _read({_COMMITTED_PATH: content})
+    assert manifest.services[0].cwd == "apps/backend"
+
+
+def test_service_cwd_absent_is_none() -> None:
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "web"
+target = "0.0"
+cmd = "npm run start"
+"""
+    manifest = _read({_COMMITTED_PATH: content})
+    assert manifest.services[0].cwd is None
+
+
+def test_service_cwd_non_string_raises() -> None:
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "web"
+target = "0.0"
+cmd = "npm run start"
+cwd = 42
+"""
+    with pytest.raises(ManifestError, match="cwd must be a string"):
+        _read({_COMMITTED_PATH: content})

@@ -49,6 +49,7 @@ def build_launch_line(
     logfile: Path | None = None,
     rotate_size_bytes: int | None = None,
     max_rotations: int | None = None,
+    cwd: str | None = None,
 ) -> str:
     """Build the tmux send-keys launch line for one service.
 
@@ -56,6 +57,12 @@ def build_launch_line(
 
         cd '<worktree_dir>' [&& eval "$(winter env '<scope>')"] [&& . '<env_file>']
             && echo '=== <name> ===' [&& <command>]
+
+    When *cwd* is not ``None`` (the manifest service's optional ``cwd`` field,
+    already normalized by the reader) the leading ``cd`` targets
+    ``<worktree_dir>/<cwd>`` instead of ``<worktree_dir>`` — everything else
+    (the scope self-source, env-file dot-source, banner, and capture pipe) is
+    unchanged.
 
     When *scope* is not ``None`` the pane shell self-sources the full scope
     environment via POSIX ``eval "$(winter env <scope>)"`` before the banner.
@@ -90,7 +97,8 @@ def build_launch_line(
     the entire command even when it contains ``&&`` or inner pipes.  The writer
     echoes every raw line to stdout so the pane stays live.
     """
-    prefix = f"cd {shlex.quote(str(worktree_dir))}"
+    target_dir = worktree_dir / cwd if cwd else worktree_dir
+    prefix = f"cd {shlex.quote(str(target_dir))}"
     if scope is not None:
         prefix = f'{prefix} && eval "$(winter env {shlex.quote(scope)})"'
     if env_file_path is not None:

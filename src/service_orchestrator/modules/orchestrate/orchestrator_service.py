@@ -240,6 +240,7 @@ class OrchestratorService:
                 logfile=logfile,
                 rotate_size_bytes=ctx.logs.rotate_size_bytes,
                 max_rotations=ctx.logs.max_rotations,
+                cwd=svc.cwd,
             )
         return build_launch_line(
             ctx.worktree_dir,
@@ -247,6 +248,7 @@ class OrchestratorService:
             svc.name,
             svc.cmd,
             env_file_path=ctx.env_file_path,
+            cwd=svc.cwd,
         )
 
     def _await_startup(self, ctx: SessionContext, pane_pids: dict[str, int]) -> list[str]:
@@ -501,6 +503,7 @@ class OrchestratorService:
             service.name,
             service.cmd,
             env_file_path=ctx.env_file_path,
+            cwd=service.cwd,
         )
         self._tmux.send_keys(ctx.session, target, line)
         self._stdout.write(f"Restarted '{service_name}' in {ctx.session}:{target}\n")
