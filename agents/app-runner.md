@@ -18,7 +18,7 @@ These scripts are contributed by the `winter-service-tmux` extension. See `winte
 
 At the start of each session, read `workspace:/.winter/config/winter-service-tmux/config.toml` to learn the session prefix and the service → `<window>.<pane>` mapping for the current project. Each `[[service]]` entry declares the service `name`, its `target` (e.g. `"0.1"`), and optionally its `log` mode (`"file"`, `"pane"`, or `"memory"`) — the `log` mode determines which read path works. Default is `"file"`.
 
-Also read each entry's `scope` field (`"project"` by default, or `"workspace"`). Per-env services (`scope = "project"` or omitted) run in the `<session_prefix>-<env>` session and are managed via `./up`/`./down`/`./status`/`./restart`. Workspace singletons (`scope = "workspace"`) run in the separate `<session_prefix>-workspace` session and are managed exclusively via `winter service … workspace` — they do not appear in `./status` and cannot be reached by `./restart`.
+Also read each entry's `scope` field (`"project"` by default, or `"workspace"`). Per-env services (`scope = "project"` or omitted) run in the `<session_prefix>-<env>` session and are managed via `./up`/`./down`/`./status`/`./restart`. Workspace singletons (`scope = "workspace"`) run in the separate `<session_prefix>-workspace` session and are managed exclusively via `winter service … workspace` — they do not appear in a bare env-scoped `./status` (though `./status --all` does surface the workspace session) and cannot be reached by `./restart`.
 
 ## Reading logs
 
@@ -54,20 +54,22 @@ tmux capture-pane -t <session>:<window>.<pane> -p -S -500
 
 Use this only when the service's `log` mode is `"pane"` or you need to see the raw terminal output of an interactive pane. Requires the tmux session to be running.
 
+**Multi-provider note:** in a workspace that also binds a docker provider, `./up` starts docker-backed services too, and `./status` lists them alongside the tmux services. A docker service has no tmux pane — `tmux capture-pane` cannot reach it; read its output with `winter service logs <env>/<service>`. Don't diagnose a docker service as "silent" just because it isn't in the tmux session.
+
 ## How You Work
 
 1. **Start**: Run `./up <worktree>` (or just `./up` from inside the env dir). Wait a few seconds, then run `./status` to confirm this env's services came up (`./status --all` reports every running env).
 2. **Status**: Run `./status` and summarize concisely — which services are running, which are not, any visible errors.
 3. **Diagnose**: Read logs with `winter service logs alpha/<service> [-n N]` (or bare `alpha` for all services) for file-mode services, or `tmux capture-pane` for pane-mode services. Report the root cause, not the full log.
 4. **Relay**: Be concise — service name, status, and the relevant error line. Don't dump raw output unless asked.
-5. **Restart**: To bounce a wedged or crashed service, run `./restart <pattern>...` — one or more `<service>` glob patterns scoped to the invoking env (e.g. `./restart backend`, `./restart 'work*'`). It reaps each matched pane's processes and re-runs the service's declared command, leaving every other pane untouched. Use `./down` then `./up` only for a full-session restart (e.g. after a config change).
+5. **Restart**: To bounce a wedged or crashed service, run `./restart <pattern>...` — one or more `<service>` glob patterns scoped to the invoking env (e.g. `./restart backend`, `./restart 'work*'`). It restarts each matched service (for a tmux service, reaping its pane and re-running its declared command), leaving the others running. The env-root door delegates to `winter service restart` and no longer prints the declared-service list on a typo, so a pattern that matches nothing is not always obvious — **after a restart, confirm with `./status` that the service actually bounced rather than trusting the exit code.** Use `./down` then `./up` only for a full-session restart (e.g. after a config change).
 
 ## Workspace-scoped services
 
 Services with `scope = "workspace"` run in a shared `<session_prefix>-workspace` session. See `winter-service-tmux:/context/workspace-singletons.md` for the full commands and rules. Operationally:
 
-- To check a singleton, use `winter service status workspace` — not `./status`, which only shows this env's per-env services.
-- Prefer `winter service up <env>` over `alpha/up` — the former ensures workspace singletons are running before the env session starts; the env-root `./up` skips that check.
+- To check a singleton, use `winter service status workspace` — not a bare `./status`, which is env-scoped (though `./status --all` surfaces the workspace session alongside the env sessions).
+- `alpha/up` and `winter service up alpha` are equivalent for lifecycle — the env-root `./up` delegates to `winter service up <env>`, so both start every bound provider (tmux + any docker services) and ensure workspace singletons are up first. `./up -a` additionally attaches you to the tmux session.
 
 ## Rules
 

@@ -13,18 +13,21 @@
 #   WINTER_PORT_BASE
 #
 # Idempotent: if the session is already gone (e.g. user ran `./down` before
-# `winter ws destroy`), exits 0 without complaint. The Python `down` door
-# has its own env-suffix fallback when the manifest is unreadable, so this
-# hook never gets stuck.
+# `winter ws destroy`), exits 0 without complaint. The Python `down` door's
+# `--tmux-only` path has its own env-suffix fallback when the manifest is
+# unreadable, so this hook never gets stuck.
 set -uo pipefail
 
 : "${WINTER_EXT_DIR:?WINTER_EXT_DIR not set}"
 : "${WINTER_ENV:?WINTER_ENV not set}"
 
-# Invoke the extension's `down` shim for this env. The Python env_cli door
-# handles the manifest-unreadable case via env-suffix session matching
-# (resolved decision #2), so no bash-level fallback is needed here.
+# Invoke the extension's `down` shim for this env in `--tmux-only` mode. A plain
+# `./down` delegates to `winter service down` (cross-provider); here we must tear
+# down ONLY this extension's tmux session — docker/other providers have their own
+# destroy hooks. The `--tmux-only` path runs the in-process kill and falls back to
+# env-suffix session matching when the manifest is unreadable, so no bash-level
+# fallback is needed here.
 DOWN="$WINTER_EXT_DIR/workflow/down"
 if [[ -x "$DOWN" ]]; then
-  "$DOWN" "$WINTER_ENV" || true
+  "$DOWN" --tmux-only "$WINTER_ENV" || true
 fi

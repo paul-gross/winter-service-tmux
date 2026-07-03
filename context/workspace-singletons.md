@@ -13,7 +13,7 @@ winter service status workspace      # list workspace service states
 winter service restart workspace/db  # restart a single workspace service
 ```
 
-`winter service up <env>` ensures the workspace session is running before it starts the env session — so workspace singletons are guaranteed to be up when any env spins up. Note: the env-root `./up` symlink calls the orchestrator directly and does NOT auto-start the workspace session; if you use `alpha/up`, run `winter service up workspace` first, or use `winter service up alpha` instead. `down <env>` intentionally leaves the workspace session running; only `down workspace` tears it down.
+`winter service up <env>` ensures the workspace session is running before it starts the env session — so workspace singletons are guaranteed to be up when any env spins up. The env-root `./up` delegates to `winter service up <env>`, so it inherits this: `alpha/up` auto-starts the workspace scope first, then alpha. `down <env>` (and `alpha/down`, which delegates to it) intentionally leaves the workspace session running; only `down workspace` tears it down.
 
 `winter service status` (no patterns) and `winter service status --all` both include the workspace session alongside env sessions.
 

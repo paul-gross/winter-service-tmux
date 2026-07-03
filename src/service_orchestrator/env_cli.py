@@ -1,9 +1,23 @@
-"""Env-root symlink door — preserves the ``./up`` / ``./down`` / ``./status`` / ``./restart``
+"""Env-root door — preserves the ``./up`` / ``./down`` / ``./status`` / ``./restart``
 ergonomics for direct invocation from a feature env directory.
 
 Each shim script (``workflow/up``, etc.) invokes this module as::
 
     python3 -m service_orchestrator.env_cli <action> [args...]
+
+**Delegation model.** The user-facing actions delegate to the workspace-level
+``winter service <action> <env>`` command so they fan out across *every* bound
+service provider (capability dispatch), not just this tmux orchestrator. This is
+what lets ``./up`` also start the docker-backed services a workspace registers,
+and keeps a single source of truth for lifecycle behavior (workspace-scope
+auto-start, startup-retry, …). The one value this door adds on top of ``winter
+service`` is the tmux-only ``-a``/``--attach`` convenience on ``up``.
+
+The sole in-process (tmux-only) path that remains is ``down --tmux-only``, used
+by ``hooks/destroy-worktree.sh`` during ``winter ws destroy``: it must tear down
+*only* this extension's tmux session (docker teardown is that provider's own
+hook's job) and must keep working when the manifest is unreadable — hence the
+``_down_suffix_fallback`` env-suffix session kill.
 
 Workspace-root / env-name resolution order:
 
@@ -19,30 +33,17 @@ Workspace-root / env-name resolution order:
 
 Door-local arg shapes (NOT part of the winter contract):
 
-- ``up [local] [-a|--attach] [<name>]``
-- ``down [local] [<name>]``
-- ``status [--all] [<pattern>...]``
-- ``restart <pattern>...``
-
-The direct door does NOT execute ``winter`` itself.  Instead, the entry shims
-(``workflow/up`` and ``workflow/status``) source ``eval "$(winter env <env>)"``
-before ``exec python3``, so the orchestrator process has the scope env in
-``os.environ``.  Each pane launch line also contains ``eval "$(winter env
-<scope>)"`` so panes self-source independently.
-
-``local`` mode skips pane scope-sourcing (env-less ``SessionContext``
-— useful for lightweight testing without env injection); ``up local``
-and ``down local`` are symmetric.
-``-a``/``--attach`` execs ``tmux attach-session`` after ``up``.
-``status --all`` loops every ``<prefix>-`` session.
-``down`` falls back to env-suffix session matching when the manifest is
-unreadable (so ``winter ws destroy`` never gets stuck).
+- ``up [-a|--attach] [<name>]`` — delegates to ``winter service up <env>``,
+  then execs ``tmux attach-session`` when ``-a``.
+- ``down [--tmux-only] [<name>]`` — delegates to ``winter service down <env>``;
+  with ``--tmux-only`` (destroy hook) takes the in-process tmux session kill
+  with env-suffix fallback.
+- ``status [--all] [<pattern>...]`` — delegates to ``winter service status``.
+- ``restart <pattern>...`` — delegates to ``winter service restart``.
 """
 
 from __future__ import annotations
 
-import dataclasses
-import fnmatch
 import os
 import sys
 from pathlib import Path
@@ -50,7 +51,8 @@ from pathlib import Path
 from service_manifest.modules.manifest.errors import ManifestError
 from service_orchestrator.container import Container
 from service_orchestrator.core.internal.env_workspace_locator import EnvWorkspaceLocator
-from service_orchestrator.modules.orchestrate.env_enumerator import running_envs
+from service_orchestrator.core.internal.subprocess_winter_cli import SubprocessWinterCli
+from service_orchestrator.core.winter_cli import IWinterCli
 from service_orchestrator.modules.orchestrate.errors import OrchestratorError
 from service_orchestrator.modules.orchestrate.session_context import SessionContext
 from service_orchestrator.modules.orchestrate.session_context_builder import (
@@ -64,7 +66,7 @@ _ACTIONS = ("up", "down", "status", "restart")
 
 
 # ---------------------------------------------------------------------------
-# Direct-door env injection
+# tmux-only SessionContext (down --tmux-only path)
 # ---------------------------------------------------------------------------
 
 
@@ -72,31 +74,14 @@ def _build_env_ctx(
     builder: SessionContextBuilder,
     env: str,
     workspace_root: Path,
-    *,
-    local: bool = False,
 ) -> SessionContext:
-    """Build a ``SessionContext`` for the direct-door path.
+    """Build a ``SessionContext`` for the in-process ``down --tmux-only`` path.
 
-    The direct door does NOT execute ``winter``.  The entry shim (``workflow/up``
-    and ``workflow/status``) sources ``eval "$(winter env <env>)"`` before
-    ``exec python3``, so ``os.environ`` already carries the scope env when the
-    orchestrator process starts.  Each pane self-sources via
-    ``eval "$(winter env <scope>)"`` in its launch prefix (``inject_scope``).
-
-    ``local`` mode disables pane scope-sourcing (``inject_scope=None``) and
-    leaves ``env_vars`` unset — useful for lightweight testing without any env
-    injection.  The workspace target always has ``inject_scope=None`` (no per-env
-    vars) and is returned unchanged.
+    ``down`` only reaps the session's panes and kills the session — it reads no
+    ``env_vars`` (no layout hook runs, no ports are resolved on teardown), so
+    the built context is returned as-is with no environment injected.
     """
-    ctx = build_for_target(builder, env, workspace_root=workspace_root, skip_env_file=True)
-    if env == WORKSPACE_TARGET:
-        return ctx
-    if local:
-        # Fully env-less: disable both pane scope-sourcing and pane dot-sourcing.
-        return dataclasses.replace(ctx, inject_scope=None, env_file_path=None)
-    # Non-local env: expose os.environ in-process (for the layout hook and
-    # port/health resolution) — the shim sourced "winter env" before exec.
-    return dataclasses.replace(ctx, env_vars=dict(os.environ))
+    return build_for_target(builder, env, workspace_root=workspace_root, skip_env_file=True)
 
 
 # ---------------------------------------------------------------------------
@@ -167,7 +152,7 @@ def _locate_workspace_and_env(argv0: str) -> tuple[Path, str]:
 
 
 # ---------------------------------------------------------------------------
-# Down env-suffix fallback (resolved decision #2)
+# Down env-suffix fallback (tmux-only destroy path)
 # ---------------------------------------------------------------------------
 
 
@@ -203,68 +188,65 @@ def _down_suffix_fallback(env: str, tmux_repo: ITmuxRepository) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _handle_up(
-    argv: list[str],
-    env: str,
-    workspace_root: Path,
-    container: Container,
-) -> int:
-    local = False
+def _handle_up(argv: list[str], env: str, cli: IWinterCli) -> int:
+    """``up [-a|--attach] [<env>]`` — delegate to ``winter service up``, then attach.
+
+    Startup-retry and workspace-scope auto-start are inherited from ``winter
+    service up``; the only door-local behavior is the ``-a`` tmux attach.
+    """
     attach = False
     for arg in argv:
         if arg in ("-a", "--attach"):
             attach = True
-        elif arg == "local":
-            local = True
         elif not arg.startswith("-"):
             env = arg  # explicit env name override
 
-    try:
-        if env == WORKSPACE_TARGET:
-            ctx = container.session_context_builder.build_workspace(
-                workspace_root=workspace_root,
-            )
-        else:
-            ctx = _build_env_ctx(container.session_context_builder, env, workspace_root, local=local)
-    except ManifestError as exc:
-        print(f"up: env '{env}': manifest error: {exc}", file=sys.stderr)
-        return 1
-    except (OSError, OrchestratorError) as exc:
-        print(f"up: env '{env}': {exc}", file=sys.stderr)
-        return 1
-
-    try:
-        rc = container.orchestrator.up(ctx)
-    except OrchestratorError as exc:
-        print(f"up: env '{env}': {exc}", file=sys.stderr)
-        return 1
+    rc = cli.service(["up", env])
 
     if attach and rc == 0:
-        os.execvp("tmux", ["tmux", "attach-session", "-t", ctx.session])
+        prefix = os.environ.get("WINTER_SERVICE_PREFIX")
+        if not prefix:
+            print(
+                "up: cannot attach: WINTER_SERVICE_PREFIX not set "
+                "(the shim sources `winter env` — is winter installed?)",
+                file=sys.stderr,
+            )
+            return rc
+        # Session name is `<prefix>-<env>` (see SessionContext.session). The
+        # env-var prefix is authoritative for the normal path; a manifest
+        # `session_prefix` override would not be reflected here.
+        os.execvp("tmux", ["tmux", "attach-session", "-t", f"{prefix}-{env}"])
 
     return rc
 
 
-def _handle_down(
-    argv: list[str],
-    env: str,
-    workspace_root: Path,
-    container: Container,
-) -> int:
-    local = False
-    for arg in argv:
-        if arg == "local":
-            local = True
-        elif not arg.startswith("-"):
-            env = arg
+def _handle_down(argv: list[str], env: str, workspace_root: Path, cli: IWinterCli) -> int:
+    """``down [--tmux-only] [<env>]``.
 
+    Normal ``./down`` delegates to ``winter service down`` (fans out across
+    providers, leaves the workspace scope running). ``--tmux-only`` (passed by
+    ``hooks/destroy-worktree.sh``) takes the in-process tmux session kill with
+    an env-suffix fallback, so ``winter ws destroy`` never wedges on an
+    unreadable manifest.
+    """
+    tmux_only = False
+    for arg in argv:
+        if arg == "--tmux-only":
+            tmux_only = True
+        elif not arg.startswith("-"):
+            env = arg  # explicit env name override
+
+    if not tmux_only:
+        return cli.service(["down", env])
+
+    container = Container()
     try:
         if env == WORKSPACE_TARGET:
             ctx = container.session_context_builder.build_workspace(
                 workspace_root=workspace_root,
             )
         else:
-            ctx = _build_env_ctx(container.session_context_builder, env, workspace_root, local=local)
+            ctx = _build_env_ctx(container.session_context_builder, env, workspace_root)
     except ManifestError as exc:
         # Manifest unreadable → fall back to env-suffix session kill.
         print(
@@ -283,12 +265,13 @@ def _handle_down(
         return 1
 
 
-def _handle_status(
-    argv: list[str],
-    env: str,
-    workspace_root: Path,
-    container: Container,
-) -> int:
+def _handle_status(argv: list[str], env: str, cli: IWinterCli) -> int:
+    """``status [--all] [<pattern>...]`` — delegate to ``winter service status``.
+
+    ``--all`` reports every env across every provider (``winter service status``
+    with no target). Bare patterns are prefixed with this env's segment so
+    winter's own glob routing selects within the env.
+    """
     show_all = False
     patterns: list[str] = []
     for arg in argv:
@@ -299,147 +282,31 @@ def _handle_status(
 
     if show_all:
         if patterns:
-            print(
-                "status: --all takes no service patterns",
-                file=sys.stderr,
-            )
+            print("status: --all takes no service patterns", file=sys.stderr)
             return 2
-        return _handle_status_all(env, workspace_root, container)
-
-    try:
-        ctx = _build_env_ctx(container.session_context_builder, env, workspace_root)
-    except ManifestError as exc:
-        print(f"status: env '{env}': manifest error: {exc}", file=sys.stderr)
-        return 1
-    except (OSError, OrchestratorError) as exc:
-        print(f"status: env '{env}': {exc}", file=sys.stderr)
-        return 1
+        return cli.service(["status"])
 
     if not patterns:
-        # No patterns — show all services in this env.
-        try:
-            return container.orchestrator.status(ctx)
-        except OrchestratorError as exc:
-            print(f"status: env '{env}': {exc}", file=sys.stderr)
-            return 1
+        return cli.service(["status", env])
 
-    # Expand each pattern against this env's services.
-    all_names = [svc.name for svc in ctx.services]
-    matched: list[str] = []
-    for pat in patterns:
-        hits = [name for name in all_names if fnmatch.fnmatchcase(name, pat)]
-        if not hits:
-            print(
-                f"status: pattern '{pat}' matches no declared services; declared: {', '.join(all_names) or '(none)'}",
-                file=sys.stderr,
-            )
-            return 1
-        for name in hits:
-            if name not in matched:
-                matched.append(name)
-
-    try:
-        return container.orchestrator.status(ctx, services=tuple(matched))
-    except OrchestratorError as exc:
-        print(f"status: env '{env}': {exc}", file=sys.stderr)
-        return 1
+    return cli.service(["status", *(f"{env}/{pat}" for pat in patterns)])
 
 
-def _handle_status_all(
-    env: str,
-    workspace_root: Path,
-    container: Container,
-) -> int:
-    """Report status for every running session under the configured prefix.
+def _handle_restart(argv: list[str], env: str, cli: IWinterCli) -> int:
+    """``restart <pattern>...`` — delegate to ``winter service restart``.
 
-    Reads the manifest to get the session prefix, then lists all tmux sessions
-    matching ``<prefix>-`` and reports each.
+    Each bare pattern is prefixed with this env's segment; winter routes each
+    matched service to its owning provider, so ``./restart db`` can bounce a
+    docker-backed service just as ``./restart api`` bounces a tmux one.
     """
-    try:
-        seed_ctx = _build_env_ctx(container.session_context_builder, env, workspace_root)
-        prefix = seed_ctx.session_prefix
-    except (ManifestError, OSError) as exc:
-        print(f"status --all: cannot read manifest: {exc}", file=sys.stderr)
-        return 1
-
-    try:
-        env_names = running_envs(container.tmux, prefix)
-    except OrchestratorError as exc:
-        print(f"status --all: {exc}", file=sys.stderr)
-        return 1
-    if not env_names:
-        print(f"No {prefix}-* sessions running.")
-        return 0
-
-    rc = 0
-    for env_name in env_names:
-        try:
-            # Risk #1: running_envs() returns the literal "workspace" for the
-            # <prefix>-workspace session.  Route through _build_env_ctx so it
-            # never goes through env-scoped build() (which would set
-            # worktree_dir = ws_root/workspace instead of ws_root itself).
-            env_ctx = _build_env_ctx(container.session_context_builder, env_name, workspace_root)
-            r = container.orchestrator.status(env_ctx)
-            if r != 0:
-                rc = r
-        except (ManifestError, OrchestratorError, OSError) as exc:
-            print(f"  {env_name}: error: {exc}", file=sys.stderr)
-            rc = 1
-    return rc
-
-
-def _handle_restart(
-    argv: list[str],
-    env: str,
-    workspace_root: Path,
-    container: Container,
-) -> int:
     if not argv or argv[0].startswith("-"):
-        try:
-            ctx = _build_env_ctx(container.session_context_builder, env, workspace_root)
-            declared = ", ".join(s.name for s in ctx.services)
-        except (ManifestError, OSError, OrchestratorError):
-            declared = "(manifest unreadable)"
         if not argv:
             print("usage: restart <pattern>...", file=sys.stderr)
         else:
             print(f"restart: takes a service pattern, not a flag: '{argv[0]}'", file=sys.stderr)
-        print(f"declared services: {declared}", file=sys.stderr)
         return 1
 
-    try:
-        ctx = _build_env_ctx(container.session_context_builder, env, workspace_root)
-    except ManifestError as exc:
-        print(f"restart: env '{env}': manifest error: {exc}", file=sys.stderr)
-        return 1
-    except (OSError, OrchestratorError) as exc:
-        print(f"restart: env '{env}': {exc}", file=sys.stderr)
-        return 1
-
-    all_names = [svc.name for svc in ctx.services]
-    matched: list[str] = []
-    for pat in argv:
-        hits = [name for name in all_names if fnmatch.fnmatchcase(name, pat)]
-        if not hits:
-            print(
-                f"restart: pattern '{pat}' matches no declared services; declared: {', '.join(all_names) or '(none)'}",
-                file=sys.stderr,
-            )
-            return 1
-        for name in hits:
-            if name not in matched:
-                matched.append(name)
-
-    rc = 0
-    for name in matched:
-        try:
-            r = container.orchestrator.restart(ctx, name)
-            if r != 0:
-                rc = r
-        except OrchestratorError as exc:
-            print(f"restart: env '{env}': service '{name}': {exc}", file=sys.stderr)
-            rc = 1
-    return rc
+    return cli.service(["restart", *(f"{env}/{pat}" for pat in argv)])
 
 
 # ---------------------------------------------------------------------------
@@ -447,13 +314,16 @@ def _handle_restart(
 # ---------------------------------------------------------------------------
 
 
-def main(argv: list[str]) -> int:
+def main(argv: list[str], *, winter_cli: IWinterCli | None = None) -> int:
     """Parse ``[action, ...]`` and dispatch.
 
     ``argv`` should be ``sys.argv[1:]`` (action word + remaining args).
     ``sys.argv[0]`` is used to resolve the env name and workspace root from
-    the symlink location.
+    the symlink location. ``winter_cli`` is the ``winter service`` delegation
+    seam; the real subprocess adapter is used unless a fake is injected (tests).
     """
+    cli = winter_cli or SubprocessWinterCli()
+
     if not argv:
         print(
             f"usage: <action> [args...]\n  action: {', '.join(_ACTIONS)}",
@@ -492,16 +362,14 @@ def main(argv: list[str]) -> int:
         )
         return 1
 
-    container = Container()
-
     if action == "up":
-        return _handle_up(rest, env, workspace_root, container)
+        return _handle_up(rest, env, cli)
     elif action == "down":
-        return _handle_down(rest, env, workspace_root, container)
+        return _handle_down(rest, env, workspace_root, cli)
     elif action == "status":
-        return _handle_status(rest, env, workspace_root, container)
+        return _handle_status(rest, env, cli)
     elif action == "restart":
-        return _handle_restart(rest, env, workspace_root, container)
+        return _handle_restart(rest, env, cli)
     else:
         print(f"internal error: unhandled action '{action}'", file=sys.stderr)
         return 2

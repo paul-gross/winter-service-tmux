@@ -126,8 +126,8 @@ retention_seconds = 604800    # 7 days
 #                           so the feature is opt-in per service).
 #              retry_delay  optional number (seconds), default 2 — sleep between
 #                           attempts.
-#              Honored by `winter service up`; the env-root ./up symlink is a
-#              thin no-retry door and does not honor this policy.
+#              Honored by `winter service up` — and by the env-root ./up, which
+#              delegates to it. (./up does not forward the separate --wait flag.)
 #              Requires a non-empty command: a retries > 0 policy on an
 #              interactive (empty-command) pane never fires and the validator
 #              rejects it.
