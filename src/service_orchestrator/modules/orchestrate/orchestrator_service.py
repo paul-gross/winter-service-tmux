@@ -247,13 +247,26 @@ class OrchestratorService:
     # Public actions
     # ------------------------------------------------------------------
 
-    def up(self, ctx: SessionContext, *, retry: bool = False) -> int:
+    def up(self, ctx: SessionContext, *, retry: bool = False, services: tuple[str, ...] = ()) -> int:
         """Start services for *ctx.env*.
 
-        Idempotent: if the session already exists, prints a message and
-        returns 0.  On hook failure the session is salvaged when more than
-        one window exists; otherwise it is torn down and ``OrchestratorError``
-        is raised.
+        *services* is empty (the default, mirroring ``status_env_document``'s
+        convention) for a WHOLE-SCOPE up — behaviour is byte-for-byte
+        identical to before.  A non-empty subset that does not cover every
+        service declared in *ctx* is a PARTIAL up: only the named services are
+        considered at all; every other declared service is left completely
+        untouched.  A subset that happens to name every declared service is
+        treated as whole-scope, matching a bare scope or a literal ``*``
+        service-segment pattern (both normalize to *services* ``= ()`` at the
+        caller).
+
+        Idempotent: for a whole-scope up, if the session already exists,
+        prints a message and returns 0 without touching any pane.  For a
+        PARTIAL up on an already-running session, only the matched services
+        that are not already running are launched — see
+        ``_up_partial_existing``.  On hook failure (whole-scope creation path
+        only) the session is salvaged when more than one window exists;
+        otherwise it is torn down and ``OrchestratorError`` is raised.
 
         When *retry* is True, services that declare a ``[service.startup]``
         policy with ``retries > 0`` are monitored after launch: if a service
@@ -262,11 +275,17 @@ class OrchestratorService:
         When *retry* is False (the default, used by the env-root ``./up`` door),
         behaviour is byte-for-byte identical to before.
         """
+        requested = set(services)
+        whole_scope = not requested or requested >= {svc.name for svc in ctx.services}
+        target_services = ctx.services if whole_scope else tuple(svc for svc in ctx.services if svc.name in requested)
+
         if self._tmux.has_session(ctx.session):
-            self._stdout.write(f"Session '{ctx.session}' is already running.\n")
-            self._stdout.write("Use ./status to check services, or ./down to stop.\n")
-            self._stdout.flush()
-            return 0
+            if whole_scope:
+                self._stdout.write(f"Session '{ctx.session}' is already running.\n")
+                self._stdout.write("Use ./status to check services, or ./down to stop.\n")
+                self._stdout.flush()
+                return 0
+            return self._up_partial_existing(ctx, target_services, retry=retry)
 
         # Prune old rotated log segments opportunistically before starting.
         # Errors are swallowed so a prune failure never blocks up().
@@ -329,7 +348,7 @@ class OrchestratorService:
         # Ensure the log directory exists before starting any captured services.
         self._log_repo.ensure_log_dir(ctx.worktree_dir)
 
-        for svc in _topological_order(ctx.services, ctx.env):
+        for svc in _topological_order(target_services, ctx.env):
             try:
                 unmet = self._await_dependencies(ctx, svc)
             except WinterCliUnavailableError as exc:
@@ -348,13 +367,65 @@ class OrchestratorService:
         self._stdout.flush()
 
         if retry:
-            failed = self._await_startup(ctx, pane_pids)
+            failed = self._await_startup(ctx, pane_pids, target_services)
             if failed:
                 self._stderr.write(f"Services failed to stay up after retries: {', '.join(failed)}\n")
                 self._stderr.flush()
                 return 1
 
         return 0 if hook_ok else 1
+
+    def _up_partial_existing(self, ctx: SessionContext, target_services: tuple[Service, ...], *, retry: bool) -> int:
+        """Launch the not-already-running subset of *target_services* into an
+        already-running session.
+
+        Unmatched services (not in *target_services*) and any matched service
+        whose pane already has children are left completely untouched — no
+        dependency poll, no reap, no ``send_keys``.  This is what makes a
+        partial ``up`` idempotent against already-running matched services and
+        safe to call repeatedly.  A matched service with no live pane in the
+        session (declared in the manifest but the session predates it) is
+        skipped rather than raising, mirroring the tolerant read used by
+        ``status``/``restart`` pane lookups.
+        """
+        pane_infos = self._tmux.list_panes(ctx.session)
+        pane_map: dict[str, int] = {p.target: p.pid for p in pane_infos}
+
+        self._log_repo.ensure_log_dir(ctx.worktree_dir)
+
+        launched_pane_pids: dict[str, int] = {}
+        for svc in _topological_order(target_services, ctx.env):
+            target = f"{svc.target.window}.{svc.target.pane}"
+            pane_pid = pane_map.get(target)
+            if pane_pid is None:
+                continue
+            if self._reaper.has_children(pane_pid):
+                continue  # already running — leave untouched
+            try:
+                unmet = self._await_dependencies(ctx, svc)
+            except WinterCliUnavailableError as exc:
+                self._stderr.write(f"up: service '{svc.name}': {exc}\n")
+                self._stderr.flush()
+                return 1
+            if unmet is not None:
+                self._stderr.write(f"up: service '{svc.name}' timed out waiting for dependency '{unmet}'\n")
+                self._stderr.flush()
+                return 1
+            line = self._launch_line_for(ctx, svc)
+            self._tmux.send_keys(ctx.session, target, line)
+            launched_pane_pids[target] = pane_pid
+
+        self._stdout.write(f"Started services in tmux session '{ctx.session}'\n")
+        self._stdout.flush()
+
+        if retry:
+            failed = self._await_startup(ctx, launched_pane_pids, target_services)
+            if failed:
+                self._stderr.write(f"Services failed to stay up after retries: {', '.join(failed)}\n")
+                self._stderr.flush()
+                return 1
+
+        return 0
 
     def _launch_line_for(self, ctx: SessionContext, svc: Service) -> str:
         """Return the captured-vs-bare launch line for *svc*.
@@ -446,8 +517,18 @@ class OrchestratorService:
                 return False
             self._clock.sleep(_DEPENDS_ON_POLL_INTERVAL_SECONDS)
 
-    def _await_startup(self, ctx: SessionContext, pane_pids: dict[str, int]) -> list[str]:
-        """Monitor startup candidates and re-launch those that die within retries.
+    def _await_startup(
+        self, ctx: SessionContext, pane_pids: dict[str, int], target_services: tuple[Service, ...]
+    ) -> list[str]:
+        """Monitor startup candidates within *target_services* and re-launch those that die within retries.
+
+        Restricting candidates to *target_services* (rather than the full
+        ``ctx.services``) keeps a partial up's retry monitoring scoped to the
+        services actually considered for launch — an unmatched service, or a
+        matched one skipped because it was already running, is never probed
+        or re-launched by this loop (``pane_pids`` for those is absent/unused
+        by the caller, but the *target_services* filter is the authoritative
+        boundary).
 
         Returns the list of service names that never stayed up after all retries.
         Returns [] immediately when there are no candidates or when the clock
@@ -455,7 +536,7 @@ class OrchestratorService:
         """
         candidates = [
             svc
-            for svc in ctx.services
+            for svc in target_services
             if bool(svc.cmd)
             and svc.startup is not None
             and svc.startup.retries > 0
@@ -495,13 +576,41 @@ class OrchestratorService:
                 failed.append(svc.name)
         return failed
 
-    def down(self, ctx: SessionContext) -> int:
-        """Stop all services and kill the tmux session for *ctx.env*.
+    def down(self, ctx: SessionContext, *, services: tuple[str, ...] = ()) -> int:
+        """Stop services for *ctx.env*.
 
-        No-op (returns 0) when the session is not running.
+        No-op (returns 0) when the session is not running, regardless of
+        *services* — there is nothing to reap or tear down.
+
+        *services* is empty (the default) for a WHOLE-SCOPE down: every
+        service's pane children are reaped and the session itself is killed,
+        exactly as before.  A non-empty subset that does not cover every
+        service declared in *ctx* is a PARTIAL down: only the named services'
+        pane child processes are reaped (the same per-pane reap primitive
+        ``restart`` uses) and the session survives — unmatched services keep
+        running untouched.  A subset that happens to cover every declared
+        service is treated as whole-scope (session torn down), matching a
+        bare scope or a literal ``*`` service-segment pattern.
         """
         if not self._tmux.has_session(ctx.session):
             self._stdout.write(f"No running session '{ctx.session}'\n")
+            self._stdout.flush()
+            return 0
+
+        requested = set(services)
+        whole_scope = not requested or requested >= {svc.name for svc in ctx.services}
+
+        if not whole_scope:
+            pane_infos = self._tmux.list_panes(ctx.session)
+            pane_map: dict[str, int] = {p.target: p.pid for p in pane_infos}
+            for svc in ctx.services:
+                if svc.name not in requested:
+                    continue
+                target = f"{svc.target.window}.{svc.target.pane}"
+                pane_pid = pane_map.get(target)
+                if pane_pid is not None:
+                    self._reaper.reap_descendants([pane_pid])
+            self._stdout.write(f"Stopped {', '.join(sorted(requested))} in session '{ctx.session}' (still running)\n")
             self._stdout.flush()
             return 0
 

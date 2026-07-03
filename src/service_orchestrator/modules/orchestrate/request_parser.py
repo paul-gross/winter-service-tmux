@@ -24,7 +24,9 @@ class OrchestratorRequest:
 
     Attributes:
         action:   One of the five supported actions.
-        env:      Set for ``up``/``down``; ``None`` for pattern-based actions.
+        env:      Set for ``up``/``down`` — the raw single positional token,
+            a bare scope (``"alpha"``, ``"workspace"``) or a scope-qualified
+            ``<scope>/<svc-pattern>``; ``None`` for pattern-based actions.
         patterns: Set for ``status``/``restart``/``logs``; empty list for ``up``/``down``.
     """
 
@@ -72,7 +74,7 @@ def parse_request(argv: list[str]) -> OrchestratorRequest | ParseError:
     if action in ("up", "down"):
         if len(rest) != 1:
             return ParseError(
-                message=f"usage: orchestrate {action} <env>",
+                message=f"usage: orchestrate {action} <scope>[/<svc-pattern>]",
                 exit_code=2,
             )
         return OrchestratorRequest(action=action, env=rest[0], patterns=[])

@@ -58,17 +58,21 @@ class FakeOrchestrator:
         self._service_rc = service_rc
         self.up_calls: list[SessionContext] = []
         self.last_up_retry: bool = False
+        self.last_up_services: tuple[str, ...] = ()
         self.down_calls: list[SessionContext] = []
+        self.last_down_services: tuple[str, ...] = ()
         self.status_calls: list[tuple[SessionContext, tuple[str, ...]]] = []
         self.restart_calls: list[tuple[SessionContext, str]] = []
 
-    def up(self, ctx: SessionContext, *, retry: bool = False) -> int:
+    def up(self, ctx: SessionContext, *, retry: bool = False, services: tuple[str, ...] = ()) -> int:
         self.up_calls.append(ctx)
         self.last_up_retry = retry
+        self.last_up_services = services
         return self._service_rc
 
-    def down(self, ctx: SessionContext) -> int:
+    def down(self, ctx: SessionContext, *, services: tuple[str, ...] = ()) -> int:
         self.down_calls.append(ctx)
+        self.last_down_services = services
         return self._service_rc
 
     def status(self, ctx: SessionContext, services: tuple[str, ...] = ()) -> int:

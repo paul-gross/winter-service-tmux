@@ -18,7 +18,7 @@ from pathlib import Path
 
 from service_manifest.modules.manifest.errors import ManifestError
 from service_manifest.modules.manifest.model import Service, ServiceManifest, Target
-from service_orchestrator.modules.orchestrate.dispatch_service import DispatchService
+from service_orchestrator.modules.orchestrate.dispatch_service import DispatchService, _split_scope_pattern
 from service_orchestrator.modules.orchestrate.errors import OrchestratorError
 from service_orchestrator.modules.orchestrate.log_query import LogRenderOptions
 from service_orchestrator.modules.orchestrate.selector_service import SelectorService
@@ -180,7 +180,7 @@ def test_up_orchestrator_error_prints_env_line() -> None:
     o = FakeOrchestrator()
 
     # Patch orchestrator.up to raise OrchestratorError
-    def _raising_up(ctx: SessionContext, *, retry: bool = False) -> int:
+    def _raising_up(ctx: SessionContext, *, retry: bool = False, services: tuple[str, ...] = ()) -> int:
         raise OrchestratorError("tmux failed")
 
     o.up = _raising_up  # type: ignore[method-assign]
@@ -217,6 +217,124 @@ def test_down_workspace_routes_to_build_workspace() -> None:
     assert rc == 0
     assert len(_b.build_workspace_calls) == 1
     assert WORKSPACE_TARGET not in _b.build_calls
+
+
+# ---------------------------------------------------------------------------
+# _split_scope_pattern — pure function unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_split_scope_pattern_bare_token_has_no_svc_pattern() -> None:
+    assert _split_scope_pattern("alpha") == ("alpha", None)
+
+
+def test_split_scope_pattern_star_normalizes_to_none() -> None:
+    assert _split_scope_pattern("alpha/*") == ("alpha", None)
+
+
+def test_split_scope_pattern_glob_svc_segment_preserved() -> None:
+    assert _split_scope_pattern("alpha/back*") == ("alpha", "back*")
+
+
+def test_split_scope_pattern_literal_svc_segment_preserved() -> None:
+    assert _split_scope_pattern("alpha/backend") == ("alpha", "backend")
+
+
+def test_split_scope_pattern_workspace_bare_token() -> None:
+    assert _split_scope_pattern("workspace") == ("workspace", None)
+
+
+# ---------------------------------------------------------------------------
+# up / down: scope-qualified <scope>/<svc-pattern> service-segment expansion
+# ---------------------------------------------------------------------------
+
+
+def test_up_bare_scope_is_whole_scope_no_filter() -> None:
+    svc, _b, _o, _ls, _err = _make_dispatch()
+    rc = svc.up("alpha", _WORKSPACE)
+    assert rc == 0
+    assert _o.last_up_services == ()
+
+
+def test_up_star_service_segment_is_whole_scope_no_filter() -> None:
+    """<scope>/* normalizes to whole-scope, identical to a bare scope."""
+    svc, _b, _o, _ls, _err = _make_dispatch()
+    rc = svc.up("alpha/*", _WORKSPACE)
+    assert rc == 0
+    assert _o.last_up_services == ()
+    assert _o.up_calls[0].env == "alpha"
+
+
+def test_up_glob_service_segment_matches_subset() -> None:
+    svc, _b, _o, _ls, _err = _make_dispatch()
+    rc = svc.up("alpha/back*", _WORKSPACE)
+    assert rc == 0
+    assert _o.last_up_services == ("backend",)
+
+
+def test_up_literal_service_segment_matches_single_service() -> None:
+    svc, _b, _o, _ls, _err = _make_dispatch()
+    rc = svc.up("alpha/worker", _WORKSPACE)
+    assert rc == 0
+    assert _o.last_up_services == ("worker",)
+
+
+def test_up_no_match_service_segment_returns_1_without_calling_orchestrator() -> None:
+    err = StringIO()
+    svc, _b, _o, _ls, _err = _make_dispatch(err_sink=err)
+    rc = svc.up("alpha/nonexistent", _WORKSPACE)
+    assert rc == 1
+    assert _o.up_calls == []
+    assert "matched no services" in err.getvalue()
+    assert "alpha/nonexistent" in err.getvalue()
+
+
+def test_down_bare_scope_is_whole_scope_no_filter() -> None:
+    svc, _b, _o, _ls, _err = _make_dispatch()
+    rc = svc.down("alpha", _WORKSPACE)
+    assert rc == 0
+    assert _o.last_down_services == ()
+
+
+def test_down_glob_service_segment_matches_subset() -> None:
+    svc, _b, _o, _ls, _err = _make_dispatch()
+    rc = svc.down("alpha/back*", _WORKSPACE)
+    assert rc == 0
+    assert _o.last_down_services == ("backend",)
+
+
+def test_down_no_match_service_segment_returns_1_without_calling_orchestrator() -> None:
+    err = StringIO()
+    svc, _b, _o, _ls, _err = _make_dispatch(err_sink=err)
+    rc = svc.down("alpha/nonexistent", _WORKSPACE)
+    assert rc == 1
+    assert _o.down_calls == []
+    assert "matched no services" in err.getvalue()
+
+
+def test_up_workspace_partial_service_segment_matches_subset() -> None:
+    svc, _b, _o, _ls, _err = _make_dispatch()
+    rc = svc.up("workspace/ws-back*", _WORKSPACE)
+    assert rc == 0
+    assert len(_b.build_workspace_calls) == 1
+    assert _o.last_up_services == ("ws-backend",)
+    assert _o.up_calls[0].env == WORKSPACE_TARGET
+
+
+def test_up_workspace_star_service_segment_is_whole_scope() -> None:
+    svc, _b, _o, _ls, _err = _make_dispatch()
+    rc = svc.up("workspace/*", _WORKSPACE)
+    assert rc == 0
+    assert _o.last_up_services == ()
+    assert _o.up_calls[0].env == WORKSPACE_TARGET
+
+
+def test_down_workspace_partial_service_segment_matches_subset() -> None:
+    svc, _b, _o, _ls, _err = _make_dispatch()
+    rc = svc.down("workspace/ws-back*", _WORKSPACE)
+    assert rc == 0
+    assert len(_b.build_workspace_calls) == 1
+    assert _o.last_down_services == ("ws-backend",)
 
 
 # ---------------------------------------------------------------------------

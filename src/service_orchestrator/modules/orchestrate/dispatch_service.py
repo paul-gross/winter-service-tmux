@@ -33,6 +33,7 @@ from service_orchestrator.modules.orchestrate.errors import OrchestratorError
 from service_orchestrator.modules.orchestrate.log_query import LogQuery, LogRenderOptions
 from service_orchestrator.modules.orchestrate.log_service import LogService
 from service_orchestrator.modules.orchestrate.orchestrator_service import OrchestratorService
+from service_orchestrator.modules.orchestrate.pattern_match import matches_pattern
 from service_orchestrator.modules.orchestrate.selector_service import SelectorService
 from service_orchestrator.modules.orchestrate.session_context import SessionContext
 from service_orchestrator.modules.orchestrate.session_context_builder import (
@@ -40,6 +41,21 @@ from service_orchestrator.modules.orchestrate.session_context_builder import (
     SessionContextBuilder,
     build_for_target,
 )
+
+
+def _split_scope_pattern(target: str) -> tuple[str, str | None]:
+    """Split a raw up/down argv token into ``(scope, svc_pattern)``.
+
+    A bare token (no ``/``) returns ``(token, None)`` — whole-scope, matching
+    today's up/down contract.  A scope-qualified token
+    (``<scope>/<svc-pattern>``) splits on the first ``/``; a ``svc_pattern``
+    of exactly ``"*"`` normalizes to ``None`` so ``<scope>/*`` is equivalent
+    to a bare ``<scope>``.
+    """
+    if "/" not in target:
+        return target, None
+    scope, svc_pattern = target.split("/", 1)
+    return scope, None if svc_pattern == "*" else svc_pattern
 
 
 class DispatchService:
@@ -162,33 +178,78 @@ class DispatchService:
     # up / down
     # ------------------------------------------------------------------
 
-    def up(self, env: str, workspace_root: Path | None) -> int:
-        """Build ctx for *env* and call orchestrator.up.  Returns exit code."""
-        if env == WORKSPACE_TARGET:
+    def up(self, target: str, workspace_root: Path | None) -> int:
+        """Build ctx for *target*'s scope and call orchestrator.up.
+
+        *target* is a bare scope (``"alpha"``, ``"workspace"``) for a
+        whole-scope up, or a scope-qualified ``<scope>/<svc-pattern>`` for a
+        partial up (a literal ``*`` service-segment is equivalent to bare).
+        Returns exit code.
+        """
+        scope, svc_pattern = _split_scope_pattern(target)
+        if scope == WORKSPACE_TARGET:
             ctx, rc = self._build_workspace_ctx(workspace_root, "up")
         else:
-            ctx, rc = self._build_ctx(env, workspace_root)
+            ctx, rc = self._build_ctx(scope, workspace_root)
         if ctx is None:
             return rc
+        services, rc = self._resolve_service_segment(ctx, svc_pattern, "up")
+        if rc != 0:
+            return rc
         try:
-            return self._orchestrator.up(ctx, retry=True)
+            return self._orchestrator.up(ctx, retry=True, services=services)
         except OrchestratorError as exc:
-            print(f"orchestrate: env '{env}': {exc}", file=self._err)
+            print(f"orchestrate: env '{scope}': {exc}", file=self._err)
             return 1
 
-    def down(self, env: str, workspace_root: Path | None) -> int:
-        """Build ctx for *env* and call orchestrator.down.  Returns exit code."""
-        if env == WORKSPACE_TARGET:
+    def down(self, target: str, workspace_root: Path | None) -> int:
+        """Build ctx for *target*'s scope and call orchestrator.down.
+
+        *target* is a bare scope (``"alpha"``, ``"workspace"``) for a
+        whole-scope down, or a scope-qualified ``<scope>/<svc-pattern>`` for a
+        partial down (a literal ``*`` service-segment is equivalent to bare).
+        Returns exit code.
+        """
+        scope, svc_pattern = _split_scope_pattern(target)
+        if scope == WORKSPACE_TARGET:
             ctx, rc = self._build_workspace_ctx(workspace_root, "down")
         else:
-            ctx, rc = self._build_ctx(env, workspace_root)
+            ctx, rc = self._build_ctx(scope, workspace_root)
         if ctx is None:
             return rc
+        services, rc = self._resolve_service_segment(ctx, svc_pattern, "down")
+        if rc != 0:
+            return rc
         try:
-            return self._orchestrator.down(ctx)
+            return self._orchestrator.down(ctx, services=services)
         except OrchestratorError as exc:
-            print(f"orchestrate: env '{env}': {exc}", file=self._err)
+            print(f"orchestrate: env '{scope}': {exc}", file=self._err)
             return 1
+
+    def _resolve_service_segment(
+        self, ctx: SessionContext, svc_pattern: str | None, action: str
+    ) -> tuple[tuple[str, ...], int]:
+        """Expand a service-segment glob against *ctx.services*.
+
+        Returns ``((), 0)`` for a whole-scope request (*svc_pattern* is
+        ``None`` — a bare scope or a literal ``*`` service-segment, already
+        normalized by ``_split_scope_pattern``).  For a real service-segment
+        filter, matches it against *ctx.services* using the same
+        ``pattern_match.matches_pattern`` engine ``status``/``restart``/
+        ``logs`` use, scope-qualifying the pattern with *ctx.env* so the
+        segment rules (per-segment ``fnmatch.fnmatchcase``) apply identically.
+        Returns ``((), 1)`` and prints a diagnostic (session never touched)
+        when the pattern matches no declared service.
+        """
+        if svc_pattern is None:
+            return (), 0
+
+        full_pattern = f"{ctx.env}/{svc_pattern}"
+        matched = tuple(svc.name for svc in ctx.services if matches_pattern(ctx.env, svc.name, full_pattern))
+        if not matched:
+            print(f"orchestrate: {action}: pattern '{full_pattern}' matched no services", file=self._err)
+            return (), 1
+        return matched, 0
 
     # ------------------------------------------------------------------
     # status

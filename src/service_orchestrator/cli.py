@@ -8,8 +8,16 @@ Winter always invokes this as::
 
 Action-specific argv shapes (patterns are ``<env>/<svc>`` segment-globs):
 
-- ``up <env>``              — single env, no patterns
-- ``down <env>``            — single env, no patterns
+- ``up <scope>[/<svc-pattern>]``   — single scope-qualified token; a bare
+  scope (or a literal ``<scope>/*``) is a whole-scope up, byte-identical to
+  before; a real service-segment glob (e.g. ``alpha/back*``) is a PARTIAL up
+  — only the matched services are launched, every other declared service is
+  left untouched.  Winter dispatches exactly one scope's slice per
+  invocation, so the scope segment is always concrete here (never a glob).
+- ``down <scope>[/<svc-pattern>]`` — same shape as ``up``; a real
+  service-segment glob is a PARTIAL down (matched services' pane children
+  are reaped, the session and unmatched services survive); bare scope or
+  ``<scope>/*`` tears down the whole session, unchanged.
 - ``status [<pattern>...]`` — 0 or more patterns; core always supplies a scope-qualified pattern
 - ``restart <pattern>...``  — 1 or more patterns (non-zero if none given)
 - ``logs <pattern>... [render flags]`` — 1 or more patterns, plus render flags
@@ -324,15 +332,16 @@ def main(argv: list[str]) -> int:
     workspace_root = Path(ws_dir) if ws_dir else None
 
     # ------------------------------------------------------------------
-    # up / down: single env positional, behavior unchanged
+    # up / down: single scope-qualified positional (bare scope or
+    # <scope>/<svc-pattern>); DispatchService owns splitting and expansion.
     # ------------------------------------------------------------------
     if action in ("up", "down"):
-        env = request.env
-        assert env is not None
+        target = request.env
+        assert target is not None
         if action == "up":
-            return container.dispatch.up(env, workspace_root)
+            return container.dispatch.up(target, workspace_root)
         else:
-            return container.dispatch.down(env, workspace_root)
+            return container.dispatch.down(target, workspace_root)
 
     # ------------------------------------------------------------------
     # status: 0 or more patterns

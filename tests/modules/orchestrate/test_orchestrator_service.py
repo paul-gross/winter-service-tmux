@@ -481,6 +481,232 @@ def test_down_skips_reap_when_no_descendants() -> None:
 
 
 # ---------------------------------------------------------------------------
+# up / down — partial (service-segment filtered) start/stop
+# ---------------------------------------------------------------------------
+
+# A three-service manifest so a two-name partial request is unambiguously a
+# genuine subset (never accidentally "covers everything").
+_MANIFEST_THREE_SERVICES_TOML = """\
+session_prefix = "mp"
+
+[[service]]
+name = "backend"
+target = "0.0"
+cmd = "npm run start:dev"
+
+[[service]]
+name = "frontend"
+target = "0.1"
+cmd = "npm run dev"
+
+[[service]]
+name = "worker"
+target = "0.2"
+cmd = "npm run worker"
+"""
+
+
+def _make_three_services_ctx() -> SessionContext:
+    manifest = _make_manifest(_MANIFEST_THREE_SERVICES_TOML)
+    return _make_ctx(manifest=manifest, inject_scope=None)
+
+
+def test_up_partial_session_absent_creates_and_launches_only_matched() -> None:
+    """Session absent + partial services=("backend",): session/hook created, only backend launched."""
+    tmux = FakeTmuxRepository()
+    hook = FakeLayoutHookRunner()
+    ctx = _make_ctx()
+    svc = _make_service(tmux=tmux, hook_runner=hook)
+
+    def _add_panes() -> None:
+        tmux.seed_session("mp-alpha", {"0.0": 100, "0.1": 101})
+
+    hook._side_effect = _add_panes
+
+    result = svc.up(ctx, services=("backend",))
+
+    assert result == 0
+    assert "mp-alpha" in tmux._sessions
+    assert len(hook.calls) == 1
+    # Only backend's pane (0.0) got a launch line; frontend (0.1) untouched.
+    assert [t for _, t, _ in tmux.sent] == ["0.0"]
+
+
+def test_up_partial_session_present_launches_only_not_running_matched() -> None:
+    """Session present: matched-but-running service skipped, matched-not-running launched.
+
+    Matched set is ("backend", "frontend") — a genuine subset, since the
+    manifest also declares "worker" — so this exercises the partial (not
+    whole-scope) path.
+    """
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 100, "0.1": 101, "0.2": 102})
+    # backend (100) not running; frontend (101) already running; worker (102) unmatched.
+    reaper = FakeProcessReaper(children_set={101})
+    ctx = _make_three_services_ctx()
+    svc = _make_service(tmux=tmux, reaper=reaper)
+
+    result = svc.up(ctx, services=("backend", "frontend"))
+
+    assert result == 0
+    # Only backend's pane got a launch line — frontend was already running,
+    # worker was never a candidate at all.
+    assert [t for _, t, _ in tmux.sent] == ["0.0"]
+    # Session was never recreated.
+    assert tmux.created_sessions == []
+
+
+def test_up_partial_unmatched_service_never_touched() -> None:
+    """A service not named in *services* is never sent a launch line, matched or not."""
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 100, "0.1": 101})
+    reaper = FakeProcessReaper()  # neither pane has children
+    ctx = _make_ctx()
+    svc = _make_service(tmux=tmux, reaper=reaper)
+
+    result = svc.up(ctx, services=("backend",))
+
+    assert result == 0
+    assert [t for _, t, _ in tmux.sent] == ["0.0"]
+
+
+def test_up_star_or_full_coverage_service_segment_is_whole_scope_idempotent() -> None:
+    """services covering every declared name behaves exactly like whole-scope up (idempotent)."""
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 100, "0.1": 101})
+    ctx = _make_ctx()
+    out = io.StringIO()
+    svc = _make_service(tmux=tmux, stdout=out)
+
+    result = svc.up(ctx, services=("backend", "frontend"))
+
+    assert result == 0
+    assert tmux.sent == []
+    assert "already running" in out.getvalue()
+
+
+def test_up_no_session_and_full_coverage_services_behaves_like_whole_scope() -> None:
+    """services covering every declared name, with no session yet, launches every service."""
+    tmux = FakeTmuxRepository()
+    hook = FakeLayoutHookRunner()
+    ctx = _make_ctx()
+    svc = _make_service(tmux=tmux, hook_runner=hook)
+
+    def _add_panes() -> None:
+        tmux.seed_session("mp-alpha", {"0.0": 100, "0.1": 101})
+
+    hook._side_effect = _add_panes
+
+    result = svc.up(ctx, services=("backend", "frontend"))
+
+    assert result == 0
+    assert {t for _, t, _ in tmux.sent} == {"0.0", "0.1"}
+
+
+def test_up_partial_missing_pane_in_existing_session_is_skipped_not_raised() -> None:
+    """A matched service with no live pane in an already-running session is skipped, no raise.
+
+    Matched set is ("backend", "frontend") against a three-service manifest,
+    so this remains a genuine partial request even though frontend's pane is
+    absent.
+    """
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 100, "0.2": 102})  # frontend's 0.1 pane absent
+    ctx = _make_three_services_ctx()
+    svc = _make_service(tmux=tmux)
+
+    result = svc.up(ctx, services=("backend", "frontend"))
+
+    assert result == 0
+    assert [t for _, t, _ in tmux.sent] == ["0.0"]
+
+
+_MANIFEST_PARTIAL_STARTUP_TOML = """\
+session_prefix = "mp"
+
+[[service]]
+name = "backend"
+target = "0.0"
+cmd = "npm run start:dev"
+
+[service.startup]
+retries = 2
+retry_delay = 1.0
+
+[[service]]
+name = "frontend"
+target = "0.1"
+cmd = "npm run dev"
+"""
+
+
+def test_up_partial_existing_session_retry_monitors_only_matched() -> None:
+    """retry=True on a partial up only monitors/re-launches the matched, actually-launched subset."""
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 100, "0.1": 200})
+    manifest = _make_manifest(_MANIFEST_PARTIAL_STARTUP_TOML)
+    ctx = _make_ctx(manifest=manifest, inject_scope=None)
+    # First call = "already running?" pre-check (False, launch); second = settle
+    # check (False, dead); third = post-retry check (True, alive).
+    reaper = FakeProcessReaper(children_sequence={100: [False, False, True]})
+    clock = FakeFollowClock()
+    svc = _make_service(tmux=tmux, reaper=reaper, clock=clock)
+
+    result = svc.up(ctx, retry=True, services=("backend",))
+
+    assert result == 0
+    # Initial send + one retry send, both to backend's pane; frontend untouched.
+    assert [t for _, t, _ in tmux.sent] == ["0.0", "0.0"]
+    assert clock.sleep_calls == [0.5, 1.0]
+
+
+def test_down_partial_reaps_only_matched_leaves_session_and_others_running() -> None:
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 10, "0.1": 20})
+    reaper = FakeProcessReaper(descendant_map={10: [100], 20: [200]})
+    ctx = _make_ctx()
+    svc = _make_service(tmux=tmux, reaper=reaper)
+
+    result = svc.down(ctx, services=("backend",))
+
+    assert result == 0
+    # Only backend's (0.0/pid 10) descendants were reaped.
+    assert reaper.killed == [[100]]
+    # Session survives; frontend's pane is untouched.
+    assert "mp-alpha" in tmux._sessions
+
+
+def test_down_partial_no_session_is_still_a_noop() -> None:
+    tmux = FakeTmuxRepository()
+    reaper = FakeProcessReaper()
+    ctx = _make_ctx()
+    out = io.StringIO()
+    svc = _make_service(tmux=tmux, reaper=reaper, stdout=out)
+
+    result = svc.down(ctx, services=("backend",))
+
+    assert result == 0
+    assert reaper.killed == []
+    assert "No running session" in out.getvalue()
+
+
+def test_down_full_coverage_services_behaves_like_whole_scope() -> None:
+    """services naming every declared service tears down the whole session, like bare scope."""
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 10, "0.1": 20})
+    reaper = FakeProcessReaper(descendant_map={10: [100], 20: [200]})
+    ctx = _make_ctx()
+    svc = _make_service(tmux=tmux, reaper=reaper)
+
+    result = svc.down(ctx, services=("backend", "frontend"))
+
+    assert result == 0
+    assert "mp-alpha" not in tmux._sessions
+    assert len(reaper.killed) == 1
+    assert set(reaper.killed[0]) == {100, 200}
+
+
+# ---------------------------------------------------------------------------
 # status — running / stopped / missing
 # ---------------------------------------------------------------------------
 

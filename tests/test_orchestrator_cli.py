@@ -908,6 +908,84 @@ def test_main_down_workspace_builds_workspace_ctx(
 
 
 # ---------------------------------------------------------------------------
+# up / down — scope-qualified <scope>/<svc-pattern> partial start/stop
+# ---------------------------------------------------------------------------
+
+
+def test_main_up_bare_env_is_whole_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _install(monkeypatch, _FakeContainer())
+    rc = main(["up", "alpha"])
+    assert rc == 0
+    assert fake.orchestrator.last_up_services == ()
+
+
+def test_main_up_star_service_segment_is_whole_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _install(monkeypatch, _FakeContainer())
+    rc = main(["up", "alpha/*"])
+    assert rc == 0
+    assert fake.orchestrator.last_up_services == ()
+    assert fake.up_calls[0].env == "alpha"
+
+
+def test_main_up_glob_service_segment_launches_matched_subset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _install(monkeypatch, _FakeContainer())
+    rc = main(["up", "alpha/back*"])
+    assert rc == 0
+    assert fake.orchestrator.last_up_services == ("backend",)
+
+
+def test_main_down_glob_service_segment_stops_matched_subset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _install(monkeypatch, _FakeContainer())
+    rc = main(["down", "alpha/back*"])
+    assert rc == 0
+    assert fake.orchestrator.last_down_services == ("backend",)
+
+
+def test_main_up_no_match_service_segment_exits_nonzero(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    fake = _install(monkeypatch, _FakeContainer())
+    rc = main(["up", "alpha/nonexistent"])
+    assert rc == 1
+    assert fake.up_calls == []
+    err = capsys.readouterr().err
+    assert "matched no services" in err
+    assert "alpha/nonexistent" in err
+
+
+def test_main_down_no_match_service_segment_exits_nonzero(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    fake = _install(monkeypatch, _FakeContainer())
+    rc = main(["down", "alpha/nonexistent"])
+    assert rc == 1
+    assert fake.down_calls == []
+    err = capsys.readouterr().err
+    assert "matched no services" in err
+
+
+def test_main_up_workspace_glob_service_segment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _install(monkeypatch, _FakeContainer(sessions=["mp-workspace"]))
+    rc = main(["up", "workspace/ws-back*"])
+    assert rc == 0
+    assert len(fake.build_workspace_calls) == 1
+    assert fake.orchestrator.last_up_services == ("ws-backend",)
+    assert fake.up_calls[0].env == WORKSPACE_TARGET
+
+
+# ---------------------------------------------------------------------------
 # workspace token — status with patterns (intercept before engine)
 # ---------------------------------------------------------------------------
 
