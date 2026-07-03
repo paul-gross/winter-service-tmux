@@ -94,6 +94,28 @@ class ManifestValidator:
           resolves against *env*; unresolvable vars are reported per-service.
           Skipped for ``health.type = "log"`` — its ``target`` is used
           verbatim, never interpolated.
+        - Each service's ``depends_on`` entries are checked PER SCOPE (a
+          service's dependents are resolved against its own scope's service
+          list only — env services against env services, workspace services
+          against workspace services). A bare pattern, or a pattern
+          explicitly qualified with this scope's own name (``"workspace/..."``
+          when checking workspace services — the workspace scope name is
+          statically known, unlike a per-env scope name), is treated as a
+          same-scope reference; any other qualified pattern (e.g.
+          ``"workspace/db"`` seen while checking env services) is a
+          cross-scope reference this validator cannot resolve statically and
+          is skipped. A bare (or self-qualified) pattern equal to the
+          service's own name is an absolute self-reference. A bare (or
+          self-qualified) pattern matching no service in the same scope is
+          reported. Any cycle formed by same-scope ``depends_on`` edges is
+          reported once, naming the cycle path. A same-scope pattern that
+          targets an interactive (empty-command) service with no declared
+          health probe is also reported — that target can never report
+          ``state = "running"``, so the dependency would time out on every
+          ``winter service up``. NOTE: a genuine cross-scope cycle (e.g.
+          ``env/A`` depends on ``workspace/B`` which depends on
+          ``workspace/A``) is an unsupported topology this validator does not
+          detect — see ``Service.depends_on``.
         """
         violations: list[str] = []
 
@@ -112,6 +134,8 @@ class ManifestValidator:
         self._check_port_config(manifest.workspace_services, "workspace service", violations)
         self._check_cwd_config(manifest.services, "service", violations)
         self._check_cwd_config(manifest.workspace_services, "workspace service", violations)
+        self._check_depends_on(manifest.services, "service", violations)
+        self._check_depends_on(manifest.workspace_services, "workspace service", violations, scope_name="workspace")
 
         if env is not None:
             self._check_health_vars(manifest.services, "service", env, violations)
@@ -293,3 +317,103 @@ class ManifestValidator:
             _rendered, unresolved = interpolate(service.health.target, env)
             for var in unresolved:
                 violations.append(f"{label} '{service.name}' health: unresolvable variable '${{{var}}}'")
+
+    @staticmethod
+    def _check_depends_on(
+        services: tuple[Service, ...],
+        label: str,
+        violations: list[str],
+        scope_name: str | None = None,
+    ) -> None:
+        """Check ``depends_on`` for self-references, unresolvable local patterns, and cycles.
+
+        A BARE pattern (no ``"/"``) is always checked here — it must resolve
+        against another service declared in this SAME *services* list (the
+        service's own scope). A pattern containing ``"/"`` is ALSO checked
+        here, as a same-scope reference, when its scope segment equals
+        *scope_name* (e.g. ``"workspace/db"`` while validating
+        ``manifest.workspace_services``, where *scope_name* is the statically
+        known ``"workspace"`` token) — that qualified spelling resolves to the
+        identical poll target as the bare form, so it must be validated
+        identically too. *scope_name* is ``None`` when validating per-env
+        services (``manifest.services``): a per-env scope's actual name (the
+        feature-env id) is not known at manifest-validation time, so a
+        qualified pattern is always treated as an unresolvable cross-scope
+        reference there and skipped — trusted to the runtime
+        ``winter service status`` seam and excluded from both the
+        resolvability check and cycle detection.
+
+        A same-scope pattern that targets an interactive (empty-command)
+        service with no declared health probe is reported: that target's
+        ``state`` never becomes ``"running"`` (no captured child process),
+        health stays ``"unknown"`` (no probe), so the dependency can never be
+        satisfied — see ``_dependency_ready``'s health-then-state rule.
+        """
+        names = {s.name for s in services}
+        by_name = {s.name: s for s in services}
+        prefix = f"{scope_name}/" if scope_name is not None else None
+        graph: dict[str, list[str]] = {}
+        for service in services:
+            local_deps: list[str] = []
+            for dep in service.depends_on:
+                if "/" in dep:
+                    if prefix is None or not dep.startswith(prefix):
+                        continue
+                    dep = dep[len(prefix) :]
+                if dep == service.name:
+                    violations.append(f"{label} '{service.name}': depends_on references itself ('{dep}')")
+                    continue
+                if dep not in names:
+                    violations.append(
+                        f"{label} '{service.name}': depends_on pattern '{dep}' matches no service in scope"
+                    )
+                    continue
+                target = by_name[dep]
+                if not target.cmd.strip() and target.health is None:
+                    violations.append(
+                        f"{label} '{service.name}': depends_on '{dep}' targets an interactive "
+                        "(empty-command) service with no health probe — it can never report "
+                        "state='running', so this dependency will always time out"
+                    )
+                local_deps.append(dep)
+            graph[service.name] = local_deps
+
+        cycle = _find_depends_on_cycle(graph)
+        if cycle is not None:
+            violations.append(f"depends_on cycle detected: {' -> '.join(cycle)}")
+
+
+def _find_depends_on_cycle(graph: dict[str, list[str]]) -> list[str] | None:
+    """Return the node sequence of the first cycle found in *graph*, or ``None``.
+
+    *graph* maps a service name to the list of same-scope service names it
+    depends on. Standard white/gray/black DFS cycle detection; iterates
+    ``graph`` in insertion order (declaration order) so the result is
+    deterministic.
+    """
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color: dict[str, int] = dict.fromkeys(graph, WHITE)
+    stack: list[str] = []
+
+    def _dfs(node: str) -> list[str] | None:
+        color[node] = GRAY
+        stack.append(node)
+        for neighbor in graph.get(node, []):
+            neighbor_color = color.get(neighbor, WHITE)
+            if neighbor_color == GRAY:
+                cycle_start = stack.index(neighbor)
+                return [*stack[cycle_start:], neighbor]
+            if neighbor_color == WHITE:
+                found = _dfs(neighbor)
+                if found is not None:
+                    return found
+        stack.pop()
+        color[node] = BLACK
+        return None
+
+    for node in graph:
+        if color[node] == WHITE:
+            found = _dfs(node)
+            if found is not None:
+                return found
+    return None

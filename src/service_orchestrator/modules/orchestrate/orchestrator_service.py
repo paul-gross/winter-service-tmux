@@ -13,6 +13,7 @@ import sys
 from typing import IO
 
 from service_manifest.modules.manifest.model import HealthType, LogMode, Service, parse_port_expression
+from service_orchestrator.core.winter_cli import DependencyStatus, IWinterCli, WinterCliUnavailableError
 from service_orchestrator.modules.orchestrate.errors import OrchestratorError
 from service_orchestrator.modules.orchestrate.follow_clock import IFollowClock
 from service_orchestrator.modules.orchestrate.health_checker import IHealthChecker
@@ -40,6 +41,23 @@ _STARTUP_SETTLE_SECONDS = 0.5
 # Bounded tail read for a 'log'-type health probe against a FILE-mode log —
 # large enough to catch a ready-line without loading the whole file.
 _LOG_HEALTH_TAIL_BYTES = 65536
+
+# Per-dependency depends_on readiness-gate ceiling, mirroring winter-cli's
+# `up --wait` DEFAULT_WAIT_TIMEOUT_S convention (winter's own gate is a
+# separate, winter-side mechanism — this is the tmux orchestrator's own
+# in-process wait before launching a dependent service's pane). Overridable
+# per-invocation via the caller's `--timeout`, which winter core injects as
+# `WINTER_SERVICE_TIMEOUT` on `up` — see `_depends_on_timeout_seconds`.
+_DEPENDS_ON_TIMEOUT_SECONDS = 120.0
+
+# Env var winter core injects on `up` carrying the effective `--wait` timeout
+# (seconds, float) so the depends_on gate can honor a caller-supplied ceiling
+# instead of always waiting out the hardcoded default.
+_DEPENDS_ON_TIMEOUT_ENV_VAR = "WINTER_SERVICE_TIMEOUT"
+
+# Delay between depends_on status polls, mirroring winter-cli's
+# DEFAULT_POLL_INTERVAL_S.
+_DEPENDS_ON_POLL_INTERVAL_SECONDS = 1.0
 
 
 def _resolve_service_port(port: int | str | None, port_base: int | None) -> int | None:
@@ -90,6 +108,113 @@ def _segments_to_prune(
     return result
 
 
+def _local_dep_name(dep: str, scope: str) -> str | None:
+    """Normalize a ``depends_on`` entry to a bare same-scope name, or ``None`` if not local.
+
+    A bare pattern (no ``"/"``) is already local. A qualified pattern
+    (``"<scope>/<svc>"``) is ALSO local when its scope segment equals *scope*
+    (the current dispatch scope, e.g. ``ctx.env`` — a feature-env name or
+    ``"workspace"``) — a same-scope dependency spelled with a redundant
+    self-qualification (e.g. a service in env "alpha" declaring
+    ``"alpha/builder"`` instead of bare ``"builder"``) resolves to the
+    identical poll target as the bare form, so it must be sequenced
+    identically too. A qualified pattern naming a DIFFERENT scope (e.g.
+    ``"workspace/db"`` from a project-scope service) is not local — ``None``.
+    """
+    if "/" not in dep:
+        return dep
+    prefix = f"{scope}/"
+    return dep[len(prefix) :] if dep.startswith(prefix) else None
+
+
+def _topological_order(services: tuple[Service, ...], scope: str) -> list[Service]:
+    """Return *services* reordered so every same-scope ``depends_on`` edge is launched-before.
+
+    A ``depends_on`` entry participates in the ordering when it resolves to a
+    LOCAL name (see ``_local_dep_name``) — either a bare pattern (no ``"/"``)
+    or a ``"<scope>/<svc>"`` pattern whose scope segment equals *scope* — that
+    also names another service IN ``services``. A genuinely cross-scope/
+    cross-provider pattern (e.g. a project-scope service depending on
+    ``"workspace/db"``) or a pattern naming no service in ``services`` has no
+    effect on launch order (it is still gated at launch time via the
+    readiness barrier; it just cannot be locally sequenced).
+
+    Kahn's algorithm, processing ready nodes in declaration order for a
+    deterministic, stable result. Defensive against a cycle slipping past the
+    validator: any node never reached by the algorithm is appended at the end
+    in declaration order rather than looping forever.
+    """
+    by_name = {s.name: s for s in services}
+    names = set(by_name)
+    local_deps: dict[str, list[str]] = {}
+    for s in services:
+        deps = []
+        for dep in s.depends_on:
+            local = _local_dep_name(dep, scope)
+            if local is None or local == s.name or local not in names:
+                continue
+            deps.append(local)
+        local_deps[s.name] = deps
+
+    in_degree: dict[str, int] = {name: len(deps) for name, deps in local_deps.items()}
+    dependents: dict[str, list[str]] = {name: [] for name in by_name}
+    for name, deps in local_deps.items():
+        for dep in deps:
+            dependents[dep].append(name)
+
+    ready = [s.name for s in services if in_degree[s.name] == 0]
+    ordered: list[str] = []
+    while ready:
+        name = ready.pop(0)
+        ordered.append(name)
+        for dependent in dependents[name]:
+            in_degree[dependent] -= 1
+            if in_degree[dependent] == 0:
+                ready.append(dependent)
+
+    if len(ordered) != len(services):
+        seen = set(ordered)
+        ordered.extend(s.name for s in services if s.name not in seen)
+
+    return [by_name[name] for name in ordered]
+
+
+def _dependency_ready(status: DependencyStatus | None) -> bool:
+    """Health-then-state readiness rule for a ``depends_on`` gate.
+
+    Ready when ``health == "healthy"``, or when ``health == "unknown"`` (no
+    declared probe) and ``state == "running"`` (liveness fallback). A ``None``
+    status (subprocess failure, unparseable output, or no matching service in
+    the document) and an ``"unhealthy"``/``"stopped"`` report both keep the
+    dependent waiting.
+    """
+    if status is None:
+        return False
+    if status.health == "healthy":
+        return True
+    return status.health == "unknown" and status.state == "running"
+
+
+def _depends_on_timeout_seconds() -> float:
+    """Resolve the depends_on gate's per-dependency timeout ceiling.
+
+    Reads ``WINTER_SERVICE_TIMEOUT`` (injected by winter core on ``up`` with
+    the caller's effective ``--wait`` ``--timeout``) from ``os.environ`` and
+    parses it as a float number of seconds. Falls back to
+    ``_DEPENDS_ON_TIMEOUT_SECONDS`` when the var is unset, empty, non-numeric,
+    or non-positive — keeping this provider correct when driven by an older
+    core that never injects it.
+    """
+    raw = os.environ.get(_DEPENDS_ON_TIMEOUT_ENV_VAR)
+    if not raw:
+        return _DEPENDS_ON_TIMEOUT_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        return _DEPENDS_ON_TIMEOUT_SECONDS
+    return value if value > 0 else _DEPENDS_ON_TIMEOUT_SECONDS
+
+
 class OrchestratorService:
     """Orchestrates tmux sessions for one feature environment.
 
@@ -104,6 +229,7 @@ class OrchestratorService:
         log_repo: ILogRepository,
         health_checker: IHealthChecker | None = None,
         clock: IFollowClock | None = None,
+        winter_cli: IWinterCli | None = None,
         stdout: IO[str] | None = None,
         stderr: IO[str] | None = None,
     ) -> None:
@@ -113,6 +239,7 @@ class OrchestratorService:
         self._log_repo = log_repo
         self._health_checker = health_checker
         self._clock = clock
+        self._winter_cli = winter_cli
         self._stdout: IO[str] = stdout if stdout is not None else sys.stdout
         self._stderr: IO[str] = stderr if stderr is not None else sys.stderr
 
@@ -202,7 +329,17 @@ class OrchestratorService:
         # Ensure the log directory exists before starting any captured services.
         self._log_repo.ensure_log_dir(ctx.worktree_dir)
 
-        for svc in ctx.services:
+        for svc in _topological_order(ctx.services, ctx.env):
+            try:
+                unmet = self._await_dependencies(ctx, svc)
+            except WinterCliUnavailableError as exc:
+                self._stderr.write(f"up: service '{svc.name}': {exc}\n")
+                self._stderr.flush()
+                return 1
+            if unmet is not None:
+                self._stderr.write(f"up: service '{svc.name}' timed out waiting for dependency '{unmet}'\n")
+                self._stderr.flush()
+                return 1
             target = f"{svc.target.window}.{svc.target.pane}"
             line = self._launch_line_for(ctx, svc)
             self._tmux.send_keys(ctx.session, target, line)
@@ -254,6 +391,60 @@ class OrchestratorService:
             env_file_path=ctx.env_file_path,
             cwd=svc.cwd,
         )
+
+    def _await_dependencies(self, ctx: SessionContext, svc: Service) -> str | None:
+        """Block until every ``depends_on`` pattern declared by *svc* is ready.
+
+        A bare pattern (no ``"/"``) is qualified with the current scope
+        (``ctx.env`` — a feature-env name or the ``"workspace"`` token) before
+        being polled; a pattern already containing ``"/"`` (e.g.
+        ``"workspace/db"``) is forwarded as-is, letting a dependency resolve to
+        another provider entirely. Every dependency — same-scope tmux service
+        or cross-provider — is resolved through the identical
+        ``IWinterCli.service_status`` seam.
+
+        Returns ``None`` once every dependency is ready (including the trivial
+        case where *svc* declares none). Returns the first (already-qualified)
+        pattern that never became ready before its per-dependency timeout.
+
+        No-op (returns ``None`` without polling) when the ``winter_cli`` or
+        ``clock`` seam is unavailable — mirrors ``_await_startup``'s
+        seam-unavailable fallback.
+
+        Propagates ``WinterCliUnavailableError`` (uncaught) when the ``winter``
+        CLI itself cannot be invoked — the caller (``up``) catches it around
+        this call and fails fast rather than exhausting the per-dependency
+        poll timeout on a condition that can never resolve.
+        """
+        if self._winter_cli is None or self._clock is None:
+            return None
+        for dep_pattern in svc.depends_on:
+            qualified = dep_pattern if "/" in dep_pattern else f"{ctx.env}/{dep_pattern}"
+            if not self._wait_for_dependency(qualified):
+                return qualified
+        return None
+
+    def _wait_for_dependency(self, qualified_pattern: str) -> bool:
+        """Poll ``qualified_pattern`` via the winter-cli seam until ready or timed out.
+
+        Emits a one-line "waiting for dependency" notice to stdout before the
+        first poll, so a slow-to-become-ready dependency reads as an
+        in-progress wait rather than a silent hang. Lets
+        ``WinterCliUnavailableError`` propagate uncaught — the caller fails
+        fast on that condition instead of polling out the full timeout.
+        """
+        assert self._winter_cli is not None
+        assert self._clock is not None
+        self._stdout.write(f"up: waiting for dependency '{qualified_pattern}'...\n")
+        self._stdout.flush()
+        deadline = self._clock.now() + _depends_on_timeout_seconds()
+        while True:
+            status = self._winter_cli.service_status(qualified_pattern)
+            if _dependency_ready(status):
+                return True
+            if self._clock.now() >= deadline:
+                return False
+            self._clock.sleep(_DEPENDS_ON_POLL_INTERVAL_SECONDS)
 
     def _await_startup(self, ctx: SessionContext, pane_pids: dict[str, int]) -> list[str]:
         """Monitor startup candidates and re-launch those that die within retries.

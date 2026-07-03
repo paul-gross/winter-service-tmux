@@ -776,3 +776,124 @@ def test_cwd_workspace_service_escaping_is_violation() -> None:
     manifest = _make_manifest(workspace_services=(svc,))
     violations = _validator.validate(manifest)
     assert any("docker" in v and "cwd" in v for v in violations)
+
+
+# ---------------------------------------------------------------------------
+# depends_on validation
+# ---------------------------------------------------------------------------
+
+
+def test_depends_on_valid_same_scope_reference_is_clean() -> None:
+    builder = Service(name="builder", target=Target(0, 0), cmd="npm run build")
+    api = Service(name="api", target=Target(0, 1), cmd="npm run start", depends_on=("builder",))
+    manifest = _make_manifest(services=(builder, api))
+    assert _validator.validate(manifest) == []
+
+
+def test_depends_on_cross_scope_pattern_is_not_statically_checked() -> None:
+    """A '/'-qualified pattern (e.g. workspace/db) is trusted to the runtime seam."""
+    api = Service(name="api", target=Target(0, 0), cmd="npm run start", depends_on=("workspace/db",))
+    manifest = _make_manifest(services=(api,))
+    assert _validator.validate(manifest) == []
+
+
+def test_depends_on_self_reference_is_violation() -> None:
+    api = Service(name="api", target=Target(0, 0), cmd="npm run start", depends_on=("api",))
+    manifest = _make_manifest(services=(api,))
+    violations = _validator.validate(manifest)
+    assert any("api" in v and "itself" in v for v in violations)
+
+
+def test_depends_on_unknown_pattern_is_violation() -> None:
+    api = Service(name="api", target=Target(0, 0), cmd="npm run start", depends_on=("nonexistent",))
+    manifest = _make_manifest(services=(api,))
+    violations = _validator.validate(manifest)
+    assert any("api" in v and "nonexistent" in v and "matches no service in scope" in v for v in violations)
+
+
+def test_depends_on_bare_reference_to_other_scope_is_violation() -> None:
+    """A bare (unqualified) name is resolved only against the SAME scope's services."""
+    db = Service(name="db", target=Target(0, 0), cmd="postgres")
+    api = Service(name="api", target=Target(0, 0), cmd="npm run start", depends_on=("db",))
+    manifest = _make_manifest(workspace_services=(db,), services=(api,))
+    violations = _validator.validate(manifest)
+    assert any("api" in v and "db" in v and "matches no service in scope" in v for v in violations)
+
+
+def test_depends_on_two_cycle_is_violation() -> None:
+    a = Service(name="a", target=Target(0, 0), cmd="cmd", depends_on=("b",))
+    b = Service(name="b", target=Target(0, 1), cmd="cmd", depends_on=("a",))
+    manifest = _make_manifest(services=(a, b))
+    violations = _validator.validate(manifest)
+    assert any("cycle" in v for v in violations)
+
+
+def test_depends_on_three_cycle_is_violation() -> None:
+    a = Service(name="a", target=Target(0, 0), cmd="cmd", depends_on=("b",))
+    b = Service(name="b", target=Target(0, 1), cmd="cmd", depends_on=("c",))
+    c = Service(name="c", target=Target(0, 2), cmd="cmd", depends_on=("a",))
+    manifest = _make_manifest(services=(a, b, c))
+    violations = _validator.validate(manifest)
+    assert any("cycle" in v for v in violations)
+
+
+def test_depends_on_workspace_services_checked_independently() -> None:
+    db = Service(name="db", target=Target(0, 0), cmd="postgres")
+    cache = Service(name="cache", target=Target(0, 1), cmd="redis-server", depends_on=("db",))
+    manifest = _make_manifest(workspace_services=(db, cache))
+    assert _validator.validate(manifest) == []
+
+
+def test_depends_on_workspace_qualified_self_scope_is_checked_like_bare() -> None:
+    """'workspace/db' declared BY a workspace service resolves to the statically-known
+    'workspace' scope name, so it is checked exactly like the bare 'db' spelling."""
+    db = Service(name="db", target=Target(0, 0), cmd="postgres")
+    cache = Service(name="cache", target=Target(0, 1), cmd="redis-server", depends_on=("workspace/db",))
+    manifest = _make_manifest(workspace_services=(db, cache))
+    assert _validator.validate(manifest) == []
+
+
+def test_depends_on_workspace_qualified_self_reference_is_violation() -> None:
+    cache = Service(name="cache", target=Target(0, 1), cmd="redis-server", depends_on=("workspace/cache",))
+    manifest = _make_manifest(workspace_services=(cache,))
+    violations = _validator.validate(manifest)
+    assert any("cache" in v and "itself" in v for v in violations)
+
+
+def test_depends_on_workspace_qualified_unknown_pattern_is_violation() -> None:
+    cache = Service(name="cache", target=Target(0, 1), cmd="redis-server", depends_on=("workspace/nonexistent",))
+    manifest = _make_manifest(workspace_services=(cache,))
+    violations = _validator.validate(manifest)
+    assert any("cache" in v and "nonexistent" in v and "matches no service in scope" in v for v in violations)
+
+
+def test_depends_on_env_scoped_qualified_pattern_still_not_statically_checked() -> None:
+    """A per-env service's scope name (the feature-env id) is not known at validation time,
+    so a qualified pattern for env-scoped services is still trusted to the runtime seam."""
+    api = Service(name="api", target=Target(0, 0), cmd="npm run start", depends_on=("alpha/builder",))
+    manifest = _make_manifest(services=(api,))
+    assert _validator.validate(manifest) == []
+
+
+def test_depends_on_target_is_interactive_with_no_health_probe_is_violation() -> None:
+    """A same-scope dependency targeting an empty-cmd service with no health probe can never
+    report state='running', so the dependency would time out on every up()."""
+    shell = Service(name="shell", target=Target(0, 0), cmd="")
+    api = Service(name="api", target=Target(0, 1), cmd="npm run start", depends_on=("shell",))
+    manifest = _make_manifest(services=(shell, api))
+    violations = _validator.validate(manifest)
+    assert any("api" in v and "shell" in v and "can never report state='running'" in v for v in violations)
+
+
+def test_depends_on_target_is_interactive_with_health_probe_is_clean() -> None:
+    """An interactive service WITH a declared health probe (e.g. url/cmd, monitoring an
+    externally-managed process) is a legitimate depends_on target."""
+    monitored = Service(
+        name="monitored",
+        target=Target(0, 0),
+        cmd="",
+        health=Health(type=HealthType.CMD, target="pgrep -f something"),
+    )
+    api = Service(name="api", target=Target(0, 1), cmd="npm run start", depends_on=("monitored",))
+    manifest = _make_manifest(services=(monitored, api))
+    assert _validator.validate(manifest) == []

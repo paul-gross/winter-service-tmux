@@ -23,13 +23,17 @@ from service_manifest.modules.manifest.model import (
     ServiceManifest,
     Target,
 )
+from service_orchestrator.core.winter_cli import DependencyStatus, WinterCliUnavailableError
 from service_orchestrator.modules.orchestrate.errors import OrchestratorError
 from service_orchestrator.modules.orchestrate.health_checker import IHealthChecker
 from service_orchestrator.modules.orchestrate.internal.subprocess_health_checker import SubprocessHealthChecker
 from service_orchestrator.modules.orchestrate.orchestrator_service import (
     OrchestratorService,
+    _dependency_ready,
+    _depends_on_timeout_seconds,
     _resolve_service_port,
     _segments_to_prune,
+    _topological_order,
 )
 from service_orchestrator.modules.orchestrate.session_context import SessionContext
 from service_orchestrator.modules.orchestrate.status_report import logwriter_path
@@ -40,6 +44,7 @@ from tests.conftest import (
     FakeLogRepository,
     FakeProcessReaper,
     FakeTmuxRepository,
+    FakeWinterCli,
 )
 from tests.fakes import FakeFilesystemReader
 
@@ -114,6 +119,7 @@ def _make_service(
     log_repo: FakeLogRepository | None = None,
     health_checker: IHealthChecker | None = None,
     clock: FakeFollowClock | None = None,
+    winter_cli: FakeWinterCli | None = None,
     stdout: io.StringIO | None = None,
     stderr: io.StringIO | None = None,
 ) -> OrchestratorService:
@@ -132,6 +138,7 @@ def _make_service(
         log_repo=log_repo,
         health_checker=health_checker,
         clock=clock,
+        winter_cli=winter_cli,
         stdout=stdout,
         stderr=stderr,
     )
@@ -1988,6 +1995,401 @@ def test_up_retry_true_emits_per_attempt_progress() -> None:
     output = out.getvalue()
     assert "Retrying 'backend' (attempt 1/2)" in output
     assert "Retrying 'backend' (attempt 2/2)" in output
+
+
+# ---------------------------------------------------------------------------
+# depends_on — _topological_order, _dependency_ready (pure functions)
+# ---------------------------------------------------------------------------
+
+
+def _svc(name: str, window: int, pane: int, depends_on: tuple[str, ...] = ()) -> Service:
+    return Service(name=name, target=Target(window=window, pane=pane), cmd=f"run {name}", depends_on=depends_on)
+
+
+def test_topological_order_reorders_dependent_after_dependency() -> None:
+    """A dependent declared BEFORE its dependency is reordered to launch after it."""
+    api = _svc("api", 0, 0, depends_on=("builder",))
+    builder = _svc("builder", 0, 1)
+
+    ordered = _topological_order((api, builder), "alpha")
+
+    assert [s.name for s in ordered] == ["builder", "api"]
+
+
+def test_topological_order_no_deps_preserves_declaration_order() -> None:
+    backend = _svc("backend", 0, 0)
+    frontend = _svc("frontend", 0, 1)
+
+    ordered = _topological_order((backend, frontend), "alpha")
+
+    assert [s.name for s in ordered] == ["backend", "frontend"]
+
+
+def test_topological_order_cross_provider_pattern_does_not_reorder() -> None:
+    """A '/'-qualified depends_on entry for a DIFFERENT scope is not a local edge — order is unaffected."""
+    api = _svc("api", 0, 0, depends_on=("workspace/db",))
+    other = _svc("other", 0, 1)
+
+    ordered = _topological_order((api, other), "alpha")
+
+    assert [s.name for s in ordered] == ["api", "other"]
+
+
+def test_topological_order_qualified_same_scope_dep_is_ordered() -> None:
+    """A depends_on entry qualified with THIS SAME scope (e.g. 'alpha/builder' declared inside
+    env 'alpha') resolves to the identical poll target as the bare form and must be sequenced
+    identically — regression test for the deadlock where only the bare spelling was locally
+    ordered, leaving the dependency launched AFTER its dependent (never, since the loop blocks
+    synchronously on each service's depends_on gate before advancing)."""
+    api = _svc("api", 0, 0, depends_on=("alpha/builder",))
+    builder = _svc("builder", 0, 1)
+
+    ordered = _topological_order((api, builder), "alpha")
+
+    assert [s.name for s in ordered] == ["builder", "api"]
+
+
+def test_topological_order_chain_of_three() -> None:
+    api = _svc("api", 0, 0, depends_on=("worker",))
+    worker = _svc("worker", 0, 1, depends_on=("builder",))
+    builder = _svc("builder", 0, 2)
+
+    ordered = _topological_order((api, worker, builder), "alpha")
+
+    assert [s.name for s in ordered] == ["builder", "worker", "api"]
+
+
+def test_topological_order_defensive_against_runtime_cycle() -> None:
+    """A cycle (should be caught by the validator) does not hang — all names still returned."""
+    a = _svc("a", 0, 0, depends_on=("b",))
+    b = _svc("b", 0, 1, depends_on=("a",))
+
+    ordered = _topological_order((a, b), "alpha")
+
+    assert {s.name for s in ordered} == {"a", "b"}
+    assert len(ordered) == 2
+
+
+def test_dependency_ready_healthy_is_ready() -> None:
+    assert _dependency_ready(DependencyStatus(state="running", health="healthy")) is True
+
+
+def test_dependency_ready_unknown_health_running_state_is_ready() -> None:
+    """Liveness fallback: no declared probe (health=unknown) but the process is running."""
+    assert _dependency_ready(DependencyStatus(state="running", health="unknown")) is True
+
+
+def test_dependency_ready_unhealthy_is_not_ready() -> None:
+    assert _dependency_ready(DependencyStatus(state="running", health="unhealthy")) is False
+
+
+def test_dependency_ready_unknown_health_stopped_state_is_not_ready() -> None:
+    assert _dependency_ready(DependencyStatus(state="stopped", health="unknown")) is False
+
+
+def test_dependency_ready_none_is_not_ready() -> None:
+    assert _dependency_ready(None) is False
+
+
+# ---------------------------------------------------------------------------
+# depends_on — up() integration: ordering, gating, cross-provider, timeout
+# ---------------------------------------------------------------------------
+
+_MANIFEST_WITH_DEPENDS_ON_TOML = """\
+session_prefix = "mp"
+layout_hook = "layout-hook.sh"
+
+[[service]]
+name = "api"
+target = "0.0"
+cmd = "run api"
+depends_on = ["builder"]
+
+[[service]]
+name = "builder"
+target = "0.1"
+cmd = "run builder"
+"""
+
+
+def _make_depends_on_ctx() -> SessionContext:
+    manifest = _make_manifest(_MANIFEST_WITH_DEPENDS_ON_TOML)
+    return _make_ctx(manifest=manifest, inject_scope=None)
+
+
+def test_up_launches_in_topological_order_and_gates_on_dependency() -> None:
+    """api (declared first) depends on builder (declared second) — builder launches first."""
+    tmux = FakeTmuxRepository()
+    hook = FakeLayoutHookRunner()
+    clock = FakeFollowClock()
+    winter_cli = FakeWinterCli(statuses={"alpha/builder": DependencyStatus(state="running", health="healthy")})
+
+    def _add_panes() -> None:
+        tmux.seed_session("mp-alpha", {"0.0": 100, "0.1": 101})
+
+    hook._side_effect = _add_panes
+
+    ctx = _make_depends_on_ctx()
+    svc = _make_service(tmux=tmux, hook_runner=hook, clock=clock, winter_cli=winter_cli)
+
+    result = svc.up(ctx)
+
+    assert result == 0
+    # builder (0.1) launches before api (0.0) despite declaration order.
+    assert [target for _, target, _ in tmux.sent] == ["0.1", "0.0"]
+    # Only api declares a dependency; builder's own launch triggers no poll.
+    assert winter_cli.status_calls == ["alpha/builder"]
+
+
+def test_up_qualified_same_scope_dependency_is_ordered_and_launches() -> None:
+    """A depends_on entry qualified with the SAME env ("alpha/builder" declared inside env
+    "alpha") must be locally sequenced exactly like the bare "builder" spelling — regression
+    test for the deadlock where only bare deps were reordered, so a qualified same-scope
+    dependent was reached before its dependency and (with a real winter_cli seam) would poll
+    forever waiting for a service that never got its own send_keys."""
+    tmux = FakeTmuxRepository()
+    hook = FakeLayoutHookRunner()
+    clock = FakeFollowClock()
+    winter_cli = FakeWinterCli(statuses={"alpha/builder": DependencyStatus(state="running", health="healthy")})
+
+    def _add_panes() -> None:
+        tmux.seed_session("mp-alpha", {"0.0": 100, "0.1": 101})
+
+    hook._side_effect = _add_panes
+
+    toml = """\
+session_prefix = "mp"
+layout_hook = "layout-hook.sh"
+
+[[service]]
+name = "api"
+target = "0.0"
+cmd = "run api"
+depends_on = ["alpha/builder"]
+
+[[service]]
+name = "builder"
+target = "0.1"
+cmd = "run builder"
+"""
+    manifest = _make_manifest(toml)
+    ctx = _make_ctx(manifest=manifest, inject_scope=None)
+    svc = _make_service(tmux=tmux, hook_runner=hook, clock=clock, winter_cli=winter_cli)
+
+    result = svc.up(ctx)
+
+    assert result == 0
+    # builder (0.1) launches before api (0.0) — the qualified same-scope
+    # dependency is sequenced identically to a bare one.
+    assert [target for _, target, _ in tmux.sent] == ["0.1", "0.0"]
+    assert winter_cli.status_calls == ["alpha/builder"]
+    # No timeout: the clock never had to advance past the poll (ready first try).
+    assert clock.sleep_calls == []
+
+
+def test_up_gate_polls_until_dependency_becomes_ready() -> None:
+    """The gate polls (sleeping between ticks) until health flips from unhealthy to healthy."""
+    tmux = FakeTmuxRepository()
+    hook = FakeLayoutHookRunner()
+    clock = FakeFollowClock()
+    winter_cli = FakeWinterCli(
+        statuses={
+            "alpha/builder": [
+                DependencyStatus(state="running", health="unhealthy"),
+                DependencyStatus(state="running", health="unhealthy"),
+                DependencyStatus(state="running", health="healthy"),
+            ]
+        }
+    )
+
+    def _add_panes() -> None:
+        tmux.seed_session("mp-alpha", {"0.0": 100, "0.1": 101})
+
+    hook._side_effect = _add_panes
+
+    ctx = _make_depends_on_ctx()
+    svc = _make_service(tmux=tmux, hook_runner=hook, clock=clock, winter_cli=winter_cli)
+
+    result = svc.up(ctx)
+
+    assert result == 0
+    assert len(winter_cli.status_calls) == 3
+    assert clock.sleep_calls == [1.0, 1.0]
+    assert [target for _, target, _ in tmux.sent] == ["0.1", "0.0"]
+
+
+def test_up_cross_provider_dependency_via_faked_winter_cli_seam() -> None:
+    """depends_on = ["workspace/db"] resolves through the SAME seam as a same-env dependency."""
+    tmux = FakeTmuxRepository()
+    hook = FakeLayoutHookRunner()
+    clock = FakeFollowClock()
+    winter_cli = FakeWinterCli(statuses={"workspace/db": DependencyStatus(state="running", health="healthy")})
+
+    def _add_panes() -> None:
+        tmux.seed_session("mp-alpha", {"0.0": 100})
+
+    hook._side_effect = _add_panes
+
+    toml = """\
+session_prefix = "mp"
+layout_hook = "layout-hook.sh"
+
+[[service]]
+name = "api"
+target = "0.0"
+cmd = "run api"
+depends_on = ["workspace/db"]
+"""
+    manifest = _make_manifest(toml)
+    ctx = _make_ctx(manifest=manifest, inject_scope=None)
+    svc = _make_service(tmux=tmux, hook_runner=hook, clock=clock, winter_cli=winter_cli)
+
+    result = svc.up(ctx)
+
+    assert result == 0
+    assert winter_cli.status_calls == ["workspace/db"]
+    assert len(tmux.sent) == 1
+
+
+def test_up_dependency_timeout_exits_nonzero_and_names_dependent_and_dependency() -> None:
+    """A dependency that never becomes ready before the timeout fails up() with both names."""
+    tmux = FakeTmuxRepository()
+    hook = FakeLayoutHookRunner()
+    clock = FakeFollowClock(current_time=0.0)
+    err = io.StringIO()
+    # Always unhealthy — never satisfies the gate.
+    winter_cli = FakeWinterCli(statuses={"alpha/builder": DependencyStatus(state="running", health="unhealthy")})
+
+    def _add_panes() -> None:
+        tmux.seed_session("mp-alpha", {"0.0": 100, "0.1": 101})
+
+    hook._side_effect = _add_panes
+
+    ctx = _make_depends_on_ctx()
+    svc = _make_service(tmux=tmux, hook_runner=hook, clock=clock, winter_cli=winter_cli, stderr=err)
+
+    result = svc.up(ctx)
+
+    assert result == 1
+    # builder has no dependency of its own and launches; api never does — its
+    # gate on 'alpha/builder' times out before api's send_keys.
+    assert [target for _, target, _ in tmux.sent] == ["0.1"]
+    message = err.getvalue()
+    assert "api" in message
+    assert "alpha/builder" in message
+    # Clock advanced to (at least) the 120s default timeout via repeated 1s polls.
+    assert clock.current_time >= 120.0
+
+
+def test_up_dependency_timeout_honors_injected_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+    """WINTER_SERVICE_TIMEOUT=6 shortens the gate's deadline from the 120s default to ~6s."""
+    monkeypatch.setenv("WINTER_SERVICE_TIMEOUT", "6")
+    tmux = FakeTmuxRepository()
+    hook = FakeLayoutHookRunner()
+    clock = FakeFollowClock(current_time=0.0)
+    err = io.StringIO()
+    # Always unhealthy — never satisfies the gate.
+    winter_cli = FakeWinterCli(statuses={"alpha/builder": DependencyStatus(state="running", health="unhealthy")})
+
+    def _add_panes() -> None:
+        tmux.seed_session("mp-alpha", {"0.0": 100, "0.1": 101})
+
+    hook._side_effect = _add_panes
+
+    ctx = _make_depends_on_ctx()
+    svc = _make_service(tmux=tmux, hook_runner=hook, clock=clock, winter_cli=winter_cli, stderr=err)
+
+    result = svc.up(ctx)
+
+    assert result == 1
+    # Clock advanced to (at least) the injected 6s ceiling, not the 120s default.
+    assert 6.0 <= clock.current_time < 120.0
+
+
+def test_depends_on_timeout_seconds_defaults_to_120_when_env_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("WINTER_SERVICE_TIMEOUT", raising=False)
+    assert _depends_on_timeout_seconds() == 120.0
+
+
+@pytest.mark.parametrize("raw", ["", "not-a-number", "0", "-5"])
+def test_depends_on_timeout_seconds_falls_back_to_120_on_invalid_value(
+    monkeypatch: pytest.MonkeyPatch, raw: str
+) -> None:
+    monkeypatch.setenv("WINTER_SERVICE_TIMEOUT", raw)
+    assert _depends_on_timeout_seconds() == 120.0
+
+
+def test_depends_on_timeout_seconds_parses_valid_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WINTER_SERVICE_TIMEOUT", "6")
+    assert _depends_on_timeout_seconds() == 6.0
+
+
+def test_up_dependency_winter_cli_unavailable_fails_fast_without_exhausting_timeout() -> None:
+    """A missing/misconfigured 'winter' CLI fails immediately rather than polling out 120s."""
+    tmux = FakeTmuxRepository()
+    hook = FakeLayoutHookRunner()
+    clock = FakeFollowClock(current_time=0.0)
+    err = io.StringIO()
+    winter_cli = FakeWinterCli(statuses={"alpha/builder": WinterCliUnavailableError("'winter' not found on PATH")})
+
+    def _add_panes() -> None:
+        tmux.seed_session("mp-alpha", {"0.0": 100, "0.1": 101})
+
+    hook._side_effect = _add_panes
+
+    ctx = _make_depends_on_ctx()
+    svc = _make_service(tmux=tmux, hook_runner=hook, clock=clock, winter_cli=winter_cli, stderr=err)
+
+    result = svc.up(ctx)
+
+    assert result == 1
+    # builder has no dependency of its own and launches; api's gate raises
+    # immediately on the first poll — no send_keys, no 120s of polling.
+    assert [target for _, target, _ in tmux.sent] == ["0.1"]
+    assert clock.current_time == 0.0
+    message = err.getvalue()
+    assert "api" in message
+    assert "not found on PATH" in message
+
+
+def test_up_no_depends_on_never_touches_winter_cli_seam() -> None:
+    """A manifest with no depends_on declarations never calls the winter_cli seam."""
+    tmux = FakeTmuxRepository()
+    hook = FakeLayoutHookRunner()
+    clock = FakeFollowClock()
+    winter_cli = FakeWinterCli()
+    ctx = _make_ctx()
+
+    def _add_panes() -> None:
+        tmux.seed_session("mp-alpha", {"0.0": 100, "0.1": 101})
+
+    hook._side_effect = _add_panes
+
+    svc = _make_service(tmux=tmux, hook_runner=hook, clock=clock, winter_cli=winter_cli)
+    result = svc.up(ctx)
+
+    assert result == 0
+    assert winter_cli.status_calls == []
+
+
+def test_up_depends_on_without_winter_cli_seam_skips_gate() -> None:
+    """No winter_cli injected (None) → depends_on is a no-op, matching _await_startup's seam-optional fallback."""
+    tmux = FakeTmuxRepository()
+    hook = FakeLayoutHookRunner()
+    clock = FakeFollowClock()
+
+    def _add_panes() -> None:
+        tmux.seed_session("mp-alpha", {"0.0": 100, "0.1": 101})
+
+    hook._side_effect = _add_panes
+
+    ctx = _make_depends_on_ctx()
+    svc = _make_service(tmux=tmux, hook_runner=hook, clock=clock, winter_cli=None)
+
+    result = svc.up(ctx)
+
+    assert result == 0
+    assert len(tmux.sent) == 2
 
 
 # ---------------------------------------------------------------------------

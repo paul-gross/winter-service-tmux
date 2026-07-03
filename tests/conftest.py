@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
+from service_orchestrator.core.winter_cli import DependencyStatus, IWinterCli
 from service_orchestrator.core.workspace_locator import IWorkspaceLocator
 from service_orchestrator.modules.orchestrate.errors import OrchestratorError
 from service_orchestrator.modules.orchestrate.follow_clock import IFollowClock
@@ -431,7 +432,10 @@ class FakeFollowClock:
     ``sleep_calls`` records every ``sleep(seconds)`` call.
     ``install_called`` tracks whether ``install()`` was invoked.
     ``current_time`` is the value returned by ``now()``; set it to control
-    prune cutoff calculations deterministically.
+    prune cutoff calculations deterministically. ``sleep`` advances
+    ``current_time`` by the slept amount, so a caller that loops on
+    ``now()``/``sleep()`` (e.g. a timeout gate) advances deterministically
+    without a real delay.
     """
 
     def __init__(self, tick_results: list[bool] | None = None, current_time: float = 0.0) -> None:
@@ -451,6 +455,7 @@ class FakeFollowClock:
 
     def sleep(self, seconds: float) -> None:
         self.sleep_calls.append(seconds)
+        self.current_time += seconds
 
     def now(self) -> float:
         """Return the canned current time."""
@@ -459,4 +464,63 @@ class FakeFollowClock:
 
 def _conforms_fake_follow_clock(x: FakeFollowClock) -> IFollowClock:
     """Typecheck-time sentinel: FakeFollowClock satisfies IFollowClock."""
+    return x
+
+
+# ---------------------------------------------------------------------------
+# FakeWinterCli
+# ---------------------------------------------------------------------------
+
+
+class FakeWinterCli:
+    """In-memory ``IWinterCli`` seam for ``depends_on`` readiness-gate tests.
+
+    ``statuses`` maps a scope-qualified pattern (``"<scope>/<service>"``) to
+    the value(s) ``service_status`` returns for it:
+
+    - A single ``DependencyStatus`` (or ``None``) is returned on every poll.
+    - A ``list`` is treated as a per-poll SEQUENCE: each call pops the front
+      entry; once exhausted, the last entry repeats — lets a test simulate a
+      dependency that starts unhealthy/unknown and becomes ready after N polls.
+    - An ``Exception`` instance is RAISED (not returned) — simulates
+      ``WinterCliUnavailableError`` for a missing/misconfigured ``winter`` CLI.
+
+    A pattern with no entry returns ``None`` (not-yet-reporting dependency).
+    ``status_calls`` records every ``service_status(pattern)`` call in order,
+    including repeats across poll ticks.
+    """
+
+    def __init__(
+        self,
+        statuses: dict[str, DependencyStatus | None | Exception | list[DependencyStatus | None]] | None = None,
+    ) -> None:
+        self.statuses: dict[str, DependencyStatus | None | Exception | list[DependencyStatus | None]] = dict(
+            statuses or {}
+        )
+        self.status_calls: list[str] = []
+        self.service_calls: list[list[str]] = []
+        self.service_rc: int = 0
+
+    def service(self, args: list[str]) -> int:
+        self.service_calls.append(list(args))
+        return self.service_rc
+
+    def service_status(self, pattern: str) -> DependencyStatus | None:
+        self.status_calls.append(pattern)
+        value = self.statuses.get(pattern)
+        if isinstance(value, Exception):
+            raise value
+        if isinstance(value, list):
+            if not value:
+                return None
+            return value.pop(0) if len(value) > 1 else value[0]
+        return value
+
+    def set_status(self, pattern: str, status: DependencyStatus | None) -> None:
+        """Update the canned status for *pattern* (e.g. mid-poll, to simulate it becoming ready)."""
+        self.statuses[pattern] = status
+
+
+def _conforms_fake_winter_cli(x: FakeWinterCli) -> IWinterCli:
+    """Typecheck-time sentinel: FakeWinterCli satisfies IWinterCli."""
     return x

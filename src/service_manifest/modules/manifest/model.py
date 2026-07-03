@@ -189,6 +189,37 @@ class Service:
             the ``cd``-in-``cmd`` idiom.  The validator rejects an absolute
             value or one that normalizes outside the scope root (e.g.
             ``"../other"``).
+        depends_on: Optional tuple of service patterns this service must wait
+            for before ``winter service up`` launches it.  A bare pattern (no
+            ``"/"``, e.g. ``"builder"``) is a same-scope reference — resolved
+            at dispatch time against the current scope (the feature env, or
+            ``"workspace"``).  A scope-qualified pattern whose scope segment
+            EQUALS the current scope (e.g. ``"alpha/builder"`` declared by a
+            service running in env ``"alpha"``) resolves to the identical
+            poll target as the bare form and is treated identically for both
+            local launch ordering and (when statically known, i.e. the
+            ``"workspace"`` scope) validation — bare and self-qualified
+            spellings are interchangeable, never one sequenced and the other
+            not.  A scope-qualified pattern naming a DIFFERENT scope (e.g.
+            ``"workspace/db"`` from a project-scope service) is resolved
+            verbatim, letting a service depend on another provider's service
+            (e.g. a docker workspace singleton); such cross-scope references
+            are gated at launch time but are never locally sequenced and are
+            not statically validated.  Every dependency is polled through the
+            provider-agnostic ``winter service status <pattern> --json`` seam
+            regardless of which provider owns it.  Empty tuple (the default)
+            means no ordering constraint.  The validator rejects a same-scope
+            pattern that is a self-reference, matches no declared service, or
+            targets an interactive (empty-``cmd``) service with no health
+            probe (a target that can never report ``state = "running"``, so
+            the dependency would time out on every ``up``); it also rejects
+            any same-scope ``depends_on`` cycle.  UNSUPPORTED TOPOLOGY: a
+            cross-scope cycle formed entirely of scope-qualified patterns
+            (e.g. ``env/A`` depends on ``workspace/B`` which depends on
+            ``workspace/A``) is not statically detected by the validator and
+            will hang at launch time (each side polls the other, and neither
+            side's own scope ever calls ``_topological_order`` across the
+            other's services) — do not declare one.
     """
 
     name: str
@@ -199,6 +230,7 @@ class Service:
     startup: StartupPolicy | None = None
     port: int | str | None = None
     cwd: str | None = None
+    depends_on: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

@@ -16,6 +16,8 @@ from typing import IO
 
 import service_manifest.container as sm_container_mod
 from service_orchestrator.core.internal.env_workspace_locator import EnvWorkspaceLocator
+from service_orchestrator.core.internal.subprocess_winter_cli import SubprocessWinterCli
+from service_orchestrator.core.winter_cli import IWinterCli
 from service_orchestrator.core.workspace_locator import IWorkspaceLocator
 from service_orchestrator.modules.orchestrate.dispatch_service import DispatchService
 from service_orchestrator.modules.orchestrate.follow_clock import IFollowClock
@@ -57,6 +59,7 @@ class Container:
         log_repo: ILogRepository | None = None,
         health_checker: IHealthChecker | None = None,
         follow_clock: IFollowClock | None = None,
+        winter_cli: IWinterCli | None = None,
         log_sink: IO[str] | None = None,
         out_sink: IO[str] | None = None,
         err_sink: IO[str] | None = None,
@@ -70,6 +73,7 @@ class Container:
         self.log_repo: ILogRepository = log_repo or LocalLogRepository()
         self.health_checker: IHealthChecker = health_checker or SubprocessHealthChecker()
         self.follow_clock: IFollowClock = follow_clock or RealFollowClock()
+        self.winter_cli: IWinterCli = winter_cli or SubprocessWinterCli()
 
         self._sm: sm_container_mod.Container = manifest or sm_container_mod.Container()
         self.manifest_reader = self._sm.manifest_reader
@@ -82,6 +86,7 @@ class Container:
             log_repo=self.log_repo,
             health_checker=self.health_checker,
             clock=self.follow_clock,
+            winter_cli=self.winter_cli,
             stdout=out_sink,
             stderr=err_sink,
         )

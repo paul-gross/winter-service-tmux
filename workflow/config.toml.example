@@ -171,6 +171,33 @@ retention_seconds = 604800    # 7 days
 #              After exhausting retries, `winter service up` exits non-zero and
 #              names every service that failed to stay up; surviving services are
 #              unaffected.
+#   depends_on (optional) — list of service patterns this service must wait for
+#              before `winter service up` launches it. Two forms:
+#              - Bare pattern (e.g. "builder") — a same-scope reference: another
+#                service declared in THIS SAME scope (project services depend on
+#                other project services; workspace singletons depend on other
+#                workspace singletons). Resolved at dispatch time against the
+#                current scope (the feature env, or "workspace").
+#              - Scope-qualified pattern (e.g. "workspace/db") — resolved
+#                verbatim, letting a service depend on ANOTHER PROVIDER's
+#                service (e.g. a docker-backed workspace singleton). Every
+#                dependency — same-scope tmux service or cross-provider — is
+#                polled through the identical `winter service status <pattern>
+#                --json` seam, so this provider never special-cases which
+#                provider owns the dependency.
+#              A dependency is considered ready once its status reports
+#              health = "healthy", or health = "unknown" (no declared probe)
+#              and state = "running" (a liveness fallback for a probe-less
+#              dependency); an "unhealthy"/"stopped" report keeps the dependent
+#              waiting. Each dependency is polled for up to the caller's
+#              effective `--wait --timeout` (winter core injects it as
+#              `WINTER_SERVICE_TIMEOUT`), defaulting to 120 seconds when no
+#              timeout is supplied (or the injected value is missing/invalid);
+#              if it never becomes ready, `winter service up` exits non-zero
+#              and names both the waiting service and the unmet dependency.
+#              Rejected by the validator: a bare pattern that is a
+#              self-reference, a bare pattern matching no service in the same
+#              scope, or any depends_on cycle.
 #
 # Targets must be unique across all services in the SAME scope. The layout hook
 # is responsible for creating the windows/panes named here; the orchestrator
@@ -181,6 +208,9 @@ name = "backend"
 target = "0.0"
 cmd = "npm run start:dev"
 port = "WINTER_PORT_BASE + 10"  # resolves to e.g. 4070 when WINTER_PORT_BASE=4060
+depends_on = ["workspace/db"]   # cross-provider: waits on a docker-owned workspace singleton named "db"
+                                 # (a service another bound provider declares — not this file's own
+                                 # workspace singletons below, which happen to be named "docker"/"registry")
 
 [service.health]
 type = "url"
@@ -199,6 +229,7 @@ target = "0.1"
 cwd = "apps/frontend"
 cmd = "npm run dev"
 port = "WINTER_PORT_BASE + 11"  # resolves to e.g. 4071 when WINTER_PORT_BASE=4060
+depends_on = ["backend"]        # same-env: waits for backend's health probe (or liveness) before launching
 
 [service.health]
 type = "cmd"

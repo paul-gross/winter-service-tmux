@@ -362,8 +362,29 @@ class ManifestReader:
                 if not isinstance(cwd_raw, str):
                     raise ManifestError(f"service '{name}': cwd must be a string, got {type(cwd_raw).__name__}")
                 cwd = cwd_raw[2:] if cwd_raw.startswith("./") else cwd_raw
+            depends_on_raw = raw.get("depends_on")
+            depends_on: tuple[str, ...] = ()
+            if depends_on_raw is not None:
+                if not isinstance(depends_on_raw, list):
+                    raise ManifestError(
+                        f"service '{name}': 'depends_on' must be a list of strings, got {type(depends_on_raw).__name__}"
+                    )
+                for item in depends_on_raw:
+                    if not isinstance(item, str):
+                        raise ManifestError(
+                            f"service '{name}': 'depends_on' entries must be strings, got {type(item).__name__}"
+                        )
+                depends_on = tuple(depends_on_raw)
             svc = Service(
-                name=name, target=target, cmd=cmd, log=log_mode, health=health, startup=startup, port=port, cwd=cwd
+                name=name,
+                target=target,
+                cmd=cmd,
+                log=log_mode,
+                health=health,
+                startup=startup,
+                port=port,
+                cwd=cwd,
+                depends_on=depends_on,
             )
             parsed.append((svc, scope))
         return parsed

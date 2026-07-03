@@ -1632,3 +1632,71 @@ cwd = 42
 """
     with pytest.raises(ManifestError, match="cwd must be a string"):
         _read({_COMMITTED_PATH: content})
+
+
+# ---------------------------------------------------------------------------
+# depends_on
+# ---------------------------------------------------------------------------
+
+
+def test_service_depends_on_parsed() -> None:
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "builder"
+target = "0.0"
+cmd = "npm run build"
+
+[[service]]
+name = "api"
+target = "0.1"
+cmd = "npm run start"
+depends_on = ["builder", "workspace/db"]
+"""
+    manifest = _read({_COMMITTED_PATH: content})
+    api = next(s for s in manifest.services if s.name == "api")
+    assert api.depends_on == ("builder", "workspace/db")
+    builder = next(s for s in manifest.services if s.name == "builder")
+    assert builder.depends_on == ()
+
+
+def test_service_depends_on_absent_is_empty_tuple() -> None:
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "web"
+target = "0.0"
+cmd = "npm run start"
+"""
+    manifest = _read({_COMMITTED_PATH: content})
+    assert manifest.services[0].depends_on == ()
+
+
+def test_service_depends_on_non_list_raises() -> None:
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "web"
+target = "0.0"
+cmd = "npm run start"
+depends_on = "builder"
+"""
+    with pytest.raises(ManifestError, match="'depends_on' must be a list of strings"):
+        _read({_COMMITTED_PATH: content})
+
+
+def test_service_depends_on_non_string_entry_raises() -> None:
+    content = """\
+session_prefix = "mp"
+
+[[service]]
+name = "web"
+target = "0.0"
+cmd = "npm run start"
+depends_on = ["builder", 42]
+"""
+    with pytest.raises(ManifestError, match="'depends_on' entries must be strings"):
+        _read({_COMMITTED_PATH: content})
