@@ -133,3 +133,35 @@ def test_log_health_invalid_regex_is_unhealthy_not_a_crash() -> None:
         Health(type=HealthType.LOG, target="unclosed("),
         log_source="anything",
     )
+
+
+def test_uptime_health_below_threshold_is_unhealthy() -> None:
+    checker = SubprocessHealthChecker()
+
+    assert not checker.is_healthy(Health(type=HealthType.UPTIME, target="30s"), uptime_seconds=29)
+
+
+def test_uptime_health_at_threshold_is_healthy() -> None:
+    checker = SubprocessHealthChecker()
+
+    assert checker.is_healthy(Health(type=HealthType.UPTIME, target="30s"), uptime_seconds=30)
+
+
+def test_uptime_health_above_threshold_is_healthy() -> None:
+    checker = SubprocessHealthChecker()
+
+    assert checker.is_healthy(Health(type=HealthType.UPTIME, target="30s"), uptime_seconds=120)
+
+
+def test_uptime_health_no_measured_process_is_unhealthy() -> None:
+    """uptime_seconds=None means no child process was found — unhealthy."""
+    checker = SubprocessHealthChecker()
+
+    assert not checker.is_healthy(Health(type=HealthType.UPTIME, target="30s"), uptime_seconds=None)
+
+
+def test_uptime_health_invalid_duration_is_unhealthy_not_a_crash() -> None:
+    """An invalid duration must not crash the probe (validation catches it earlier)."""
+    checker = SubprocessHealthChecker()
+
+    assert not checker.is_healthy(Health(type=HealthType.UPTIME, target="not-a-duration"), uptime_seconds=999)

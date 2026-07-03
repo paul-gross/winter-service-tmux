@@ -363,8 +363,9 @@ class OrchestratorService:
         svc_docs: list[dict] = []  # type: ignore[type-arg]
         for svc in in_scope:
             target = f"{svc.target.window}.{svc.target.pane}"
-            if target in pane_map:
-                running = self._reaper.has_children(pane_map[target])
+            pane_pid = pane_map.get(target)
+            if pane_pid is not None:
+                running = self._reaper.has_children(pane_pid)
                 state = "running" if running else "stopped"
                 handle: str | None = f"{ctx.session}:{target}"
             else:
@@ -374,7 +375,7 @@ class OrchestratorService:
             captured = bool(svc.cmd) and svc.log == LogMode.FILE
             log_path = str(self._log_repo.log_path(ctx.worktree_dir, svc.name)) if captured else None
 
-            health = self._service_health(svc, state, ctx)
+            health = self._service_health(svc, state, ctx, pane_pid=pane_pid)
             resolved_port = _resolve_service_port(svc.port, self._port_base(ctx))
             ports = [resolved_port] if resolved_port is not None else None
             svc_docs.append(
@@ -449,7 +450,7 @@ class OrchestratorService:
             pane_pid = pane_map[target]
             running = self._reaper.has_children(pane_pid)
             status_str = "running" if running else "stopped"
-            health = self._service_health(svc, status_str, ctx)
+            health = self._service_health(svc, status_str, ctx, pane_pid=pane_pid)
             health_text = health if svc.health is not None else "-"
 
             captured = self._tmux.capture_pane(ctx.session, target)
@@ -464,14 +465,21 @@ class OrchestratorService:
         self._stdout.flush()
         return 0
 
-    def _service_health(self, svc: Service, state: str, ctx: SessionContext) -> str:
+    def _service_health(self, svc: Service, state: str, ctx: SessionContext, pane_pid: int | None = None) -> str:
         health = svc.health
         if health is None or self._health_checker is None:
             return "unknown"
         if state != "running":
             return "unhealthy"
         log_source = self._log_source_for_health(svc, ctx) if health.type == HealthType.LOG else None
-        healthy = self._health_checker.is_healthy(health, ctx.env_vars, ctx.worktree_dir, log_source=log_source)
+        uptime_seconds = (
+            self._reaper.child_uptime_seconds(pane_pid)
+            if health.type == HealthType.UPTIME and pane_pid is not None
+            else None
+        )
+        healthy = self._health_checker.is_healthy(
+            health, ctx.env_vars, ctx.worktree_dir, log_source=log_source, uptime_seconds=uptime_seconds
+        )
         return "healthy" if healthy else "unhealthy"
 
     def _log_source_for_health(self, svc: Service, ctx: SessionContext) -> str:

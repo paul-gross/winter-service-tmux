@@ -1282,8 +1282,8 @@ def test_status_env_document_populates_declared_health() -> None:
     assert by_name["frontend"]["health"] == "unhealthy"
     assert by_name["shell"]["health"] == "unknown"
     assert health.calls == [
-        ("http://localhost:${BACKEND_PORT}/health", {"BACKEND_PORT": "3000"}, _WORKTREE, None),
-        ("pgrep -f frontend", {"BACKEND_PORT": "3000"}, _WORKTREE, None),
+        ("http://localhost:${BACKEND_PORT}/health", {"BACKEND_PORT": "3000"}, _WORKTREE, None, None),
+        ("pgrep -f frontend", {"BACKEND_PORT": "3000"}, _WORKTREE, None, None),
     ]
 
 
@@ -1466,6 +1466,132 @@ def test_status_env_document_log_health_pane_mode_scans_capture_pane() -> None:
     doc = svc.status_env_document(ctx)
 
     assert doc["services"][0]["health"] == "healthy"
+
+
+def _uptime_manifest(duration: str = "30s") -> ServiceManifest:
+    return ServiceManifest(
+        session_prefix="mp",
+        env_file=None,
+        layout_hook=None,
+        services=(
+            Service(
+                name="backend",
+                target=Target(0, 0),
+                cmd="npm start",
+                health=Health(type=HealthType.UPTIME, target=duration),
+            ),
+        ),
+    )
+
+
+def test_status_env_document_uptime_health_below_threshold_is_unhealthy() -> None:
+    """A running child that hasn't been alive as long as the declared duration is unhealthy."""
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 10})
+    ctx = _make_ctx(manifest=_uptime_manifest("30s"))
+    svc = _make_service(
+        tmux=tmux,
+        reaper=FakeProcessReaper(children_set={10}, child_uptimes={10: 5}),
+        health_checker=SubprocessHealthChecker(),
+    )
+
+    doc = svc.status_env_document(ctx)
+
+    assert doc["services"][0]["health"] == "unhealthy"
+
+
+def test_status_env_document_uptime_health_at_threshold_is_healthy() -> None:
+    """A running child alive exactly as long as the declared duration is healthy."""
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 10})
+    ctx = _make_ctx(manifest=_uptime_manifest("30s"))
+    svc = _make_service(
+        tmux=tmux,
+        reaper=FakeProcessReaper(children_set={10}, child_uptimes={10: 30}),
+        health_checker=SubprocessHealthChecker(),
+    )
+
+    doc = svc.status_env_document(ctx)
+
+    assert doc["services"][0]["health"] == "healthy"
+
+
+def test_status_env_document_uptime_health_above_threshold_is_healthy() -> None:
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 10})
+    ctx = _make_ctx(manifest=_uptime_manifest("30s"))
+    svc = _make_service(
+        tmux=tmux,
+        reaper=FakeProcessReaper(children_set={10}, child_uptimes={10: 300}),
+        health_checker=SubprocessHealthChecker(),
+    )
+
+    doc = svc.status_env_document(ctx)
+
+    assert doc["services"][0]["health"] == "healthy"
+
+
+def test_status_env_document_uptime_health_no_child_pane_is_unhealthy() -> None:
+    """A running pane whose child cannot be resolved for uptime (edge race, or an
+    interactive pane where the reaper finds no measurable child) is unhealthy."""
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 10})
+    ctx = _make_ctx(manifest=_uptime_manifest("30s"))
+    svc = _make_service(
+        tmux=tmux,
+        # has_children() reports the pane running, but child_uptime_seconds()
+        # has nothing seeded for pid 10 -> None -> unhealthy.
+        reaper=FakeProcessReaper(children_set={10}, child_uptimes={}),
+        health_checker=SubprocessHealthChecker(),
+    )
+
+    doc = svc.status_env_document(ctx)
+
+    assert doc["services"][0]["health"] == "unhealthy"
+
+
+def test_status_env_document_uptime_health_stopped_pane_is_unhealthy_without_probing() -> None:
+    """A stopped pane is unhealthy without ever consulting child_uptime_seconds."""
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 10})
+    ctx = _make_ctx(manifest=_uptime_manifest("30s"))
+    svc = _make_service(
+        tmux=tmux,
+        reaper=FakeProcessReaper(children_set=set(), child_uptimes={10: 300}),
+        health_checker=SubprocessHealthChecker(),
+    )
+
+    doc = svc.status_env_document(ctx)
+
+    assert doc["services"][0]["health"] == "unhealthy"
+
+
+def test_restart_resets_uptime_clock() -> None:
+    """restart() reaps the pane's child and relaunches; the uptime probe reads the
+    reaper live on every call, so a freshly-measured (low) child uptime after
+    restart flips a previously-healthy service back to unhealthy — the clock
+    is naturally reset because it is anchored on the (new) child process.
+    """
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 10})
+    manifest = _uptime_manifest("30s")
+    ctx = _make_ctx(manifest=manifest, inject_scope="alpha")
+    reaper = FakeProcessReaper(children_set={10}, child_uptimes={10: 300})
+    svc = _make_service(tmux=tmux, reaper=reaper, health_checker=SubprocessHealthChecker())
+
+    before = svc.status_env_document(ctx)
+    assert before["services"][0]["health"] == "healthy"
+
+    result = svc.restart(ctx, "backend")
+    assert result == 0
+
+    # Simulate the reaper now measuring the freshly relaunched child's low
+    # elapsed time (the real PgrepProcessReaper would naturally observe this
+    # since restart() reaps the old child and a brand-new one gets forked).
+    reaper._child_uptimes[10] = 1
+
+    after = svc.status_env_document(ctx)
+    assert after["services"][0]["health"] == "unhealthy"
 
 
 def test_status_env_document_port_base_from_env_vars() -> None:

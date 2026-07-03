@@ -7,6 +7,15 @@ from enum import StrEnum
 # Valid port expression: optional whitespace around "WINTER_PORT_BASE + <int>"
 _PORT_EXPR_RE = re.compile(r"^\s*WINTER_PORT_BASE\s*\+\s*(\d+)\s*$")
 
+# Duration form for HealthType.UPTIME's `target` — identical to the duration
+# form winter-cli's `winter service logs --since`/`--until` accepts (mirrored
+# here byte-for-byte rather than imported across repos, since
+# winter-service-tmux is a separate package from winter-cli). Only the
+# duration form applies; there is no RFC3339 absolute-timestamp form for an
+# uptime target.
+_UPTIME_DURATION_RE = re.compile(r"^(\d+)([smhd])$")
+_UPTIME_DURATION_SECONDS: dict[str, int] = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+
 
 def parse_port_expression(s: str) -> int | None:
     """Parse a ``WINTER_PORT_BASE + <offset>`` expression and return the offset.
@@ -17,6 +26,21 @@ def parse_port_expression(s: str) -> int | None:
     """
     m = _PORT_EXPR_RE.match(s)
     return int(m.group(1)) if m else None
+
+
+def parse_uptime_duration(s: str) -> int | None:
+    """Parse a ``HealthType.UPTIME`` health target into a duration in seconds.
+
+    Accepts ``<N><unit>`` where unit is one of ``s``/``m``/``h``/``d``
+    (1/60/3600/86400 seconds respectively) — e.g. ``"30s"``, ``"5m"``, ``"1h"``,
+    ``"2d"``.  Returns ``None`` when *s* does not match this form.
+    """
+    m = _UPTIME_DURATION_RE.match(s.strip())
+    if m is None:
+        return None
+    amount = int(m.group(1))
+    unit = m.group(2)
+    return amount * _UPTIME_DURATION_SECONDS[unit]
 
 
 class LogMode(StrEnum):
@@ -46,6 +70,7 @@ class HealthType(StrEnum):
     URL = "url"
     CMD = "cmd"
     LOG = "log"
+    UPTIME = "uptime"
 
 
 @dataclass(frozen=True)
@@ -55,9 +80,12 @@ class Health:
     ``target`` may contain ``${VAR}`` placeholders resolved against the env file
     before the probe runs — EXCEPT for ``HealthType.LOG``, where ``target`` is a
     regular expression used VERBATIM (no ``${VAR}`` interpolation), so regex
-    syntax is never mangled.  ``timeout`` is seconds; ``None`` means use the
-    probe runner's default timeout (unused by ``log`` probes — a regex match
-    against already-captured output has no I/O to time out).
+    syntax is never mangled.  For ``HealthType.UPTIME``, ``target`` is a
+    duration (``parse_uptime_duration``) — the service is ``healthy`` once its
+    measured process has been alive at least that long; there are no
+    placeholders to interpolate in a duration.  ``timeout`` is seconds; ``None``
+    means use the probe runner's default timeout (unused by ``log`` and
+    ``uptime`` probes — neither performs I/O that can time out).
     """
 
     type: HealthType

@@ -315,6 +315,57 @@ def test_workspace_service_log_health_dollar_brace_is_not_a_var_violation() -> N
 
 
 # ---------------------------------------------------------------------------
+# HealthType.UPTIME duration validation
+# ---------------------------------------------------------------------------
+
+
+def test_uptime_health_valid_duration_is_no_violation() -> None:
+    manifest = _make_manifest(services=(_service_with_health("backend", Health(type=HealthType.UPTIME, target="30s")),))
+
+    assert _validator.validate(manifest) == []
+
+
+def test_uptime_health_invalid_duration_is_violation() -> None:
+    manifest = _make_manifest(
+        services=(_service_with_health("backend", Health(type=HealthType.UPTIME, target="not-a-duration")),)
+    )
+    violations = _validator.validate(manifest)
+
+    assert any("backend" in v and "duration" in v for v in violations)
+
+
+def test_uptime_health_rfc3339_timestamp_is_a_violation() -> None:
+    """An uptime target only accepts the duration form, not an RFC3339 timestamp."""
+    manifest = _make_manifest(
+        services=(_service_with_health("backend", Health(type=HealthType.UPTIME, target="2026-06-13T10:00:00Z")),)
+    )
+    violations = _validator.validate(manifest)
+
+    assert any("duration" in v for v in violations)
+
+
+def test_uptime_health_various_valid_units_are_no_violation() -> None:
+    for target in ("1s", "5m", "1h", "3d"):
+        manifest = _make_manifest(
+            services=(_service_with_health("backend", Health(type=HealthType.UPTIME, target=target)),)
+        )
+        assert _validator.validate(manifest) == [], f"{target!r} should be a valid duration"
+
+
+def test_uptime_health_on_empty_command_service_is_violation() -> None:
+    """An 'uptime' probe on an interactive (empty-cmd) service has no process to measure —
+    child_uptime_seconds is always None, so the probe would always report unhealthy."""
+    manifest = _make_manifest(
+        services=(
+            Service(name="shell", target=Target(0, 0), cmd="", health=Health(type=HealthType.UPTIME, target="30s")),
+        )
+    )
+    violations = _validator.validate(manifest)
+
+    assert any("uptime" in v and "shell" in v for v in violations)
+
+
+# ---------------------------------------------------------------------------
 # Multiple simultaneous violations
 # ---------------------------------------------------------------------------
 

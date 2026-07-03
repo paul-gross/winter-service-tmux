@@ -20,7 +20,13 @@ import posixpath
 import re
 
 from service_manifest.modules.manifest.env import interpolate, referenced_vars
-from service_manifest.modules.manifest.model import HealthType, Service, ServiceManifest, parse_port_expression
+from service_manifest.modules.manifest.model import (
+    HealthType,
+    Service,
+    ServiceManifest,
+    parse_port_expression,
+    parse_uptime_duration,
+)
 
 
 class ManifestValidator:
@@ -78,6 +84,12 @@ class ManifestValidator:
           (empty-command) service, where there is no captured output to match.
         - A ``health.type = "log"`` probe's ``target`` compiles as a valid
           regular expression.
+        - A ``health.type = "uptime"`` probe is not declared on an interactive
+          (empty-command) service either — there is no measured child process,
+          so ``child_uptime_seconds`` is always ``None`` and the probe would
+          always report unhealthy.
+        - A ``health.type = "uptime"`` probe's ``target`` parses as a valid
+          duration (``<N><unit>``, unit one of ``s``/``m``/``h``/``d``).
         - When *env* is provided: every ``${VAR}`` in a service health target
           resolves against *env*; unresolvable vars are reported per-service.
           Skipped for ``health.type = "log"`` — its ``target`` is used
@@ -191,6 +203,18 @@ class ManifestValidator:
                         re.compile(health.target)
                     except re.error as exc:
                         violations.append(f"{label} '{service.name}': health.target is not a valid regex — {exc}")
+            if health.type == HealthType.UPTIME:
+                if not service.cmd.strip():
+                    violations.append(
+                        f"{label} '{service.name}': an 'uptime' health probe has no process to measure on an "
+                        "interactive (empty-command) service — child_uptime_seconds is always None, so it is "
+                        "always unhealthy"
+                    )
+                elif health.target.strip() and parse_uptime_duration(health.target) is None:
+                    violations.append(
+                        f"{label} '{service.name}': health.target {health.target!r} is not a valid duration; "
+                        "expected <N><unit> where unit is one of s/m/h/d, e.g. '30s', '5m', '1h', '2d'"
+                    )
 
     @staticmethod
     def _check_startup_config(services: tuple[Service, ...], label: str, violations: list[str]) -> None:

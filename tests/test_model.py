@@ -11,6 +11,7 @@ from service_manifest.modules.manifest.model import (
     ServiceManifest,
     StartupPolicy,
     Target,
+    parse_uptime_duration,
 )
 
 
@@ -275,3 +276,47 @@ def test_service_can_have_startup_policy() -> None:
     policy = StartupPolicy(retries=3, retry_delay=2.0)
     svc = Service(name="backend", target=Target(window=0, pane=0), cmd="cmd", startup=policy)
     assert svc.startup == policy
+
+
+# ---------------------------------------------------------------------------
+# parse_uptime_duration
+# ---------------------------------------------------------------------------
+
+
+def test_parse_uptime_duration_seconds() -> None:
+    assert parse_uptime_duration("30s") == 30
+
+
+def test_parse_uptime_duration_minutes() -> None:
+    assert parse_uptime_duration("5m") == 300
+
+
+def test_parse_uptime_duration_hours() -> None:
+    assert parse_uptime_duration("1h") == 3600
+
+
+def test_parse_uptime_duration_days() -> None:
+    assert parse_uptime_duration("2d") == 172800
+
+
+def test_parse_uptime_duration_rejects_missing_unit() -> None:
+    assert parse_uptime_duration("30") is None
+
+
+def test_parse_uptime_duration_rejects_unknown_unit() -> None:
+    assert parse_uptime_duration("30x") is None
+
+
+def test_parse_uptime_duration_rejects_rfc3339_timestamp() -> None:
+    """Only the duration form applies to an uptime target — no absolute-timestamp form."""
+    assert parse_uptime_duration("2026-06-13T10:00:00Z") is None
+
+
+def test_parse_uptime_duration_rejects_empty_string() -> None:
+    assert parse_uptime_duration("") is None
+
+
+def test_service_can_have_uptime_health_probe() -> None:
+    health = Health(type=HealthType.UPTIME, target="30s")
+    svc = Service(name="backend", target=Target(window=0, pane=0), cmd="cmd", health=health)
+    assert svc.health == health

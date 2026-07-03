@@ -123,6 +123,8 @@ class FakeProcessReaper:
     of booleans; each call pops from the front of the list, falling back to
     ``children_set`` membership when the list for that pid is exhausted.
     ``killed`` records every ``reap_descendants`` call's collected pid list.
+    ``child_uptimes`` seeds ``child_uptime_seconds(pid)`` → the canned
+    elapsed-seconds value (or ``None`` for "no child").
     """
 
     def __init__(
@@ -130,12 +132,14 @@ class FakeProcessReaper:
         descendant_map: dict[int, list[int]] | None = None,
         children_set: set[int] | None = None,
         children_sequence: dict[int, list[bool]] | None = None,
+        child_uptimes: dict[int, int | None] | None = None,
     ) -> None:
         self._descendants: dict[int, list[int]] = dict(descendant_map or {})
         self._children: set[int] = set(children_set or set())
         self._children_sequence: dict[int, list[bool]] = {
             pid: list(seq) for pid, seq in (children_sequence or {}).items()
         }
+        self._child_uptimes: dict[int, int | None] = dict(child_uptimes or {})
         self.killed: list[list[int]] = []
 
     def descendants(self, pid: int) -> list[int]:
@@ -154,6 +158,9 @@ class FakeProcessReaper:
         if pids:
             self.killed.append(pids)
 
+    def child_uptime_seconds(self, pid: int) -> int | None:
+        return self._child_uptimes.get(pid)
+
 
 def _conforms_fake_process_reaper(x: FakeProcessReaper) -> IProcessReaper:
     """Typecheck-time sentinel: FakeProcessReaper satisfies IProcessReaper."""
@@ -170,7 +177,7 @@ class FakeHealthChecker:
 
     def __init__(self, results: dict[str, bool] | None = None) -> None:
         self._results = dict(results or {})
-        self.calls: list[tuple[str, dict[str, str] | None, Path | None, str | None]] = []
+        self.calls: list[tuple[str, dict[str, str] | None, Path | None, str | None, int | None]] = []
 
     def is_healthy(  # type: ignore[no-untyped-def]
         self,
@@ -178,8 +185,9 @@ class FakeHealthChecker:
         env: dict[str, str] | None = None,
         cwd: Path | None = None,
         log_source: str | None = None,
+        uptime_seconds: int | None = None,
     ) -> bool:
-        self.calls.append((health.target, env, cwd, log_source))
+        self.calls.append((health.target, env, cwd, log_source, uptime_seconds))
         return self._results.get(health.target, False)
 
 

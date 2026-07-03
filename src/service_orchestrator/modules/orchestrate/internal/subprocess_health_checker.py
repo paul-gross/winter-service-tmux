@@ -1,4 +1,4 @@
-"""Stdlib health-check adapter for URL, shell-command, and log-scan probes."""
+"""Stdlib health-check adapter for URL, shell-command, log-scan, and uptime probes."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import urllib.request
 from pathlib import Path
 
 from service_manifest.modules.manifest.env import interpolate
-from service_manifest.modules.manifest.model import Health, HealthType
+from service_manifest.modules.manifest.model import Health, HealthType, parse_uptime_duration
 
 _DEFAULT_TIMEOUT_SECONDS = 5.0
 
@@ -23,11 +23,18 @@ class SubprocessHealthChecker:
         env: dict[str, str] | None = None,
         cwd: Path | None = None,
         log_source: str | None = None,
+        uptime_seconds: int | None = None,
     ) -> bool:
         if health.type == HealthType.LOG:
             # 'log' targets are used VERBATIM — no ${VAR} interpolation — so
             # regex syntax (e.g. '${2}') is never mangled by substitution.
             return self._check_log(health.target, log_source)
+        if health.type == HealthType.UPTIME:
+            # 'uptime' targets are a plain duration, never interpolated (the
+            # duration regex has no room for a '${VAR}' placeholder anyway).
+            # The measured elapsed seconds are computed by the caller — this
+            # seam never touches a PID or the process table itself.
+            return self._check_uptime(health.target, uptime_seconds)
 
         target, unresolved = interpolate(health.target, env or {})
         if unresolved:
@@ -75,3 +82,18 @@ class SubprocessHealthChecker:
             # ManifestValidator before the probe ever runs); this guards the
             # probe path against crashing if that check was somehow bypassed.
             return False
+
+    @staticmethod
+    def _check_uptime(target: str, uptime_seconds: int | None) -> bool:
+        if uptime_seconds is None:
+            # No child process was found (interactive pane, or the measured
+            # process already exited) — the last-resort readiness signal has
+            # nothing to measure, so it reports unhealthy.
+            return False
+        threshold = parse_uptime_duration(target)
+        if threshold is None:
+            # An invalid duration is a manifest-validation error (caught by
+            # ManifestValidator before the probe ever runs); this guards the
+            # probe path the same way an invalid 'log' regex does above.
+            return False
+        return uptime_seconds >= threshold

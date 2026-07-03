@@ -403,3 +403,104 @@ def test_has_children_raises_orchestrator_error_when_pgrep_missing(monkeypatch):
     reaper = PgrepProcessReaper()
     with pytest.raises(OrchestratorError, match="pgrep not found"):
         reaper.has_children(100)
+
+
+# ---------------------------------------------------------------------------
+# child_uptime_seconds — used by the 'uptime' health probe
+# ---------------------------------------------------------------------------
+
+
+def _ps_result(returncode: int = 0, stdout: str = "") -> MagicMock:
+    mock = MagicMock()
+    mock.returncode = returncode
+    mock.stdout = stdout
+    mock.stderr = ""
+    mock.args = []
+    return mock
+
+
+def test_child_uptime_seconds_returns_none_when_no_children(monkeypatch):
+    fake_subprocess = MagicMock()
+    fake_subprocess.run.return_value = _pgrep_result(returncode=1, stdout="")
+    monkeypatch.setattr(adapter_module, "subprocess", fake_subprocess)
+
+    reaper = PgrepProcessReaper()
+    assert reaper.child_uptime_seconds(200) is None
+    # No 'ps' call is made when there are no children.
+    fake_subprocess.run.assert_called_once_with(
+        ["pgrep", "-P", "200"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_child_uptime_seconds_single_child_reads_etimes(monkeypatch):
+    call_results = {
+        ("pgrep", "-P", "200"): _pgrep_result(returncode=0, stdout="201\n"),
+        ("ps", "-o", "etimes=", "-p", "201"): _ps_result(returncode=0, stdout="  42\n"),
+    }
+
+    def fake_run(args, **kwargs):
+        return call_results[tuple(args)]
+
+    fake_subprocess = MagicMock()
+    fake_subprocess.run.side_effect = fake_run
+    monkeypatch.setattr(adapter_module, "subprocess", fake_subprocess)
+
+    reaper = PgrepProcessReaper()
+    assert reaper.child_uptime_seconds(200) == 42
+
+
+def test_child_uptime_seconds_multiple_children_returns_longest_running(monkeypatch):
+    """When several direct children exist, the longest-running one's uptime wins."""
+    call_results = {
+        ("pgrep", "-P", "200"): _pgrep_result(returncode=0, stdout="201\n202\n"),
+        ("ps", "-o", "etimes=", "-p", "201"): _ps_result(returncode=0, stdout="10\n"),
+        ("ps", "-o", "etimes=", "-p", "202"): _ps_result(returncode=0, stdout="99\n"),
+    }
+
+    def fake_run(args, **kwargs):
+        return call_results[tuple(args)]
+
+    fake_subprocess = MagicMock()
+    fake_subprocess.run.side_effect = fake_run
+    monkeypatch.setattr(adapter_module, "subprocess", fake_subprocess)
+
+    reaper = PgrepProcessReaper()
+    assert reaper.child_uptime_seconds(200) == 99
+
+
+def test_child_uptime_seconds_returns_none_when_child_exited_before_ps_runs(monkeypatch):
+    """A child that races to exit between pgrep and ps yields empty ps output."""
+    call_results = {
+        ("pgrep", "-P", "200"): _pgrep_result(returncode=0, stdout="201\n"),
+        ("ps", "-o", "etimes=", "-p", "201"): _ps_result(returncode=1, stdout=""),
+    }
+
+    def fake_run(args, **kwargs):
+        return call_results[tuple(args)]
+
+    fake_subprocess = MagicMock()
+    fake_subprocess.run.side_effect = fake_run
+    monkeypatch.setattr(adapter_module, "subprocess", fake_subprocess)
+
+    reaper = PgrepProcessReaper()
+    assert reaper.child_uptime_seconds(200) is None
+
+
+def test_child_uptime_seconds_raises_orchestrator_error_when_ps_missing(monkeypatch):
+    """FileNotFoundError from subprocess.run (ps not on PATH) is wrapped into OrchestratorError."""
+
+    def fake_run(args, **kwargs):
+        if args[0] == "pgrep":
+            return _pgrep_result(returncode=0, stdout="201\n")
+        raise FileNotFoundError(2, "No such file or directory")
+
+    fake_subprocess = MagicMock()
+    fake_subprocess.run.side_effect = fake_run
+    monkeypatch.setattr(adapter_module, "subprocess", fake_subprocess)
+
+    reaper = PgrepProcessReaper()
+    with pytest.raises(OrchestratorError, match="ps not found"):
+        reaper.child_uptime_seconds(200)

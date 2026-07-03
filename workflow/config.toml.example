@@ -123,11 +123,27 @@ retention_seconds = 604800    # 7 days
 #              bare $VAR is not interpolated. EXCEPTION: type = "log" targets
 #              are used VERBATIM — never interpolated — so regex syntax is
 #              never mangled by substitution.
+#              type = "uptime" treats target as a duration ("<N><unit>", unit
+#              one of s/m/h/d — e.g. "30s", "5m", "1h", "2d"; identical to the
+#              duration form `winter service logs --since` accepts) and passes
+#              once the service's measured process has been alive at least
+#              that long. The dumb, last-resort readiness signal for a service
+#              with no HTTP endpoint, no cheap readiness command, and no
+#              distinctive ready-line — so --wait has something to gate on.
+#              Measures the tmux pane's direct child process (never the pane
+#              shell); when the pane has several direct children, the
+#              longest-running one is measured. Unhealthy while the pane has
+#              no measurable child (an interactive/empty-command pane, or the
+#              process exited). Because the clock is anchored on the child
+#              process, `./restart <svc>` (which reaps children and relaunches)
+#              naturally resets it. Rejected by the validator when target does
+#              not parse as a valid duration.
 #              Workspace-scoped services do not load env_file, so their health
 #              targets must not contain ${VAR} placeholders (does not apply to
-#              type = "log", which is never interpolated).
-#              timeout is optional seconds; default is 5 (unused by type = "log",
-#              which has no I/O to time out).
+#              type = "log" or type = "uptime", neither of which is ever
+#              interpolated).
+#              timeout is optional seconds; default is 5 (unused by type = "log"
+#              and type = "uptime", neither of which has I/O to time out).
 #   port     (optional) — declared port for this service, surfaced in the
 #              ``PORTS`` column of ``winter service status``.  Two forms:
 #              - Literal integer: ``port = 4070``
