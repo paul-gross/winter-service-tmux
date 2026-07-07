@@ -10,6 +10,7 @@ Covers:
 from __future__ import annotations
 
 import shlex
+import sys
 from pathlib import Path
 
 import pytest
@@ -239,10 +240,11 @@ def test_build_launch_line_wrapped_when_logfile_supplied() -> None:
         f"cd {shlex.quote(str(_WORKTREE))}"
         f" && echo {shlex.quote('=== svc ===')} && "
         f"{{ npm run start ; }} 2>&1 | "
-        f"python3 {shlex.quote(str(writer))} {shlex.quote(str(logfile))} "
+        f"{shlex.quote(sys.executable)} {shlex.quote(str(writer))} {shlex.quote(str(logfile))} "
         f"--rotate-size 10485760 --max-rotations 5"
     )
     assert line == expected
+    assert shlex.quote(sys.executable) in line
 
 
 def test_build_launch_line_bare_when_command_empty_and_logfile_supplied() -> None:

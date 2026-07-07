@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import sys
 from pathlib import Path
 
 
@@ -90,12 +91,17 @@ def build_launch_line(
     stderr pipe through the capture writer::
 
         cd '<wt>' [&& eval "$(winter env '<scope>')"] [&& . '<env_file>'] && echo '=== <name> ===' &&
-        { <command> ; } 2>&1 | python3 '<writer>' '<logfile>'
+        { <command> ; } 2>&1 | '<sys.executable>' '<writer>' '<logfile>'
         --rotate-size <N> --max-rotations <M>
 
     The brace group ``{ <command> ; }`` ensures the redirect and pipe apply to
     the entire command even when it contains ``&&`` or inner pipes.  The writer
-    echoes every raw line to stdout so the pane stays live.
+    echoes every raw line to stdout so the pane stays live.  The pipe invokes
+    the orchestrator's own interpreter (``sys.executable``, shell-quoted)
+    rather than a bare ``python3`` resolved fresh from the pane's ``PATH`` —
+    this guarantees the writer runs under the same 3.11+ interpreter the
+    orchestrator itself runs under, even when the host's ``python3`` resolves
+    to an older interpreter.
     """
     target_dir = worktree_dir / cwd if cwd else worktree_dir
     prefix = f"cd {shlex.quote(str(target_dir))}"
@@ -113,7 +119,7 @@ def build_launch_line(
             line = (
                 f"{line} && "
                 f"{{ {command} ; }} 2>&1 | "
-                f"python3 {shlex.quote(str(writer))} {shlex.quote(str(logfile))} "
+                f"{shlex.quote(sys.executable)} {shlex.quote(str(writer))} {shlex.quote(str(logfile))} "
                 f"--rotate-size {rotate_size_bytes} "
                 f"--max-rotations {max_rotations}"
             )

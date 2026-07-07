@@ -1,8 +1,11 @@
 """Capture writer — tees service stdout/stderr to a timestamped log file.
 
-Invoked by absolute path as a standalone script (no PYTHONPATH required)::
+Invoked by absolute path as a standalone script (no PYTHONPATH required). The
+capture pipe in ``status_report.py`` spawns it under ``sys.executable`` (the
+orchestrator's own interpreter), not a bare ``python3``, so the writer always
+matches the Python version the orchestrator is running::
 
-    python3 /abs/.../logwriter.py <logfile> --rotate-size <bytes> --max-rotations <count>
+    <sys.executable> /abs/.../logwriter.py <logfile> --rotate-size <bytes> --max-rotations <count>
 
 Reads stdin line-by-line.  For each line:
 

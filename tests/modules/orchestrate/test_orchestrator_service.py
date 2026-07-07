@@ -9,6 +9,7 @@ from __future__ import annotations
 import dataclasses
 import io
 import shlex
+import sys
 from pathlib import Path
 
 import pytest
@@ -222,7 +223,7 @@ def test_up_send_keys_exact_launch_line_with_scope() -> None:
         f'cd {shlex.quote(str(_WORKTREE))} && eval "$(winter env alpha)"'
         f" && echo {shlex.quote('=== backend ===')} && "
         f"{{ npm run start:dev ; }} 2>&1 | "
-        f"python3 {shlex.quote(str(writer))} {shlex.quote(str(backend_logfile))} "
+        f"{shlex.quote(sys.executable)} {shlex.quote(str(writer))} {shlex.quote(str(backend_logfile))} "
         f"--rotate-size {rotate_size} --max-rotations {max_rot}"
     )
     assert backend_line == expected_backend
@@ -234,7 +235,7 @@ def test_up_send_keys_exact_launch_line_with_scope() -> None:
         f'cd {shlex.quote(str(_WORKTREE))} && eval "$(winter env alpha)"'
         f" && echo {shlex.quote('=== frontend ===')} && "
         f"{{ npm run dev ; }} 2>&1 | "
-        f"python3 {shlex.quote(str(writer))} {shlex.quote(str(frontend_logfile))} "
+        f"{shlex.quote(sys.executable)} {shlex.quote(str(writer))} {shlex.quote(str(frontend_logfile))} "
         f"--rotate-size {rotate_size} --max-rotations {max_rot}"
     )
     assert frontend_line == expected_frontend
@@ -268,7 +269,7 @@ def test_up_send_keys_exact_launch_line_without_scope() -> None:
     expected = (
         f"cd {shlex.quote(str(_WORKTREE))} && echo {shlex.quote('=== backend ===')} && "
         f"{{ npm run start:dev ; }} 2>&1 | "
-        f"python3 {shlex.quote(str(writer))} {shlex.quote(str(backend_logfile))} "
+        f"{shlex.quote(sys.executable)} {shlex.quote(str(writer))} {shlex.quote(str(backend_logfile))} "
         f"--rotate-size {rotate_size} --max-rotations {max_rot}"
     )
     assert backend_line == expected
@@ -983,7 +984,7 @@ max_rotations = 3
     expected = (
         f"cd {shlex.quote(str(_WORKTREE))} && echo {shlex.quote('=== docs ===')} && "
         f"{{ npm run docs ; }} 2>&1 | "
-        f"python3 {shlex.quote(str(writer))} {shlex.quote(str(logfile))} "
+        f"{shlex.quote(sys.executable)} {shlex.quote(str(writer))} {shlex.quote(str(logfile))} "
         f"--rotate-size 5242880 --max-rotations 3"
     )
     _, _, line = tmux.sent[0]
@@ -1085,7 +1086,7 @@ log = "file"
     svc.up(ctx)
 
     _, _, line = tmux.sent[0]
-    assert "python3" in line
+    assert shlex.quote(sys.executable) in line
     assert "logwriter" in line
 
 
