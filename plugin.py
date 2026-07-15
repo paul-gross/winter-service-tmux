@@ -39,7 +39,7 @@ def tmux_session_badge(env_status, env_path) -> None:
     timing out is treated as stopped — never raises, since failures here would
     blank out the whole dashboard column.
     """
-    session = f"{env_status.environment.workspace.session_prefix}-{env_status.environment.name}"
+    session = f"{env_status.environment.workspace.service_prefix}-{env_status.environment.name}"
     try:
         result = subprocess.run(
             ["tmux", "has-session", "-t", session],
