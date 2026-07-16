@@ -68,8 +68,8 @@ def build_launch_line(
     When *scope* is not ``None`` the pane shell self-sources the full scope
     environment via POSIX ``eval "$(winter env <scope>)"`` before the banner.
     This brings all ``WINTER_*`` base vars and the scope's env-var band entries
-    (``[env.workspace.vars]`` / ``[env.feature.vars]``) into the
-    pane without the orchestrator process executing ``winter`` itself — the
+    (see ``workspace:/context/winter-cli/configuration/ports-and-environments.md#env-var-bands``)
+    into the pane without the orchestrator process executing ``winter`` itself — the
     entry shim already sourced the scope env before ``exec python3``, and each
     pane self-sources independently.
 
