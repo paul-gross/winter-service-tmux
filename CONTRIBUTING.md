@@ -14,7 +14,7 @@ Conventional Commits with a scope:
 
 ## Pre-commit checks
 
-Bash scripts: none automated. `bash -n` and `winter doctor` catch common issues manually.
+Bash scripts: mostly manual — `bash -n` and `winter doctor` catch common issues. `workflow/doctor.sh`'s probes are the exception: they get end-to-end pytest coverage via `subprocess.run` (see `tests/test_doctor_probe.py`, and the precedent in `tests/test_logwriter.py`'s "End-to-end via subprocess" section), so a probe change should extend that file rather than rely on manual checks alone.
 
 Python (`src/service_manifest/`, `tests/`): run these before pushing any Python changes. Requires Python 3.11+ (`tomllib` is stdlib from 3.11; the current dev env uses 3.12).
 

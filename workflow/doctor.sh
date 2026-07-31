@@ -141,9 +141,13 @@ print("; ".join(violations))
     # is a top-level scalar so the pattern is reliable). Manifest override
     # wins when declared; otherwise fall back to WINTER_SERVICE_PREFIX, the
     # same resolution order as _resolve_session_prefix — this doctor dispatch
-    # receives that var like every other dispatch action.
+    # receives that var like every other dispatch action. `head -n 1` guards
+    # against a multi-line grep match (e.g. a commented-out line still
+    # matching the pattern) — without it a multi-line value would match no
+    # session below and probe 3 would pass vacuously instead of comparing
+    # against the intended prefix.
     session_prefix=$(grep -E '^[[:space:]]*session_prefix[[:space:]]*=' "$MANIFEST_PATH" \
-      | sed 's/.*=[[:space:]]*//' | tr -d '"'"'"' ')
+      | head -n 1 | sed 's/.*=[[:space:]]*//' | tr -d '"'"'"' ')
     if [[ -z "$session_prefix" ]]; then
       session_prefix="${WINTER_SERVICE_PREFIX:-}"
     fi
@@ -169,18 +173,31 @@ else
     while IFS= read -r session; do
       [[ -z "$session" ]] && continue
       [[ "$session" == "$session_prefix"-* ]] || continue
-      env_name="${session#"$session_prefix"-}"
-      # A session is "ours" iff `<workspace>/<env_name>/` is a feature env —
-      # detected by a worktree-marker .git FILE in any immediate child
-      # directory (git worktrees add a .git FILE; source checkouts and
-      # extension clones have a .git DIRECTORY, not a file). Plain directory
-      # existence is too weak: the workspace root also contains source
-      # checkouts, helper dirs (`tools/`, `projects/`, `docs/`), and
-      # standalone extension clones whose names could otherwise mask a real
-      # collision.
+      suffix="${session#"$session_prefix"-}"
+      # A session is "ours" iff either:
+      #   - `suffix` is the reserved `workspace` scope name, used by the
+      #     provider's own workspace-scoped singleton session (e.g. a
+      #     `scope = "workspace"` service's `<prefix>-workspace` session).
+      #     `workspace` is owned as a reserved scope name by `_VALID_SCOPES`
+      #     in src/service_manifest/modules/manifest/reader.py and documented
+      #     in context/workspace-singletons.md ("The `workspace` token is an
+      #     exact reserved name") — rename it there first if ever renamed
+      #     here. This branch is harmless even if a workspace somehow used
+      #     `workspace` as a feature env name too: it would just also treat
+      #     that env's session as own.
+      #   - `<workspace>/<suffix>/` is a feature env — detected by a
+      #     worktree-marker .git FILE in any immediate child directory (git
+      #     worktrees add a .git FILE; source checkouts and extension clones
+      #     have a .git DIRECTORY, not a file). Plain directory existence is
+      #     too weak: the workspace root also contains source checkouts,
+      #     helper dirs (`tools/`, `projects/`, `docs/`), and standalone
+      #     extension clones whose names could otherwise mask a real
+      #     collision.
       is_own_session=false
-      if [[ -d "$WORKSPACE_DIR/$env_name" ]]; then
-        for _child in "$WORKSPACE_DIR/$env_name"/*/; do
+      if [[ "$suffix" == "workspace" ]]; then
+        is_own_session=true
+      elif [[ -d "$WORKSPACE_DIR/$suffix" ]]; then
+        for _child in "$WORKSPACE_DIR/$suffix"/*/; do
           if [[ -f "${_child}.git" ]]; then
             is_own_session=true
             break
@@ -198,7 +215,7 @@ else
     else
       emit "session-name collision" warn \
         "foreign tmux sessions match \`${session_prefix}-*\`: ${conflicting[*]}" \
-        "Rename session_prefix in config.toml or stop the foreign sessions."
+        "Change the workspace's WINTER_SERVICE_PREFIX (or the deprecated config.toml session_prefix override) or stop the foreign sessions."
     fi
   fi
 fi

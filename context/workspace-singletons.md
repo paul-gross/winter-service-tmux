@@ -17,7 +17,7 @@ winter service restart workspace/db  # restart a single workspace service
 
 `winter service status` (no patterns) and `winter service status --all` both include the workspace session alongside env sessions.
 
-The `workspace` token is an exact reserved name — `work*` globs do NOT match it. Workspace services are scoped to `winter service` commands; there are no env-root `./up`/`./down` symlinks at the workspace root.
+The `workspace` token is an exact reserved name — `work*` globs do NOT match it. Workspace services are scoped to `winter service` commands; there are no env-root `./up`/`./down` symlinks at the workspace root. `winter doctor`'s `[wst] session-name collision` probe knows about this reservation too: it classifies a `<SESSION_PREFIX>-workspace` session as own, not a foreign collision.
 
 ## Declaring workspace services
 
