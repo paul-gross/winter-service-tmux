@@ -11,7 +11,7 @@ Read-vs-validate split:
 
 Returning a list instead of raising is intentional: a list of violations is
 DATA (the caller decides fatality), not control flow.  See
-``winter-harness:/architecture/error-handling.md`` — "when bool/data is honest".
+``winter-context:/architecture/error-handling.md`` — "when bool/data is honest".
 """
 
 from __future__ import annotations
