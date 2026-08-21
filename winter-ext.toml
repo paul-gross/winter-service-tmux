@@ -1,6 +1,12 @@
 name = "winter-service-tmux"
 prefix = "wst"
 
+# Service orchestration is in scope only while a session is bringing services up,
+# reading their logs, or developing this provider — so the entry point is a link
+# an agent follows then, not context injected into every session.
+description = "tmux service orchestration — read when setting up, operating, or developing the tmux service provider."
+load = "lazy"
+
 doctor = "workflow/doctor.sh"
 orchestrate_services = "workflow/orchestrate"
 
