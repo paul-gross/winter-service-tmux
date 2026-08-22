@@ -45,16 +45,11 @@ When an agent spins up a feature environment, it runs `./up` to start all the se
 `config.toml` tells the orchestrator exactly what to launch and in which tmux pane. Without it, `./up` errors out in
 every worktree.
 
-This extension does **not** own the environment. Winter-cli core computes each scope's environment and injects it into
-the provider process; the injected variable list and the per-action injection matrix are owned by
-`workspace:/context/winter-cli/contracts/service-orchestrator.md`. On `restart` — an action that does not receive a
-fresh provider-level injection — the relaunched pane self-sources its env via `eval "$(winter env <scope>)"`, the same
-mechanism every pane uses on `up`. Each pane's launch line includes this self-source prefix so panes always carry the
-correct scope env regardless of which action started them; no `.winter.env` file is written or sourced by core. When you
-run services directly from an env directory (e.g. `alpha/up`), the entry shim sources `eval "$(winter env <env>)"`
-before launching the orchestrator, so the process environment is already populated. The `env_file` key in `config.toml`
-is optional: set it only when a service command or health probe needs additional vars from a local file (e.g.
-machine-specific secrets) beyond what core injects.
+This extension follows the runtime contract in `workspace:/context/winter-cli/contracts/service-orchestrator.md` and
+`winter-service-tmux:/context/service-rules.md`: each lifecycle operation resolves the current canonical scope and
+configured `env_file` sources. Mapped panes source those values and resolve `[service.env]` for that launch; URL/CMD
+health checks apply the same rules again when status runs. The `env_file` key is optional and is relative to the
+applicable scope root.
 
 ## Prerequisites
 
@@ -153,11 +148,11 @@ doesn't cover. Resolve:
   least that long — the dumb, last-resort signal for a service with no HTTP endpoint, cheap readiness command, or
   distinctive ready-line, also rejected by the validator on an interactive service (no process to measure). See
   `winter-service-tmux:/workflow/config.toml.example` for the full schema. `${VAR}` placeholders in the `target` string
-  resolve from the injected env (core WINTER_* vars and the scope's env-var band entries) for `url`/`cmd` probes; bare
-  `$VAR` is not interpolated. EXCEPTION: `type = "log"`'s `target` (a regex) and `type = "uptime"`'s `target` (a
-  duration) are both used VERBATIM — never `${VAR}`-interpolated. Default timeout is 5 seconds (unused by
-  `log`/`uptime`, neither of which has I/O to time out); omit `timeout` unless non-default. Omit the probe when the
-  service has no observable readiness signal.
+  resolve from the unified runtime environment (canonical scope vars, shell-evaluated `env_file`, then `[service.env]`)
+  for `url`/`cmd` probes; bare `$VAR` is not interpolated. EXCEPTION: `type = "log"`'s `target` (a regex) and
+  `type = "uptime"`'s `target` (a duration) are both used VERBATIM — never `${VAR}`-interpolated. Default timeout is 5
+  seconds (unused by `log`/`uptime`, neither of which has I/O to time out); omit `timeout` unless non-default. Omit the
+  probe when the service has no observable readiness signal.
 - **startup retry** — `retries` (max re-launch attempts after the first failure) and optional `retry_delay` (seconds
   between attempts, default 2). Include only for services likely to fail transiently on boot. This policy is honored by
   `winter service up` — and by the env-root `./up`, which delegates to it (the `--wait` gate is the one flag `./up` does
@@ -167,9 +162,14 @@ doesn't cover. Resolve:
   (e.g. `"workspace/db"`) resolves to another provider's service (e.g. a docker workspace singleton) through the same
   `winter service status` seam. Only include it when the service set actually has a startup-ordering dependency (e.g. a
   migration/build step, or a database owned by another provider) — most services need none.
-- **env_file** — a path relative to the worktree root if any service command or health probe needs vars beyond core
-  injection (WINTER_* base vars and the scope's env-var band entries are auto-injected; no env_file is needed for
-  those). Omit if not needed.
+- **env_file** — a path relative to the applicable scope root if any service command or health probe needs vars beyond
+  the canonical scope source (WINTER_* base vars and the scope's env-var band entries). It is relative to the
+  feature-env root for project services and the workspace root for workspace services. Unmapped panes source the file
+  directly; mapped services source it before resolving `[service.env]`. Health checks evaluate current sources with the
+  same shell model. Omit if not needed.
+- **[service.env]** — optional per-service environment mapping. Decide whether each service needs renamed, derived, or
+  machine-local values beyond the canonical scope and `env_file`; values use `${VAR}` interpolation and are applied only
+  to that service. Include it in the proposal when needed and describe any `config.local.toml` overrides.
 
 If a field genuinely cannot be resolved from either the caller's facts or the project (e.g. a bespoke start command with
 no evidence anywhere), ask the user specifically about that one thing before presenting the proposal.
@@ -180,8 +180,8 @@ ad-hoc commands?"**
 Then **present the full proposed wiring** and ask **one** question:
 
 **"Here's how I'll wire your per-env services — for each: pane target, `cmd`, `cwd` (if any), port (if any), health
-probe (if any), startup policy (if any), and `depends_on` (if any); plus `env_file` if needed and the layout the hook
-will create. Confirm, or tell me what to change?"**
+probe (if any), startup policy (if any), `depends_on` (if any), and `[service.env]` mapping (if needed); plus `env_file`
+and the layout the hook will create. Confirm, or tell me what to change?"**
 
 - "confirm": apply (below).
 - changes: fold in the user's corrections and re-present the proposal until they confirm.
@@ -194,7 +194,10 @@ On confirmation, **update `config.toml` and write `layout-hook.sh`**, following 
   `config.toml`.
 - `[service.health]` and `[service.startup]` subtables must be placed immediately after their parent `[[service]]`,
   before the next `[[service]]`.
-- `${VAR}` placeholders in health `target` strings resolve from the injected env; bare `$VAR` is not interpolated.
+- Place `[service.env]` immediately after its parent `[[service]]` (and before other service subtables) when a mapping
+  is needed; keep its keys in the order proposed.
+- `${VAR}` placeholders in health `target` strings resolve from the unified runtime environment; bare `$VAR` is not
+  interpolated. Unresolved service mappings are reported by lifecycle preflight, not inferred from the env_file alone.
   EXCEPTION: `type = "log"` (a regex) and `type = "uptime"` (a duration) targets are used VERBATIM and are never
   `${VAR}`-interpolated.
 - The layout hook must only create windows and panes — do not `tmux send-keys`, source env files, or `cd` in the hook;
@@ -227,8 +230,8 @@ Workspace pane targets are independent of per-env targets — the same address m
 
 Then **present the full proposed wiring** and ask **one** question:
 
-**"Here's how I'll wire your workspace singletons — for each: pane target, `cmd`, and `scope = "workspace"`. Confirm, or
-tell me what to change?"**
+**"Here's how I'll wire your workspace singletons — for each: pane target, `cmd`, `scope = "workspace"`, and
+`[service.env]` mapping (if needed). Confirm, or tell me what to change?"**
 
 - "confirm": apply.
 - changes: fold in the user's corrections and re-present until they confirm.
@@ -286,7 +289,8 @@ Ask **one** question:
 Summarise everything that happened in a single message:
 
 - `config.toml` location: `workspace:/.winter/config/winter-service-tmux/config.toml` (created / replaced / unchanged)
-- `env_file` (value or "unset")
+- `env_file` (value or "unset", relative to the applicable scope root)
+- `[service.env]` mappings (service names and keys, or "none")
 - Services declared (names and targets)
 - `layout-hook.sh`: `workspace:/.winter/config/winter-service-tmux/layout-hook.sh` (written / unchanged)
 - Workspace services declared (names and targets, or "none")

@@ -65,6 +65,20 @@ def test_cmd_health_exit_zero_is_healthy(monkeypatch) -> None:  # type: ignore[n
     assert calls[0][1]["cwd"] == cwd
 
 
+def test_cmd_health_receives_effective_environment(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    calls = []
+
+    def _run(*args, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append((args, kwargs))
+        return subprocess.CompletedProcess(args=args, returncode=0)
+
+    monkeypatch.setattr("subprocess.run", _run)
+    checker = SubprocessHealthChecker()
+
+    assert checker.is_healthy(Health(type=HealthType.CMD, target="check $PORT"), {"PORT": "4100"})
+    assert calls[0][1]["env"] == {"PORT": "4100"}
+
+
 def test_cmd_health_nonzero_is_unhealthy(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     def _run(*args, **kwargs):  # type: ignore[no-untyped-def]
         return subprocess.CompletedProcess(args=args, returncode=1)

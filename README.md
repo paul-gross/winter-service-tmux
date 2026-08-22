@@ -37,7 +37,9 @@ conflicts.
   honored as a manual override for the rare residual case where `WINTER_SERVICE_PREFIX` is somehow absent (e.g. a
   collision on a shared machine, or running this provider's CLI directly outside `winter service` dispatch) — see
   `context/service-rules.md` for the fuller picture — but it isn't part of normal setup. An optional gitignored
-  `config.local.toml` in the same directory overlays per-machine overrides on top.
+  `config.local.toml` in the same directory overlays per-machine overrides on top. Each service can also declare an
+  additive `[service.env]` mapping with `${NAME}` interpolation for per-service values. See
+  `workflow/config.toml.example` and `context/service-rules.md` for precedence, local overrides, and health behavior.
 - **Python orchestrator** — a stdlib-only Python package (`src/service_orchestrator/`) implements this provider's
   `up`/`down`/`status`/`restart` lifecycle, which winter invokes through capability dispatch, consuming the TOML
   manifest via the `service_manifest` reader. (The env-root scripts are thin doors that delegate to `winter service`;

@@ -10,11 +10,13 @@ Resolution decisions (see ``00-plan.md`` resolved decisions #1, #2, R1):
 - ``layout_hook`` / ``workspace_layout_hook`` are resolved relative to the
   **config dir** — they are bare filenames in the manifest.
 - Env file path is resolved relative to the **worktree dir** (per-env file).
-- ``inject_scope=None`` is the local/env-less signal for pane scope-sourcing.
+- ``inject_scope=None`` is the local/env-less signal for pane scope-sourcing;
+  the workspace singleton uses the explicit ``"workspace"`` scope.
 - ``env_file_path`` is the resolved absolute path to the manifest machine-creds
   file (``manifest.env_file`` joined to ``worktree_dir``); it drives POSIX
   dot-sourcing in the pane launch prefix and is set independently of
   ``skip_env_file`` (which only governs in-process ``env_vars`` resolution).
+  The orchestrator evaluates that same shell source for preflight and health.
 
 Extension-declared services
 ----------------------------
@@ -99,10 +101,10 @@ class SessionContextBuilder:
                 resolved, as a ``Path | None``).  Pass ``None`` explicitly to
                 force no env file.  Omit (pass the sentinel) to let the
                 manifest's ``env_file`` field drive resolution.
-            skip_env_file: When ``True``, in-process env-file resolution is
-                skipped and ``env_vars`` is set to ``None`` (the path used by
-                ``env_cli.py``).  ``env_file_path`` is still set from the
-                manifest — it drives pane dot-sourcing independently.
+            skip_env_file: When ``True``, ``env_vars`` is set to ``None`` (the
+                path used by ``env_cli.py``). ``env_file_path`` is still set
+                from the manifest — it drives pane dot-sourcing and the
+                orchestrator's runtime environment snapshot independently.
         """
         ws_root = workspace_root if workspace_root is not None else self._locator.workspace_root()
         cfg_dir = self._locator.config_dir()
@@ -116,11 +118,9 @@ class SessionContextBuilder:
 
         if skip_env_file:
             env_vars: dict[str, str] | None = None
-        elif env_file_override is not _SENTINEL:
-            env_vars = self._env_reader.resolve(env_file_override)  # type: ignore[arg-type]
         else:
-            # Derive from manifest declaration: resolve relative to worktree.
-            env_vars = self._env_reader.resolve(env_file_path)
+            resolved_path = env_file_override if env_file_override is not _SENTINEL else env_file_path
+            env_vars = self._env_reader.resolve(resolved_path)  # type: ignore[arg-type]
 
         return SessionContext(
             env=env,
@@ -151,9 +151,10 @@ class SessionContextBuilder:
 
         The session's services/layout are selected from the manifest's
         ``workspace_*`` fields, so ``OrchestratorService`` consumes them
-        identically to a feature-env session.  No env file is loaded
-        (``env_vars=None``, ``env_file_path=None`` — workspace services do not
-        dot-source a per-env machine-creds file).
+        identically to a feature-env session. The global env file path and
+        canonical workspace scope are retained for mapped services and health
+        evaluation; the orchestrator keeps unmapped workspace pane and hook
+        launches on their historical source-free path.
         """
         ws_root = workspace_root if workspace_root is not None else self._locator.workspace_root()
         cfg_dir = self._locator.config_dir()
@@ -169,8 +170,8 @@ class SessionContextBuilder:
             layout_hook=manifest.workspace_layout_hook,
             logs=manifest.logs,
             env_vars=None,
-            inject_scope=None,
-            env_file_path=None,
+            inject_scope=WORKSPACE_TARGET,
+            env_file_path=ws_root / manifest.env_file if manifest.env_file is not None else None,
         )
 
 
@@ -238,9 +239,11 @@ def build_for_target(
         target: Either ``WORKSPACE_TARGET`` or a feature-env name (e.g. ``"alpha"``).
         workspace_root: Optional workspace root override forwarded to the
             underlying builder method.
-        skip_env_file: When ``True``, forwarded to ``builder.build()`` so that
-            env-file reading is skipped on the status path.  Ignored for the
-            workspace target (``build_workspace`` never reads an env file).
+            skip_env_file: When ``True``, forwarded to ``builder.build()`` so
+            that the builder does not read the env_file on the dispatched
+            path. The orchestrator later evaluates the same shell source when
+            a lifecycle operation needs it. Ignored for the workspace target
+            (``build_workspace`` never reads an env file).
     """
     if target == WORKSPACE_TARGET:
         return builder.build_workspace(workspace_root=workspace_root)

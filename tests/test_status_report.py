@@ -10,6 +10,7 @@ Covers:
 from __future__ import annotations
 
 import shlex
+import subprocess
 import sys
 from pathlib import Path
 
@@ -88,7 +89,7 @@ def test_build_launch_line_empty_command_banner_only_without_scope() -> None:
 
 
 def test_build_launch_line_with_scope_and_env_file() -> None:
-    """Combo: scope + env_file_path → eval before dot-source before banner."""
+    """Combo without mappings: scope + env_file_path retains the plain dot-source."""
     env_file = Path("/workspace/alpha/.env.local")
     line = build_launch_line(_WORKTREE, _SCOPE, "backend", "npm run start:dev", env_file_path=env_file)
     expected = (
@@ -97,6 +98,92 @@ def test_build_launch_line_with_scope_and_env_file() -> None:
         f" && echo {shlex.quote('=== backend ===')} && npm run start:dev"
     )
     assert line == expected
+
+
+def test_build_launch_line_exports_service_env_after_env_file_before_banner() -> None:
+    env_file = Path("/workspace/alpha/.env.local")
+    line = build_launch_line(
+        _WORKTREE,
+        _SCOPE,
+        "backend",
+        "npm run start:dev",
+        env_file_path=env_file,
+        service_env={"PORT": "4100", "GREETING": "hello world"},
+    )
+    parts = line.split(" && ")
+
+    assert parts[2] == "set -a"
+    assert parts[3] == f". {shlex.quote(str(env_file))}"
+    assert parts[4] == "set +a"
+    assert parts[5] == "export PORT=4100"
+    assert parts[6] == "export GREETING='hello world'"
+    assert parts[7] == f"echo {shlex.quote('=== backend ===')}"
+
+
+def test_build_launch_line_quotes_resolved_mapping_values() -> None:
+    line = build_launch_line(
+        _WORKTREE,
+        None,
+        "backend",
+        "cmd",
+        service_env={"PORT": "4100", "URL": "http://localhost:4100/health", "EMPTY": ""},
+    )
+
+    assert "export PORT=4100" in line
+    assert "export URL=http://localhost:4100/health" in line
+    assert "export EMPTY=''" in line
+
+
+def test_build_launch_line_mapping_expansion_is_shell_safe() -> None:
+    line = build_launch_line(
+        Path("/"),
+        None,
+        "backend",
+        'printf "%s|%s|%s" "$PORT" "$URL" "$GREETING"',
+        service_env={
+            "PORT": "4100",
+            "URL": "http://localhost:4100/health",
+            "GREETING": "hello; printf hacked",
+        },
+    )
+
+    result = subprocess.run(["sh", "-c", line], env={"BASE_PORT": "4100"}, capture_output=True, text=True, check=False)
+
+    assert result.returncode == 0
+    assert result.stdout == "=== backend ===\n4100|http://localhost:4100/health|hello; printf hacked"
+
+
+def test_build_launch_line_resolves_mapping_from_one_pane_env_file_evaluation(tmp_path: Path) -> None:
+    counter = tmp_path / "counter"
+    env_file = tmp_path / ".winter.env"
+    env_file.write_text(
+        f"TOKEN=$(printf x >> {shlex.quote(str(counter))}; printf pane)\n",
+        encoding="utf-8",
+    )
+    line = build_launch_line(
+        Path("/"),
+        None,
+        "backend",
+        'printf "%s|%s" "$COPY" "$SECOND"',
+        env_file_path=env_file,
+        service_env={"COPY": "value-${TOKEN}", "SECOND": "${COPY}"},
+        evaluate_env_file=True,
+        expand_service_references=True,
+    )
+
+    result = subprocess.run(["sh", "-c", line], capture_output=True, text=True, check=False)
+
+    assert result.returncode == 0
+    assert result.stdout == "=== backend ===\nvalue-pane|value-pane"
+    assert counter.read_text(encoding="utf-8") == "x"
+
+
+def test_build_launch_line_treats_mapping_values_as_data() -> None:
+    line = build_launch_line(Path("/"), None, "backend", 'test "$PORT" = \'${MISSING}\'', service_env={"PORT": "${MISSING}"})
+
+    result = subprocess.run(["sh", "-c", line], env={}, capture_output=True, text=True, check=False)
+
+    assert result.returncode == 0
 
 
 def test_build_launch_line_scope_only_no_env_file() -> None:
@@ -108,7 +195,7 @@ def test_build_launch_line_scope_only_no_env_file() -> None:
 
 
 def test_build_launch_line_env_file_only_no_scope() -> None:
-    """scope=None, env_file_path set → dot-source but no eval."""
+    """scope=None, env_file_path set → plain dot-source but no eval."""
     env_file = Path("/workspace/alpha/.env.local")
     line = build_launch_line(_WORKTREE, None, "backend", "cmd", env_file_path=env_file)
     expected = (
@@ -139,7 +226,7 @@ def test_build_launch_line_env_file_dot_source_uses_posix_dot() -> None:
 
 
 def test_build_launch_line_env_file_before_banner() -> None:
-    """Ordering: cd → eval → . env_file → echo banner → cmd."""
+    """Ordering: cd → eval → env_file → echo banner → cmd."""
     env_file = Path("/workspace/alpha/.env.local")
     line = build_launch_line(_WORKTREE, _SCOPE, "svc", "cmd", env_file_path=env_file)
     parts = line.split(" && ")

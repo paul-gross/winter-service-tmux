@@ -10,10 +10,13 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 from typing import IO
 
+from service_manifest.modules.manifest.env import is_valid_env_name, malformed_references, resolve_service_env
 from service_manifest.modules.manifest.model import HealthType, LogMode, Service, parse_port_expression
 from service_orchestrator.core.winter_cli import DependencyStatus, IWinterCli, WinterCliUnavailableError
+from service_orchestrator.modules.orchestrate.environment_source import IEnvironmentSource, ProcessEnvironmentSource
 from service_orchestrator.modules.orchestrate.errors import OrchestratorError
 from service_orchestrator.modules.orchestrate.follow_clock import IFollowClock
 from service_orchestrator.modules.orchestrate.health_checker import IHealthChecker
@@ -27,6 +30,7 @@ from service_orchestrator.modules.orchestrate.status_report import (
     build_launch_line,
     build_service_status,
     last_non_blank_line,
+    launch_cwd,
     truncate_status_line,
 )
 from service_orchestrator.modules.orchestrate.tmux_repository import ITmuxRepository
@@ -232,6 +236,7 @@ class OrchestratorService:
         winter_cli: IWinterCli | None = None,
         stdout: IO[str] | None = None,
         stderr: IO[str] | None = None,
+        environment_source: IEnvironmentSource | None = None,
     ) -> None:
         self._tmux = tmux
         self._reaper = reaper
@@ -240,6 +245,7 @@ class OrchestratorService:
         self._health_checker = health_checker
         self._clock = clock
         self._winter_cli = winter_cli
+        self._environment_source = environment_source or ProcessEnvironmentSource()
         self._stdout: IO[str] = stdout if stdout is not None else sys.stdout
         self._stderr: IO[str] = stderr if stderr is not None else sys.stderr
 
@@ -287,6 +293,21 @@ class OrchestratorService:
                 return 0
             return self._up_partial_existing(ctx, target_services, retry=retry)
 
+        # A newly-created session will receive one line for every selected
+        # service after the hook has established its panes. Resolve those
+        # lines before creating the session so a preflight failure cannot
+        # leave lifecycle state behind.
+        ordered_services = _topological_order(target_services, ctx.env)
+        launch_lines = self._launch_lines_for(ctx, tuple(ordered_services))
+
+        hook_path: Path | None = None
+        hook_env: dict[str, str] | None = None
+        if ctx.layout_hook is not None:
+            hook_path = ctx.config_dir / ctx.layout_hook
+            # Build the hook's historical provider-process environment before
+            # creating the session; service mappings apply only to panes.
+            hook_env = self._build_hook_env(ctx)
+
         # Prune old rotated log segments opportunistically before starting.
         # Errors are swallowed so a prune failure never blocks up().
         try:
@@ -304,8 +325,8 @@ class OrchestratorService:
 
         hook_ok = True
         if ctx.layout_hook is not None:
-            hook_path = ctx.config_dir / ctx.layout_hook
-            hook_env = self._build_hook_env(ctx)
+            assert hook_path is not None
+            assert hook_env is not None
             try:
                 self._hook_runner.run(hook_path, hook_env, ctx.worktree_dir)
             except OrchestratorError as exc:
@@ -332,7 +353,7 @@ class OrchestratorService:
         existing_targets = {p.target for p in pane_infos}
         missing_targets = [
             f"{svc.name}@{svc.target.window}.{svc.target.pane}"
-            for svc in ctx.services
+            for svc in target_services
             if f"{svc.target.window}.{svc.target.pane}" not in existing_targets
         ]
         if missing_targets:
@@ -348,7 +369,7 @@ class OrchestratorService:
         # Ensure the log directory exists before starting any captured services.
         self._log_repo.ensure_log_dir(ctx.worktree_dir)
 
-        for svc in _topological_order(target_services, ctx.env):
+        for svc in ordered_services:
             try:
                 unmet = self._await_dependencies(ctx, svc)
             except WinterCliUnavailableError as exc:
@@ -360,14 +381,14 @@ class OrchestratorService:
                 self._stderr.flush()
                 return 1
             target = f"{svc.target.window}.{svc.target.pane}"
-            line = self._launch_line_for(ctx, svc)
+            line = launch_lines[svc.name]
             self._tmux.send_keys(ctx.session, target, line)
 
         self._stdout.write(f"Started services in tmux session '{ctx.session}'\n")
         self._stdout.flush()
 
         if retry:
-            failed = self._await_startup(ctx, pane_pids, target_services)
+            failed = self._await_startup(ctx, pane_pids, target_services, launch_lines)
             if failed:
                 self._stderr.write(f"Services failed to stay up after retries: {', '.join(failed)}\n")
                 self._stderr.flush()
@@ -375,7 +396,13 @@ class OrchestratorService:
 
         return 0 if hook_ok else 1
 
-    def _up_partial_existing(self, ctx: SessionContext, target_services: tuple[Service, ...], *, retry: bool) -> int:
+    def _up_partial_existing(
+        self,
+        ctx: SessionContext,
+        target_services: tuple[Service, ...],
+        *,
+        retry: bool,
+    ) -> int:
         """Launch the not-already-running subset of *target_services* into an
         already-running session.
 
@@ -391,16 +418,25 @@ class OrchestratorService:
         pane_infos = self._tmux.list_panes(ctx.session)
         pane_map: dict[str, int] = {p.target: p.pid for p in pane_infos}
 
+        launchable: list[Service] = []
+        for svc in _topological_order(target_services, ctx.env):
+            target = f"{svc.target.window}.{svc.target.pane}"
+            pane_pid = pane_map.get(target)
+            if pane_pid is not None and not self._reaper.has_children(pane_pid):
+                launchable.append(svc)
+
+        # Determine the stopped panes first. Only these services can receive a
+        # launch line, so an unresolved mapping on an already-running or
+        # missing service cannot block the launchable subset.
+        launch_lines = self._launch_lines_for(ctx, tuple(launchable))
         self._log_repo.ensure_log_dir(ctx.worktree_dir)
 
         launched_pane_pids: dict[str, int] = {}
-        for svc in _topological_order(target_services, ctx.env):
+        for svc in launchable:
             target = f"{svc.target.window}.{svc.target.pane}"
             pane_pid = pane_map.get(target)
             if pane_pid is None:
                 continue
-            if self._reaper.has_children(pane_pid):
-                continue  # already running — leave untouched
             try:
                 unmet = self._await_dependencies(ctx, svc)
             except WinterCliUnavailableError as exc:
@@ -411,7 +447,7 @@ class OrchestratorService:
                 self._stderr.write(f"up: service '{svc.name}' timed out waiting for dependency '{unmet}'\n")
                 self._stderr.flush()
                 return 1
-            line = self._launch_line_for(ctx, svc)
+            line = launch_lines[svc.name]
             self._tmux.send_keys(ctx.session, target, line)
             launched_pane_pids[target] = pane_pid
 
@@ -419,7 +455,7 @@ class OrchestratorService:
         self._stdout.flush()
 
         if retry:
-            failed = self._await_startup(ctx, launched_pane_pids, target_services)
+            failed = self._await_startup(ctx, launched_pane_pids, target_services, launch_lines)
             if failed:
                 self._stderr.write(f"Services failed to stay up after retries: {', '.join(failed)}\n")
                 self._stderr.flush()
@@ -427,41 +463,133 @@ class OrchestratorService:
 
         return 0
 
-    def _launch_line_for(self, ctx: SessionContext, svc: Service) -> str:
-        """Return the captured-vs-bare launch line for *svc*.
+    def _launch_lines_for(
+        self,
+        ctx: SessionContext,
+        services: tuple[Service, ...],
+        *,
+        capture_logs: bool = True,
+    ) -> dict[str, str]:
+        """Resolve all selected mappings before any lifecycle mutation.
 
-        Captured: non-empty command AND log=FILE → writer-wrapped.
-        Bare: empty command OR log!=FILE → plain launch line.
-
-        Each pane self-sources its scope environment via
-        ``eval "$(winter env <scope>)"`` when *ctx.inject_scope* is not ``None``.
-        When *ctx.env_file_path* is not ``None``, the manifest machine-creds
-        file is also dot-sourced after the scope eval.
-        Local/env-less mode (``inject_scope=None``, ``env_file_path=None``)
-        omits both prefixes.
+        ``capture_logs=False`` keeps restart's historical bare-command
+        behavior while sharing the same preflight and launch-line assembly.
         """
-        captured = bool(svc.cmd) and svc.log == LogMode.FILE
-        if captured:
-            logfile = self._log_repo.log_path(ctx.worktree_dir, svc.name)
-            return build_launch_line(
+
+        lines: dict[str, str] = {}
+        for svc in services:
+            mapping = self._service_environment(svc)
+            self._resolved_service_mapping(ctx, svc, mapping=mapping)
+            captured = capture_logs and bool(svc.cmd) and svc.log == LogMode.FILE
+            logfile = self._log_repo.log_path(ctx.worktree_dir, svc.name) if captured else None
+            pane_uses_sources = ctx.env != WORKSPACE_TARGET or bool(mapping)
+            lines[svc.name] = build_launch_line(
                 ctx.worktree_dir,
-                ctx.inject_scope,
+                ctx.inject_scope if pane_uses_sources else None,
                 svc.name,
                 svc.cmd,
-                env_file_path=ctx.env_file_path,
+                env_file_path=ctx.env_file_path if pane_uses_sources else None,
                 logfile=logfile,
-                rotate_size_bytes=ctx.logs.rotate_size_bytes,
-                max_rotations=ctx.logs.max_rotations,
+                rotate_size_bytes=ctx.logs.rotate_size_bytes if captured else None,
+                max_rotations=ctx.logs.max_rotations if captured else None,
                 cwd=svc.cwd,
+                service_env=mapping,
+                evaluate_env_file=bool(mapping),
+                expand_service_references=True,
             )
-        return build_launch_line(
-            ctx.worktree_dir,
-            ctx.inject_scope,
-            svc.name,
-            svc.cmd,
-            env_file_path=ctx.env_file_path,
-            cwd=svc.cwd,
+        return lines
+
+    @staticmethod
+    def _service_environment(svc: Service) -> dict[str, str]:
+        """Validate and return one service's additive environment mapping."""
+        for key, value in svc.env.items():
+            if not isinstance(key, str) or not is_valid_env_name(key):
+                raise OrchestratorError(f"service '{svc.name}': env key {key!r} is not a valid POSIX name")
+            if not isinstance(value, str):
+                raise OrchestratorError(
+                    f"service '{svc.name}': env.{key} must be a string, got {type(value).__name__}"
+                )
+            if "\x00" in value:
+                raise OrchestratorError(f"service '{svc.name}': env.{key} contains a NUL byte")
+            malformed = malformed_references(value)
+            if malformed:
+                raise OrchestratorError(
+                    f"service '{svc.name}': env.{key} has malformed variable reference {malformed[0]!r}"
+                )
+        return dict(svc.env)
+
+    def _runtime_environment(
+        self, ctx: SessionContext, *, cwd: Path | None = None, include_env_file: bool = True
+    ) -> dict[str, str]:
+        """Build one scope-then-env_file baseline at *cwd*.
+
+        A service's mapping and health probe must use the cwd where its launch
+        line starts. Callers that need a service snapshot pass
+        ``launch_cwd(ctx.worktree_dir, svc.cwd)``; the omitted cwd is reserved
+        for scope-level consumers such as the layout hook and port base.
+        """
+        runtime_cwd = ctx.worktree_dir if cwd is None else cwd
+        effective = dict(ctx.env_vars) if ctx.env_vars is not None else dict(os.environ)
+        if ctx.inject_scope is not None:
+            effective = self._environment_source.scope_environment(
+                ctx.inject_scope,
+                cwd=runtime_cwd,
+                base=effective,
+            )
+        if include_env_file and ctx.env_file_path is not None:
+            effective = self._environment_source.env_file_environment(
+                ctx.env_file_path,
+                cwd=runtime_cwd,
+                base=effective,
+            )
+        return effective
+
+    def _resolved_service_mapping(
+        self,
+        ctx: SessionContext,
+        svc: Service,
+        *,
+        base_environment: dict[str, str] | None = None,
+        mapping: dict[str, str] | None = None,
+    ) -> dict[str, str]:
+        mapping = self._service_environment(svc) if mapping is None else mapping
+        if not mapping:
+            return {}
+        effective = (
+            dict(base_environment)
+            if base_environment is not None
+            else self._runtime_environment(ctx, cwd=launch_cwd(ctx.worktree_dir, svc.cwd))
         )
+        resolved, unresolved = resolve_service_env(mapping, effective)
+        if unresolved:
+            details = ", ".join(f"env.{key} -> ${{{variable}}}" for key, variable in unresolved)
+            raise OrchestratorError(f"service '{svc.name}': unresolvable service environment reference(s): {details}")
+        return resolved
+
+    def _effective_service_environment(
+        self,
+        ctx: SessionContext,
+        svc: Service,
+        *,
+        base_environment: dict[str, str] | None = None,
+    ) -> dict[str, str]:
+        """Return the exact environment snapshot passed to health probes."""
+        effective = (
+            dict(base_environment)
+            if base_environment is not None
+            else (
+                self._runtime_environment(ctx, cwd=launch_cwd(ctx.worktree_dir, svc.cwd))
+                if self._service_needs_runtime_environment(ctx, svc)
+                else self._process_environment(ctx)
+            )
+        )
+        mapping = self._service_environment(svc)
+        resolved, unresolved = resolve_service_env(mapping, effective)
+        if unresolved:
+            details = ", ".join(f"env.{key} -> ${{{variable}}}" for key, variable in unresolved)
+            raise OrchestratorError(f"service '{svc.name}': unresolvable service environment reference(s): {details}")
+        effective.update(resolved)
+        return effective
 
     def _await_dependencies(self, ctx: SessionContext, svc: Service) -> str | None:
         """Block until every ``depends_on`` pattern declared by *svc* is ready.
@@ -518,7 +646,11 @@ class OrchestratorService:
             self._clock.sleep(_DEPENDS_ON_POLL_INTERVAL_SECONDS)
 
     def _await_startup(
-        self, ctx: SessionContext, pane_pids: dict[str, int], target_services: tuple[Service, ...]
+        self,
+        ctx: SessionContext,
+        pane_pids: dict[str, int],
+        target_services: tuple[Service, ...],
+        launch_lines: dict[str, str],
     ) -> list[str]:
         """Monitor startup candidates within *target_services* and re-launch those that die within retries.
 
@@ -557,7 +689,7 @@ class OrchestratorService:
             # Service is dead; attempt retries.
             assert svc.startup is not None  # guaranteed by candidates filter
             retries = svc.startup.retries
-            line = self._launch_line_for(ctx, svc)
+            line = launch_lines[svc.name]
             alive = False
             for attempt in range(1, retries + 1):
                 # Reap any descendants the dead launch may have orphaned before
@@ -659,6 +791,9 @@ class OrchestratorService:
         pane_map: dict[str, int] = {}
         if session_running:
             pane_map = {p.target: p.pid for p in self._tmux.list_panes(ctx.session)}
+        service_environments = self._service_environment_snapshots(ctx, in_scope)
+        port_environment = self._port_environment(ctx, in_scope)
+        self._preflight_service_mappings(ctx, in_scope, service_environments)
 
         svc_docs: list[dict] = []  # type: ignore[type-arg]
         for svc in in_scope:
@@ -675,18 +810,24 @@ class OrchestratorService:
             captured = bool(svc.cmd) and svc.log == LogMode.FILE
             log_path = str(self._log_repo.log_path(ctx.worktree_dir, svc.name)) if captured else None
 
-            health = self._service_health(svc, state, ctx, pane_pid=pane_pid)
-            resolved_port = _resolve_service_port(svc.port, self._port_base(ctx))
+            health = self._service_health(
+                svc,
+                state,
+                ctx,
+                pane_pid=pane_pid,
+                base_environment=service_environments.get(svc.name),
+            )
+            resolved_port = _resolve_service_port(svc.port, self._port_base(ctx, port_environment))
             ports = [resolved_port] if resolved_port is not None else None
             svc_docs.append(
                 build_service_status(svc.name, state, health=health, handle=handle, log_path=log_path, ports=ports)
             )
 
-        return build_env_status(ctx.env, ctx.session, self._port_base(ctx), svc_docs)
+        return build_env_status(ctx.env, ctx.session, self._port_base(ctx, port_environment), svc_docs)
 
     @staticmethod
-    def _port_base(ctx: SessionContext) -> int | None:
-        """Resolve the scope's port base from the injected env.
+    def _port_base(ctx: SessionContext, env_vars: dict[str, str] | None = None) -> int | None:
+        """Resolve the scope's port base from the unified runtime environment.
 
         Per-env scopes read ``WINTER_PORT_BASE`` (the env's own band); the
         workspace scope reads ``WINTER_WORKSPACE_PORT_BASE`` (the index-0 band)
@@ -694,7 +835,8 @@ class OrchestratorService:
         would always yield ``None``.  Returns ``None`` when the relevant variable
         is unset or non-integer.
         """
-        env_vars = ctx.env_vars or {}
+        if env_vars is None:
+            env_vars = dict(ctx.env_vars) if ctx.env_vars is not None else {}
         port_base_var = "WINTER_WORKSPACE_PORT_BASE" if ctx.env == WORKSPACE_TARGET else "WINTER_PORT_BASE"
         raw = env_vars.get(port_base_var)
         if raw is None:
@@ -720,6 +862,14 @@ class OrchestratorService:
             services: Optional tuple of service names to show.  Empty tuple
                 (the default) shows all services declared in the manifest.
         """
+        in_scope = ctx.services
+        if services:
+            requested = set(services)
+            in_scope = tuple(s for s in in_scope if s.name in requested)
+
+        service_environments = self._service_environment_snapshots(ctx, in_scope)
+        self._preflight_service_mappings(ctx, in_scope, service_environments)
+
         if not self._tmux.has_session(ctx.session):
             self._stdout.write(f"No {ctx.session} session running.\n")
             self._stdout.flush()
@@ -727,12 +877,6 @@ class OrchestratorService:
 
         pane_infos = self._tmux.list_panes(ctx.session)
         pane_map: dict[str, int] = {p.target: p.pid for p in pane_infos}
-
-        in_scope = ctx.services
-        if services:
-            requested = set(services)
-            in_scope = tuple(s for s in in_scope if s.name in requested)
-
         self._stdout.write(f"=== {ctx.env} ===\n")
 
         show_health = any(svc.health is not None for svc in in_scope)
@@ -740,7 +884,11 @@ class OrchestratorService:
         for svc in in_scope:
             target = f"{svc.target.window}.{svc.target.pane}"
             if target not in pane_map:
-                health_text = self._service_health(svc, "stopped", ctx) if svc.health is not None else "-"
+                health_text = (
+                    self._service_health(svc, "stopped", ctx, base_environment=service_environments.get(svc.name))
+                    if svc.health is not None
+                    else "-"
+                )
                 if show_health:
                     self._stdout.write(f"  {svc.name + ':':<14} {'missing':<8}  {health_text:<9}\n")
                 else:
@@ -750,7 +898,13 @@ class OrchestratorService:
             pane_pid = pane_map[target]
             running = self._reaper.has_children(pane_pid)
             status_str = "running" if running else "stopped"
-            health = self._service_health(svc, status_str, ctx, pane_pid=pane_pid)
+            health = self._service_health(
+                svc,
+                status_str,
+                ctx,
+                pane_pid=pane_pid,
+                base_environment=service_environments.get(svc.name),
+            )
             health_text = health if svc.health is not None else "-"
 
             captured = self._tmux.capture_pane(ctx.session, target)
@@ -765,7 +919,14 @@ class OrchestratorService:
         self._stdout.flush()
         return 0
 
-    def _service_health(self, svc: Service, state: str, ctx: SessionContext, pane_pid: int | None = None) -> str:
+    def _service_health(
+        self,
+        svc: Service,
+        state: str,
+        ctx: SessionContext,
+        pane_pid: int | None = None,
+        base_environment: dict[str, str] | None = None,
+    ) -> str:
         health = svc.health
         if health is None or self._health_checker is None:
             return "unknown"
@@ -778,9 +939,67 @@ class OrchestratorService:
             else None
         )
         healthy = self._health_checker.is_healthy(
-            health, ctx.env_vars, ctx.worktree_dir, log_source=log_source, uptime_seconds=uptime_seconds
+            health,
+            self._effective_service_environment(ctx, svc, base_environment=base_environment),
+            launch_cwd(ctx.worktree_dir, svc.cwd),
+            log_source=log_source,
+            uptime_seconds=uptime_seconds,
         )
         return "healthy" if healthy else "unhealthy"
+
+    @staticmethod
+    def _process_environment(ctx: SessionContext) -> dict[str, str]:
+        """Return the provider baseline without evaluating optional sources."""
+        return dict(ctx.env_vars) if ctx.env_vars is not None else dict(os.environ)
+
+    @staticmethod
+    def _service_needs_runtime_environment(ctx: SessionContext, svc: Service) -> bool:
+        """Whether one service needs a cwd-specific scope/env-file snapshot."""
+        if ctx.env == WORKSPACE_TARGET and not svc.env:
+            return svc.health is not None and svc.health.type in (HealthType.URL, HealthType.CMD)
+        return bool(svc.env) or (
+            svc.health is not None and svc.health.type in (HealthType.URL, HealthType.CMD)
+        )
+
+    def _service_environment_snapshots(
+        self,
+        ctx: SessionContext,
+        services: tuple[Service, ...],
+    ) -> dict[str, dict[str, str]]:
+        """Build independent runtime snapshots for selected mapping/health services."""
+        snapshots: dict[str, dict[str, str]] = {}
+        for svc in services:
+            if not self._service_needs_runtime_environment(ctx, svc):
+                continue
+            # Validate direct model construction before invoking shell adapters;
+            # this keeps runtime diagnostics deterministic for malformed values.
+            if svc.env:
+                self._service_environment(svc)
+            snapshots[svc.name] = self._runtime_environment(
+                ctx,
+                cwd=launch_cwd(ctx.worktree_dir, svc.cwd),
+            )
+        return snapshots
+
+    def _port_environment(self, ctx: SessionContext, services: tuple[Service, ...]) -> dict[str, str]:
+        """Resolve the scope-level environment used for declared port bases."""
+        if any(isinstance(svc.port, str) for svc in services):
+            # Unmapped port expressions use scope state only; an unrelated
+            # optional env_file must not make status fail.
+            return self._runtime_environment(ctx, include_env_file=False)
+        return self._process_environment(ctx)
+
+    def _preflight_service_mappings(
+        self,
+        ctx: SessionContext,
+        services: tuple[Service, ...],
+        service_environments: dict[str, dict[str, str]] | None = None,
+    ) -> None:
+        """Resolve selected mappings before status or health is reported."""
+        for svc in services:
+            if svc.env:
+                base_environment = service_environments.get(svc.name) if service_environments is not None else None
+                self._resolved_service_mapping(ctx, svc, base_environment=base_environment)
 
     def _log_source_for_health(self, svc: Service, ctx: SessionContext) -> str:
         """Return the captured-output text a ``log`` health probe matches against.
@@ -802,42 +1021,63 @@ class OrchestratorService:
         Raises ``OrchestratorError`` when *service_name* is not declared in
         the manifest or when the pane is not found in the running session.
         """
-        # Resolve the service from the manifest.
-        service = None
-        for svc in ctx.services:
-            if svc.name == service_name:
-                service = svc
-                break
+        return self.restart_services(ctx, (service_name,))
 
-        if service is None:
-            declared = ", ".join(s.name for s in ctx.services)
-            raise OrchestratorError(f"unknown service '{service_name}'; declared services: {declared}")
+    def restart_services(self, ctx: SessionContext, service_names: tuple[str, ...]) -> int:
+        """Preflight and restart several selected services as one operation.
 
-        target = f"{service.target.window}.{service.target.pane}"
+        Every selected mapping and launch line is resolved before looking up a
+        pane or reaping any child.  Dispatch uses this batch seam when the
+        concrete orchestrator provides it; the fallback in ``DispatchService``
+        preserves compatibility with older test doubles and embedders that
+        only implement ``restart``.
+        """
+        services, lines, pane_map = self._restart_plan(ctx, service_names)
+
+        for service in services:
+            target = f"{service.target.window}.{service.target.pane}"
+            self._reaper.reap_descendants([pane_map[target]])
+            self._tmux.send_keys(ctx.session, target, lines[service.name])
+            self._stdout.write(f"Restarted '{service.name}' in {ctx.session}:{target}\n")
+        self._stdout.flush()
+        return 0
+
+    def preflight_restart_services(self, ctx: SessionContext, service_names: tuple[str, ...]) -> None:
+        """Validate one scope's restart selection without mutating panes."""
+        self._restart_plan(ctx, service_names)
+
+    def _restart_plan(
+        self,
+        ctx: SessionContext,
+        service_names: tuple[str, ...],
+    ) -> tuple[list[Service], dict[str, str], dict[str, int]]:
+        """Resolve restart services, launch lines, and panes without mutation."""
+        by_name = {svc.name: svc for svc in ctx.services}
+        services: list[Service] = []
+        for service_name in service_names:
+            service = by_name.get(service_name)
+            if service is None:
+                declared = ", ".join(s.name for s in ctx.services)
+                raise OrchestratorError(f"unknown service '{service_name}'; declared services: {declared}")
+            services.append(service)
+
+        # Resolve every selected line before any pane lookup or reap. In
+        # particular, restart/logs do not receive scope bands from winter core;
+        # an unresolved mapping must not become a pane-only failure after the
+        # old process has already been stopped.
+        lines = self._launch_lines_for(ctx, tuple(services), capture_logs=False)
 
         pane_infos = self._tmux.list_panes(ctx.session)
         pane_map: dict[str, int] = {p.target: p.pid for p in pane_infos}
 
-        if target not in pane_map:
-            raise OrchestratorError(
-                f"pane '{target}' for service '{service_name}' not found in session '{ctx.session}'"
-            )
+        for service in services:
+            target = f"{service.target.window}.{service.target.pane}"
+            if target not in pane_map:
+                raise OrchestratorError(
+                    f"pane '{target}' for service '{service.name}' not found in session '{ctx.session}'"
+                )
 
-        pane_pid = pane_map[target]
-        self._reaper.reap_descendants([pane_pid])
-
-        line = build_launch_line(
-            ctx.worktree_dir,
-            ctx.inject_scope,
-            service.name,
-            service.cmd,
-            env_file_path=ctx.env_file_path,
-            cwd=service.cwd,
-        )
-        self._tmux.send_keys(ctx.session, target, line)
-        self._stdout.write(f"Restarted '{service_name}' in {ctx.session}:{target}\n")
-        self._stdout.flush()
-        return 0
+        return services, lines, pane_map
 
     def _prune(self, ctx: SessionContext) -> None:
         """Remove rotated log segments older than the retention window.
@@ -868,19 +1108,15 @@ class OrchestratorService:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _build_hook_env(ctx: SessionContext) -> dict[str, str]:
+    def _build_hook_env(self, ctx: SessionContext) -> dict[str, str]:
         """Build the environment dict passed to the layout hook.
 
         Provides the WINTER_TMUX_* contract documented in
         ``workflow/layout-hook.sh.example``.
         """
-        # base inherits WINTER_ENV_INDEX, WINTER_PORT_BASE, and all other
-        # core-injected vars directly from os.environ (set by core before
-        # invoking this subprocess on up/down/status).  No explicit pass-through
-        # from ctx.env_vars is needed: in every production call path ctx.env_vars
-        # is either dict(os.environ) (identical to base's source) or None.
-        base: dict[str, str] = dict(os.environ)
+        # Layout hooks keep their historical provider-process environment;
+        # service mappings apply only to pane launches and health probes.
+        base = dict(ctx.env_vars) if ctx.env_vars is not None else dict(os.environ)
         base["WINTER_TMUX_SESSION"] = ctx.session
         base["WINTER_TMUX_WORKTREE_DIR"] = str(ctx.worktree_dir)
         base["WINTER_ENV"] = ctx.env

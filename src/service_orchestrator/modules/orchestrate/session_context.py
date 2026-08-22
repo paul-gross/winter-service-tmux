@@ -47,12 +47,16 @@ class SessionContext:
         logs: Log-capture configuration.
         env_vars: Key-value mapping available in-process (used by the layout
             hook and port/health resolution), or ``None`` when not applicable.
-            For the ``winter service`` door this comes from the env file; for
-            the direct door it is ``os.environ`` (sourced by the entry shim).
+            The dispatched service door overlays this with ``os.environ``.
+            Runtime service-environment resolution obtains the canonical scope
+            and shell-sourced env_file snapshot through the orchestrator's
+            environment-source seam, so this field is not a parsed env-file
+            substitute.
         inject_scope: When not ``None``, each pane's launch prefix includes
             ``eval "$(winter env <inject_scope>)"`` so the pane shell
             self-sources the full scope environment.  ``None`` for local/env-
-            less mode (e.g. ``./up local``) and for the workspace session.
+            less mode (e.g. ``./up local``). The workspace context uses the
+            explicit ``"workspace"`` scope baseline.
         env_file_path: Absolute path to the manifest's machine-credentials env
             file (e.g. ``<worktree>/.env.local``), or ``None`` when the
             manifest declares no ``env_file``.  When not ``None``, each pane's
@@ -61,7 +65,9 @@ class SessionContext:
             (credentials not managed by core) are also available to service
             commands.  This is independent of ``inject_scope``: the file is
             sourced even when ``inject_scope`` is not ``None``, and vice versa.
-            ``None`` in local/env-less mode and for the workspace session.
+            ``None`` in local/env-less mode. Workspace services use the
+            canonical ``winter env workspace`` source and do not dot-source a
+            per-env machine-creds file.
     """
 
     env: str

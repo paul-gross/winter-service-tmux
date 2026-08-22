@@ -32,7 +32,7 @@ session as own, not a foreign collision.
 
 Add `scope = "workspace"` to a `[[service]]` entry in `workspace:/.winter/config/winter-service-tmux/config.toml`.
 `scope` is the only field that distinguishes a workspace singleton from a per-env service — it defaults to `"project"`
-when omitted, and every other field (`name`/`target`/`cmd`/`log`) is identical:
+when omitted, and every other field (`name`/`target`/`cmd`/`log`/`env`) is identical:
 
 ```toml
 workspace_layout_hook = "workspace-layout-hook.sh"
@@ -63,6 +63,8 @@ Key points:
   name.
 - **Overlay merging** — `config.local.toml` merges all `[[service]]` entries by `name` (any scope) using
   override-or-append; an override keeps/sets its own `scope`.
+- **Environment mappings** — workspace `[service.env]` values resolve against `winter env workspace` and the global
+  `env_file` at the workspace root. Unmapped workspace panes and layout hooks use the source-free launch path.
 - **Validation** — the bundled validator checks for duplicate names (global) and duplicate targets (per scope). Run it
   with `PYTHONPATH=src python3 -m service_manifest.cli validate <workspace-root>`.
 

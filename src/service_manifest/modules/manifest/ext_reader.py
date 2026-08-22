@@ -141,7 +141,9 @@ class ExtManifestMerger:
             else:
                 cmd = ""
 
-            svc = Service(name=name, target=target, cmd=cmd)
+            # Extension manifests do not carry service-specific environment
+            # mappings; keep the model's explicit empty default here.
+            svc = Service(name=name, target=target, cmd=cmd, env={})
             existing_names.add(name)
 
             if scope == "workspace":

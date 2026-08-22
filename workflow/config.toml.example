@@ -7,7 +7,8 @@
 # loads config.toml from the extension config dir, merges config.local.toml on
 # top (if present), and returns a validated ServiceManifest. Structural errors
 # (missing keys, malformed TOML) raise ManifestError. Semantic violations
-# (duplicate targets, unresolvable ${VAR}) are returned as a list by the validator.
+# (duplicate targets, invalid mapping names, malformed ${VAR}) are returned as a list by the validator. References that
+# depend on the dispatched scope are resolved during lifecycle preflight.
 #
 # The config dir is resolved via WINTER_EXT_CONFIG_DIR (set by winter on every
 # orchestrator dispatch) or falls back to
@@ -19,7 +20,7 @@
 # For machine-specific overrides that shouldn't be committed, add a sibling
 # config.local.toml in the same directory — the reader merges it on top using
 # the same overlay semantics (scalars replace; [[service]] merges keyed by
-# name). Keep it gitignored.
+# name; [service.env] keys merge additively). Keep it gitignored.
 
 # Session-name prefix — DEPRECATED, not part of normal setup. Tmux sessions
 # are named <prefix>-<env>, e.g. "mp" produces "mp-alpha", "mp-beta". The
@@ -33,14 +34,19 @@
 # machine); uncomment and hand-edit only if you specifically need that.
 # session_prefix = "mp"
 
-# Environment file for ${VAR} interpolation in health probe targets
-# (relative to the worktree root, optional). Omit when all required vars
-# come from core injection — WINTER_ENV / WINTER_ENV_INDEX /
-# WINTER_PORT_BASE and [env.workspace.vars] / [env.feature.vars] entries are exported inline to each
-# pane by the launch line, so no env_file is needed for those. Set only
+# Environment file for shell-expanded values used by service commands, mappings, and health probe targets
+# (relative to the applicable scope root, optional: the feature-env root for project services, or the workspace root
+# for workspace services). Omit when all required vars
+# come from the canonical scope source — WINTER_ENV / WINTER_ENV_INDEX /
+# WINTER_PORT_BASE and [env.workspace.vars] / [env.feature.vars] entries are
+# supplied by the canonical scope source, so no env_file is needed for those. Set only
 # when services need additional vars from a local file (e.g.
 # machine-specific credentials) or a health probe target uses ${VAR}
-# placeholders that reference file-sourced vars.
+# placeholders that reference file-sourced vars. Mappings use provider-side
+# POSIX shell preflight, then resolve against the pane's single source evaluation
+# so commands and mappings agree without putting file values in the tmux launch
+# line. URL/CMD health paths evaluate the current scope and env_file sources
+# when status runs. Services without mappings use plain sourcing.
 # env_file = ".env.local"
 
 # Optional bash layout hook — invoked once per ./up, AFTER the tmux session is
@@ -104,12 +110,22 @@ retention_seconds = 604800    # 7 days
 #              cwd = "apps/backend" instead of cmd = "cd apps/backend && npm run dev".
 #              An absolute path, or one that normalizes outside the scope root
 #              (e.g. "../other"), is rejected by the validator.
+#   [service.env] (optional) — additive environment variables exported in this
+#              service's pane after the global env_file is sourced and before
+#              the banner/command. Values are strings and may use ${NAME}
+#              interpolation against inherited/core scope variables, global
+#              env_file values, or earlier keys in this mapping. Direct
+#              assignments in cmd may still override these exports. Mapping
+#              values are not a secret store; use env_file for machine-local
+#              credentials. A config.local.toml overlay replaces matching
+#              committed keys, keeps omitted committed keys, and appends
+#              local-only keys in local declaration order.
 #   [service.health] (optional) — readiness probe reported in the status
 #              document's health field and the env-root ./status output. It is
 #              observability only: ./up does not wait for this probe.
 #              type = "url" sends an HTTP GET to target and passes on 2xx/3xx.
-#              type = "cmd" runs target as a shell command from the worktree
-#              root and passes on exit 0.
+#              type = "cmd" runs target as a shell command from the service's
+#              launch directory (including cwd) and passes on exit 0.
 #              type = "log" treats target as a regular expression and passes
 #              when it matches (re.search) the service's captured output: the
 #              tmux pane buffer for log = "pane" services, or a bounded tail of
@@ -119,8 +135,9 @@ retention_seconds = 604800    # 7 days
 #              Rejected by the validator on an empty-command (interactive)
 #              service — there is no captured output to match — and target
 #              must compile as a valid regex.
-#              target may contain ${VAR} placeholders resolved from env_file;
-#              bare $VAR is not interpolated. EXCEPTION: type = "log" targets
+#              target may contain ${VAR} placeholders resolved from the
+#              effective service environment (inherited/core vars, env_file,
+#              then [service.env]); bare $VAR is not interpolated. EXCEPTION: type = "log" targets
 #              are used VERBATIM — never interpolated — so regex syntax is
 #              never mangled by substitution.
 #              type = "uptime" treats target as a duration ("<N><unit>", unit
@@ -138,10 +155,9 @@ retention_seconds = 604800    # 7 days
 #              process, `./restart <svc>` (which reaps children and relaunches)
 #              naturally resets it. Rejected by the validator when target does
 #              not parse as a valid duration.
-#              Workspace-scoped services do not load env_file, so their health
-#              targets must not contain ${VAR} placeholders (does not apply to
-#              type = "log" or type = "uptime", neither of which is ever
-#              interpolated).
+#              Workspace-scoped services use the canonical `winter env workspace`
+#              baseline, so their health targets and [service.env] mappings may
+#              reference workspace-scope variables as well.
 #              timeout is optional seconds; default is 5 (unused by type = "log"
 #              and type = "uptime", neither of which has I/O to time out).
 #   port     (optional) — declared port for this service, surfaced in the
@@ -212,9 +228,13 @@ depends_on = ["workspace/db"]   # cross-provider: waits on a docker-owned worksp
                                  # (a service another bound provider declares — not this file's own
                                  # workspace singletons below, which happen to be named "docker"/"registry")
 
+[service.env]
+PORT = "${BACKEND_PORT}"
+LOG_LEVEL = "debug"
+
 [service.health]
 type = "url"
-target = "http://localhost:${BACKEND_PORT}/health"
+target = "http://localhost:${PORT}/health"
 timeout = 5
 
 [service.startup]

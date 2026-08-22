@@ -4,7 +4,14 @@ from pathlib import Path
 
 import pytest
 
-from service_manifest.modules.manifest.env import interpolate, parse_env_text, referenced_vars
+from service_manifest.modules.manifest.env import (
+    interpolate,
+    is_valid_env_name,
+    malformed_references,
+    parse_env_text,
+    referenced_vars,
+    resolve_service_env,
+)
 from service_manifest.modules.manifest.env_reader import EnvFileReader
 from service_manifest.modules.manifest.errors import ManifestError
 from tests.fakes import FakeFilesystemReader, _conforms_fake_filesystem_reader
@@ -210,6 +217,32 @@ def test_interpolate_no_placeholders() -> None:
     rendered, unresolved = interpolate("http://localhost:8080", {"PORT": "4100"})
     assert rendered == "http://localhost:8080"
     assert unresolved == []
+
+
+def test_resolve_service_env_is_additive_and_ordered() -> None:
+    resolved, unresolved = resolve_service_env(
+        {"PORT": "${BASE_PORT}", "URL": "http://localhost:${PORT}"},
+        {"BASE_PORT": "4100", "PORT": "3000"},
+    )
+
+    assert resolved == {"PORT": "4100", "URL": "http://localhost:4100"}
+    assert unresolved == []
+
+
+def test_resolve_service_env_reports_missing_references_per_key() -> None:
+    resolved, unresolved = resolve_service_env(
+        {"URL": "http://localhost:${MISSING}", "OTHER": "${URL}"},
+        {},
+    )
+
+    assert resolved == {}
+    assert unresolved == [("URL", "MISSING"), ("OTHER", "URL")]
+
+
+def test_env_name_and_malformed_reference_helpers() -> None:
+    assert is_valid_env_name("_PORT2")
+    assert not is_valid_env_name("PORT-NAME")
+    assert malformed_references("${PORT-NAME} ${OK} ${unfinished") == ["${PORT-NAME}", "${unfinished"]
 
 
 # ---------------------------------------------------------------------------

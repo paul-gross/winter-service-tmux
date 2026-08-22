@@ -114,13 +114,16 @@ class ManifestReader:
         committed_list: list[dict],  # type: ignore[type-arg]
         overlay_list: list[dict],  # type: ignore[type-arg]
         key: str,
+        nested_tables: tuple[str, ...] = (),
     ) -> list[dict]:  # type: ignore[type-arg]
         """Merge *overlay_list* on top of *committed_list* keyed by *key*.
 
         An overlay entry whose *key* matches an existing committed entry
         *overrides* it in place (dict fields are merged so partial overrides
-        work).  An entry with a new *key* value is *appended* after all
-        committed entries.  Entries without *key* are always appended.
+        work).  Tables named in *nested_tables* are merged by their own keys
+        instead of being replaced wholesale.  An entry with a new *key* value
+        is *appended* after all committed entries.  Entries without *key* are
+        always appended.
         """
         key_to_idx: dict[str, int] = {}
         for i, entry in enumerate(committed_list):
@@ -132,7 +135,13 @@ class ManifestReader:
             entry_key = overlay_entry.get(key)
             if entry_key is not None and entry_key in key_to_idx:
                 idx = key_to_idx[entry_key]
-                result[idx] = {**result[idx], **overlay_entry}
+                merged = {**result[idx], **overlay_entry}
+                for table in nested_tables:
+                    committed_table = result[idx].get(table)
+                    overlay_table = overlay_entry.get(table)
+                    if isinstance(committed_table, dict) and isinstance(overlay_table, dict):
+                        merged[table] = {**committed_table, **overlay_table}
+                result[idx] = merged
             else:
                 result.append(overlay_entry)
                 if entry_key is not None:
@@ -178,6 +187,7 @@ class ManifestReader:
                 [_norm(e) for e in committed.get("service", [])],
                 [_norm(e) for e in local["service"]],
                 "name",
+                nested_tables=("env",),
             )
 
         return result
@@ -375,6 +385,15 @@ class ManifestReader:
                             f"service '{name}': 'depends_on' entries must be strings, got {type(item).__name__}"
                         )
                 depends_on = tuple(depends_on_raw)
+            env_raw = raw.get("env")
+            env: dict[str, str] = {}
+            if env_raw is not None:
+                if not isinstance(env_raw, dict):
+                    raise ManifestError(f"service '{name}': 'env' must be a table, got {type(env_raw).__name__}")
+                for key, value in env_raw.items():
+                    if not isinstance(value, str):
+                        raise ManifestError(f"service '{name}': env.{key} must be a string, got {type(value).__name__}")
+                    env[key] = value
             svc = Service(
                 name=name,
                 target=target,
@@ -385,6 +404,7 @@ class ManifestReader:
                 port=port,
                 cwd=cwd,
                 depends_on=depends_on,
+                env=env,
             )
             parsed.append((svc, scope))
         return parsed

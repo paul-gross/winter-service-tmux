@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from service_manifest.modules.manifest.env import resolve_service_env
 from service_manifest.modules.manifest.errors import ManifestError
 from service_manifest.modules.manifest.model import (
     Health,
@@ -115,6 +116,100 @@ cmd = "echo hi"
 """
     manifest = _read({_COMMITTED_PATH: content})
     assert manifest.services[0].target == Target(window=2, pane=3)
+
+
+def test_service_env_mapping_is_parsed() -> None:
+    content = '''\
+session_prefix = "mp"
+
+[[service]]
+name = "backend"
+target = "0.0"
+cmd = "cmd"
+
+[service.env]
+PORT = "${BASE_PORT}"
+URL = "http://localhost:${PORT}"
+'''
+    manifest = _read({_COMMITTED_PATH: content})
+
+    assert manifest.services[0].env == {"PORT": "${BASE_PORT}", "URL": "http://localhost:${PORT}"}
+
+
+def test_service_env_overlay_merges_by_key() -> None:
+    committed = '''\
+[[service]]
+name = "backend"
+target = "0.0"
+cmd = "cmd"
+
+[service.env]
+PORT = "3000"
+LOG_LEVEL = "info"
+'''
+    local = '''\
+[[service]]
+name = "backend"
+
+[service.env]
+PORT = "4000"
+'''
+
+    manifest = _read({_COMMITTED_PATH: committed, _LOCAL_PATH: local})
+
+    assert manifest.services[0].env == {"PORT": "4000", "LOG_LEVEL": "info"}
+
+
+def test_service_env_overlay_preserves_order_for_cross_layer_references() -> None:
+    committed = '''\
+[[service]]
+name = "backend"
+target = "0.0"
+cmd = "cmd"
+
+[service.env]
+PORT = "3000"
+URL = "http://localhost:${PORT}"
+LOG_LEVEL = "info"
+'''
+    local = '''\
+[[service]]
+name = "backend"
+
+[service.env]
+PORT = "4000"
+LOCAL_URL = "${URL}/local"
+ZED = "${LOCAL_URL}"
+'''
+
+    manifest = _read({_COMMITTED_PATH: committed, _LOCAL_PATH: local})
+    mapping = manifest.services[0].env
+
+    assert list(mapping) == ["PORT", "URL", "LOG_LEVEL", "LOCAL_URL", "ZED"]
+    resolved, unresolved = resolve_service_env(mapping, {})
+    assert resolved == {
+        "PORT": "4000",
+        "URL": "http://localhost:4000",
+        "LOG_LEVEL": "info",
+        "LOCAL_URL": "http://localhost:4000/local",
+        "ZED": "http://localhost:4000/local",
+    }
+    assert unresolved == []
+
+
+def test_service_env_non_string_value_is_manifest_error() -> None:
+    content = '''\
+[[service]]
+name = "backend"
+target = "0.0"
+cmd = "cmd"
+
+[service.env]
+PORT = 3000
+'''
+
+    with pytest.raises(ManifestError, match=r"service 'backend'.*env\.PORT.*string"):
+        _read({_COMMITTED_PATH: content})
 
 
 def test_service_health_parsed() -> None:

@@ -16,9 +16,33 @@ for the status display.
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import sys
+from collections.abc import Mapping
 from pathlib import Path
+
+
+def _shell_quote_service_value(value: str) -> str:
+    """Quote an already-resolved mapping value as shell data."""
+    return shlex.quote(value) or "''"
+
+
+_SERVICE_REFERENCE_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def _shell_expand_service_value(value: str) -> str:
+    """Quote mapping literals while expanding validated ``${NAME}`` references."""
+    parts: list[str] = []
+    cursor = 0
+    for match in _SERVICE_REFERENCE_RE.finditer(value):
+        if match.start() > cursor:
+            parts.append(_shell_quote_service_value(value[cursor : match.start()]))
+        parts.append(f'"${{{match.group(1)}}}"')
+        cursor = match.end()
+    if cursor < len(value):
+        parts.append(_shell_quote_service_value(value[cursor:]))
+    return "".join(parts) or "''"
 
 
 def logwriter_path() -> Path:
@@ -41,6 +65,11 @@ def logwriter_path() -> Path:
     return Path(__file__).resolve().parents[2] / "logwriter.py"
 
 
+def launch_cwd(worktree_dir: Path, cwd: str | None = None) -> Path:
+    """Return the exact working directory used by a service launch line."""
+    return worktree_dir / cwd if cwd else worktree_dir
+
+
 def build_launch_line(
     worktree_dir: Path,
     scope: str | None,
@@ -51,36 +80,47 @@ def build_launch_line(
     rotate_size_bytes: int | None = None,
     max_rotations: int | None = None,
     cwd: str | None = None,
+    service_env: Mapping[str, str] | None = None,
+    evaluate_env_file: bool = False,
+    expand_service_references: bool = False,
 ) -> str:
     """Build the tmux send-keys launch line for one service.
 
     Assembles the pane launch line::
 
-        cd '<worktree_dir>' [&& eval "$(winter env '<scope>')"] [&& . '<env_file>']
+        cd '<worktree_dir>' [&& eval "$(winter env '<scope>')"]
+            [&& . '<env_file>']
             && echo '=== <name> ===' [&& <command>]
 
     When *cwd* is not ``None`` (the manifest service's optional ``cwd`` field,
     already normalized by the reader) the leading ``cd`` targets
     ``<worktree_dir>/<cwd>`` instead of ``<worktree_dir>`` — everything else
-    (the scope self-source, env-file dot-source, banner, and capture pipe) is
+    (the scope self-source, env-file source, banner, and capture pipe) is
     unchanged.
 
     When *scope* is not ``None`` the pane shell self-sources the full scope
     environment via POSIX ``eval "$(winter env <scope>)"`` before the banner.
     This brings all ``WINTER_*`` base vars and the scope's env-var band entries
     (see ``workspace:/context/winter-cli/configuration/ports-and-environments.md#env-var-bands``)
-    into the pane without the orchestrator process executing ``winter`` itself — the
-    entry shim already sourced the scope env before ``exec python3``, and each
-    pane self-sources independently.
+    into the pane. The orchestrator also evaluates this canonical source during
+    preflight when a selected service mapping needs it, so launch and health
+    share one scope baseline.
 
-    When *env_file_path* is not ``None`` a POSIX dot-source (``&&
-    . '<env_file_path>'``) is appended after the ``eval "$(winter env ...)"``
-    segment (or after ``cd <wt>`` when *scope* is ``None``).  This layers
-    machine-specific credentials from the manifest ``env_file`` (e.g.
-    ``.env.local``) on top of winter's scope vars.
+    When *env_file_path* is not ``None`` the file is sourced after the
+    ``eval "$(winter env ...)"`` segment (or after ``cd <wt>`` when *scope*
+    is ``None``).  For a service mapping or an env-dependent URL/CMD health
+    probe, *evaluate_env_file* temporarily enables POSIX ``set -a`` around
+    that source so launch uses the same exported shell model as provider-side
+    mapping and health resolution.  When it is false, the historical plain
+    dot-source is retained for services without those features.
 
-    When *scope* is ``None`` (local/env-less mode or the workspace session) no
-    eval prefix is added — just ``cd <wt>``.
+    When *service_env* is supplied, each entry is exported after source setup.
+    With *expand_service_references*, validated ``${NAME}`` references resolve
+    against that pane's sourced environment while all other text remains
+    shell-quoted data. Otherwise values are treated as already-resolved data.
+
+    When *scope* is ``None`` (local/env-less mode) no eval prefix is added —
+    just ``cd <wt>``.
 
     When *command* is empty (an interactive ``shell`` pane), the trailing
     ``&& <command>`` is omitted — the pane gets the banner and sits at a
@@ -103,12 +143,22 @@ def build_launch_line(
     orchestrator itself runs under, even when the host's ``python3`` resolves
     to an older interpreter.
     """
-    target_dir = worktree_dir / cwd if cwd else worktree_dir
+    target_dir = launch_cwd(worktree_dir, cwd)
     prefix = f"cd {shlex.quote(str(target_dir))}"
     if scope is not None:
         prefix = f'{prefix} && eval "$(winter env {shlex.quote(scope)})"'
     if env_file_path is not None:
-        prefix = f"{prefix} && . {shlex.quote(str(env_file_path))}"
+        quoted_env_file = shlex.quote(str(env_file_path))
+        if evaluate_env_file or service_env:
+            prefix = f"{prefix} && set -a && . {quoted_env_file} && set +a"
+        else:
+            prefix = f"{prefix} && . {quoted_env_file}"
+    if service_env:
+        for key, value in service_env.items():
+            rendered_value = (
+                _shell_expand_service_value(value) if expand_service_references else _shell_quote_service_value(value)
+            )
+            prefix = f"{prefix} && export {shlex.quote(key)}={rendered_value}"
 
     quoted_banner = shlex.quote(f"=== {name} ===")
     line = f"{prefix} && echo {quoted_banner}"

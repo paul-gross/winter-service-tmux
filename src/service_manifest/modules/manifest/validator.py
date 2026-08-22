@@ -19,7 +19,12 @@ from __future__ import annotations
 import posixpath
 import re
 
-from service_manifest.modules.manifest.env import interpolate, referenced_vars
+from service_manifest.modules.manifest.env import (
+    interpolate,
+    is_valid_env_name,
+    malformed_references,
+    resolve_service_env,
+)
 from service_manifest.modules.manifest.model import (
     HealthType,
     Service,
@@ -90,10 +95,15 @@ class ManifestValidator:
           always report unhealthy.
         - A ``health.type = "uptime"`` probe's ``target`` parses as a valid
           duration (``<N><unit>``, unit one of ``s``/``m``/``h``/``d``).
+        - Mapping keys and values are statically validated, including POSIX
+          names and reference syntax. Mapping reference resolution is deferred
+          to the orchestrator because scope bands are injected per action and
+          are not represented by the parsed env_file.
         - When *env* is provided: every ``${VAR}`` in a service health target
-          resolves against *env*; unresolvable vars are reported per-service.
-          Skipped for ``health.type = "log"`` — its ``target`` is used
-          verbatim, never interpolated.
+          that is not a service-mapping key is checked against *env*;
+          mapping-key references remain runtime-dependent. Skipped for
+          ``health.type = "log"`` — its ``target`` is used verbatim, never
+          interpolated.
         - Each service's ``depends_on`` entries are checked PER SCOPE (a
           service's dependents are resolved against its own scope's service
           list only — env services against env services, workspace services
@@ -126,7 +136,6 @@ class ManifestValidator:
         self._check_target_non_negative(manifest.workspace_services, "workspace service", violations)
         self._check_health_config(manifest.services, "service", violations)
         self._check_health_config(manifest.workspace_services, "workspace service", violations)
-        self._check_workspace_health_has_no_vars(manifest.workspace_services, violations)
         self._check_startup_config(manifest.services, "service", violations)
         self._check_startup_config(manifest.workspace_services, "workspace service", violations)
         self._check_log_config(manifest, violations)
@@ -134,6 +143,8 @@ class ManifestValidator:
         self._check_port_config(manifest.workspace_services, "workspace service", violations)
         self._check_cwd_config(manifest.services, "service", violations)
         self._check_cwd_config(manifest.workspace_services, "workspace service", violations)
+        self._check_service_env(manifest.services, "service", violations)
+        self._check_service_env(manifest.workspace_services, "workspace service", violations)
         self._check_depends_on(manifest.services, "service", violations)
         self._check_depends_on(manifest.workspace_services, "workspace service", violations, scope_name="workspace")
 
@@ -291,17 +302,27 @@ class ManifestValidator:
                 violations.append(f"{label} '{service.name}': cwd {cwd!r} normalizes outside its scope root")
 
     @staticmethod
-    def _check_workspace_health_has_no_vars(services: tuple[Service, ...], violations: list[str]) -> None:
+    def _check_service_env(
+        services: tuple[Service, ...],
+        label: str,
+        violations: list[str],
+    ) -> None:
         for service in services:
-            if service.health is None or service.health.type == HealthType.LOG:
-                # 'log' targets are used verbatim (no ${VAR} interpolation), so
-                # a regex that happens to contain '${...}' is not a variable ref.
-                continue
-            for var in referenced_vars(service.health.target):
-                violations.append(
-                    f"workspace service '{service.name}' health: variable '${{{var}}}' is not supported "
-                    "because workspace services do not load an env_file"
-                )
+            for key, value in service.env.items():
+                key_label = str(key)
+                if not isinstance(key, str) or not is_valid_env_name(key):
+                    violations.append(f"{label} '{service.name}': env key {key_label!r} is not a valid POSIX name")
+                if not isinstance(value, str):
+                    violations.append(
+                        f"{label} '{service.name}': env.{key_label} must be a string, got {type(value).__name__}"
+                    )
+                    continue
+                if "\x00" in value:
+                    violations.append(f"{label} '{service.name}': env.{key_label} contains a NUL byte")
+                for reference in malformed_references(value):
+                    violations.append(
+                        f"{label} '{service.name}': env.{key_label} has malformed variable reference {reference!r}"
+                    )
 
     @staticmethod
     def _check_health_vars(
@@ -314,8 +335,22 @@ class ManifestValidator:
             if service.health is None or service.health.type == HealthType.LOG:
                 # 'log' targets are used verbatim (no ${VAR} interpolation).
                 continue
-            _rendered, unresolved = interpolate(service.health.target, env)
+            effective = dict(env)
+            mapping = {
+                key: value
+                for key, value in service.env.items()
+                if isinstance(key, str) and isinstance(value, str)
+            }
+            resolved, _ = resolve_service_env(mapping, effective)
+            effective.update(resolved)
+            _rendered, unresolved = interpolate(service.health.target, effective)
             for var in unresolved:
+                if var in mapping or var.startswith("WINTER_"):
+                    # The mapping key is valid, but its own reference may be a
+                    # scope-band value absent from the parsed env_file. Core
+                    # scope variables are likewise runtime-provided. The
+                    # runtime resolver has the canonical scope baseline.
+                    continue
                 violations.append(f"{label} '{service.name}' health: unresolvable variable '${{{var}}}'")
 
     @staticmethod

@@ -26,7 +26,7 @@ import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
-from typing import IO
+from typing import IO, cast
 
 from service_manifest.modules.manifest.errors import ManifestError
 from service_orchestrator.modules.orchestrate.errors import OrchestratorError
@@ -84,21 +84,26 @@ class DispatchService:
     # ------------------------------------------------------------------
 
     # ------------------------------------------------------------------
-    # Context builders — all actions skip env-file reading.
+    # Context builders — dispatched actions do not read or overlay env_file
+    # into ctx.env_vars. The orchestrator's injected environment source loads
+    # the file with shell semantics only when a lifecycle operation needs the
+    # effective service environment.
     #
     # Winter-cli core computes WINTER_ENV / WINTER_ENV_INDEX / WINTER_PORT_BASE /
     # WINTER_WORKSPACE_PORT_BASE and the scope's env-var band entries (see
     # workspace:/context/winter-cli/configuration/ports-and-environments.md#env-var-bands) via
     # EnvProvisionerService and injects them into the provider subprocess
-    # environment before invoking any action (up/down/restart/logs/status).
-    # The provider must therefore read these vars from os.environ rather than
-    # sourcing .winter.env itself.
+    # environment for up/down/status. Restart/logs receive only the base
+    # extension environment by contract. The orchestrator therefore uses the
+    # canonical `winter env <scope>` source for all actions that need a scope
+    # baseline; the pane uses the same source in its launch prefix.
     #
     # _build_ctx and _build_workspace_ctx are the shared
     # implementations: they build a SessionContext with skip_env_file=True
-    # (no filesystem read) and overlay the current process environment as
-    # env_vars so that _port_base() and _service_health() see the
-    # core-injected values.
+    # (so env_vars is not populated from the file) and overlay the current
+    # process environment as env_vars. This preserves core-injected values for
+    # existing status/port behavior while the environment source supplies the
+    # missing scope bands on restart/logs and for direct provider invocation.
     # ------------------------------------------------------------------
 
     def _build_ctx(
@@ -108,11 +113,11 @@ class DispatchService:
     ) -> tuple[SessionContext | None, int]:
         """Build a SessionContext for any action, injecting os.environ as env_vars.
 
-        Skips env-file reading (``skip_env_file=True``) and replaces
-        ``env_vars`` with the current process environment so that
-        ``WINTER_PORT_BASE`` and other injected vars (sourced by core before
-        invoking this subprocess) are visible to port-resolution and health
-        helpers without any self-sourcing of ``.winter.env``.
+        Requests ``skip_env_file=True`` so ``env_vars`` remains the current
+        process environment rather than the global env_file. Scope and
+        env_file resolution for mappings/health is delegated to the
+        orchestrator's environment source, so restart/logs do not depend on
+        action-specific core scope injection.
         """
         try:
             ctx = build_for_target(self._builder, target, workspace_root=workspace_root, skip_env_file=True)
@@ -133,8 +138,9 @@ class DispatchService:
         """Build workspace SessionContext for any action, injecting os.environ.
 
         ``build_workspace`` already sets env_vars=None; we overlay os.environ so
-        that any WINTER_WORKSPACE_PORT_BASE core injects for the workspace scope
-        is visible.
+        that action-specific core values remain available. The workspace
+        context also carries ``inject_scope='workspace'`` so pane launches and
+        provider-side health use the same canonical workspace source.
         """
         try:
             ctx = build_for_target(self._builder, WORKSPACE_TARGET, workspace_root=workspace_root, skip_env_file=True)
@@ -272,8 +278,9 @@ class DispatchService:
     ) -> tuple[list[dict], int]:  # type: ignore[type-arg]
         """Build a per-env status document for each (env, svc_names) pair.
 
-        Builds ctx per env via ``_build_ctx`` (env-vars from process
-        environment, no self-sourcing) then calls
+        Builds ctx per env via ``_build_ctx`` (the process environment is the
+        initial baseline; the orchestrator may source the canonical scope and
+        env_file for runtime resolution) then calls
         ``orchestrator.status_env_document``.  Collects the returned dicts in
         iteration order; catches ``OrchestratorError`` per env (rc=1, env
         omitted from the output).
@@ -365,6 +372,93 @@ class DispatchService:
     # restart
     # ------------------------------------------------------------------
 
+    def _restart_batch(self, ctx: SessionContext, svc_names: list[str]) -> int:
+        """Restart one resolved scope, retaining the legacy single-service seam."""
+        restart_services = getattr(self._orchestrator, "restart_services", None)
+        if callable(restart_services):
+            restart_batch = cast(Callable[[SessionContext, tuple[str, ...]], int], restart_services)
+            return restart_batch(ctx, tuple(svc_names))
+        inner_rc = 0
+        for svc_name in svc_names:
+            result = self._orchestrator.restart(ctx, svc_name)
+            if result != 0:
+                inner_rc = result
+        return inner_rc
+
+    def restart_selected(
+        self,
+        selector: SelectorService,
+        workspace_pats: list[str],
+        env_services: dict[str, list[str]],
+        workspace_root: Path | None,
+        *,
+        current_rc: int = 0,
+    ) -> int:
+        """Preflight every selected scope before restarting any service."""
+        targets: list[tuple[str, SessionContext, list[str]]] = []
+        rc = current_rc
+
+        if workspace_pats:
+            ctx, build_rc = self._build_workspace_ctx(workspace_root, "restart")
+            if ctx is None:
+                rc = build_rc
+            else:
+                matched, dead = selector.expand_workspace_patterns(
+                    workspace_pats,
+                    [svc.name for svc in ctx.services],
+                )
+                if dead:
+                    for pat in dead:
+                        print(
+                            f"orchestrate: restart: pattern '{pat}' matched no services",
+                            file=self._err,
+                        )
+                    rc = 1
+                else:
+                    targets.append(("workspace", ctx, matched))
+
+        for env, svc_names in env_services.items():
+            ctx, build_rc = self._build_ctx(env, workspace_root)
+            if ctx is None:
+                rc = build_rc
+            else:
+                targets.append((env, ctx, svc_names))
+
+        if rc != 0:
+            return rc
+
+        preflight = getattr(self._orchestrator, "preflight_restart_services", None)
+        if callable(preflight):
+            preflight_batch = cast(Callable[[SessionContext, tuple[str, ...]], None], preflight)
+            for scope, ctx, svc_names in targets:
+                try:
+                    preflight_batch(ctx, tuple(svc_names))
+                except OrchestratorError as exc:
+                    prefix = (
+                        "orchestrate: restart: workspace"
+                        if scope == WORKSPACE_TARGET
+                        else f"orchestrate: env '{scope}'"
+                    )
+                    print(f"{prefix}: {exc}", file=self._err)
+                    rc = 1
+            if rc != 0:
+                return rc
+
+        for scope, ctx, svc_names in targets:
+            try:
+                result = self._restart_batch(ctx, svc_names)
+                if result != 0:
+                    rc = result
+            except OrchestratorError as exc:
+                prefix = (
+                    "orchestrate: restart: workspace"
+                    if scope == WORKSPACE_TARGET
+                    else f"orchestrate: env '{scope}'"
+                )
+                print(f"{prefix}: {exc}", file=self._err)
+                rc = 1
+        return rc
+
     def restart_env_services(
         self,
         env_services: dict[str, list[str]],
@@ -375,12 +469,7 @@ class DispatchService:
         """Call restart for each (env, svc) pair.  Folds last-non-zero-wins."""
 
         def _invoke(ctx: SessionContext, env: str, svc_names: list[str]) -> int:
-            inner_rc = 0
-            for svc_name in svc_names:
-                result = self._orchestrator.restart(ctx, svc_name)
-                if result != 0:
-                    inner_rc = result
-            return inner_rc
+            return self._restart_batch(ctx, svc_names)
 
         return self._run_for_target(env_services, workspace_root, _invoke, current_rc=current_rc)
 
@@ -408,14 +497,13 @@ class DispatchService:
             return 1
 
         rc = current_rc
-        for svc_name in matched:
-            try:
-                result = self._orchestrator.restart(ctx, svc_name)
-                if result != 0:
-                    rc = result
-            except OrchestratorError as exc:
-                print(f"orchestrate: restart: workspace: {exc}", file=self._err)
-                rc = 1
+        try:
+            result = self._restart_batch(ctx, matched)
+            if result != 0:
+                rc = result
+        except OrchestratorError as exc:
+            print(f"orchestrate: restart: workspace: {exc}", file=self._err)
+            rc = 1
         return rc
 
     # ------------------------------------------------------------------

@@ -1,13 +1,14 @@
 """Phase 4 (winter#109) status port-injection tests.
 
-These tests verify that the status path reads WINTER_PORT_BASE from the
-PROCESS ENVIRONMENT (injected by core/winter-cli) and does NOT self-source
-.winter.env.  Two invariants are checked:
+These tests verify that the status path preserves WINTER_PORT_BASE from the
+PROCESS ENVIRONMENT (injected by core/winter-cli) as its baseline while the
+real orchestrator can source the canonical scope/env-file environment for
+mapping and health resolution. Two invariants are checked:
 
 1. Port-base injection: inject a sentinel WINTER_PORT_BASE in os.environ
    while the builder would normally supply a DIFFERENT value from the file;
-   assert that the SessionContext used by the orchestrator has env_vars from
-   os.environ — proving no self-sourcing.
+   assert that the SessionContext used by dispatch has env_vars from
+   os.environ — proving the process baseline is preserved.
 
 2. Scope-from-pattern: given a core-supplied scope pattern (``alpha/*``) with
    NO live tmux session, the status path calls the orchestrator for alpha with
@@ -142,8 +143,8 @@ def test_status_port_base_comes_from_process_env_not_env_file(
     """Prove the STATUS path reads WINTER_PORT_BASE from os.environ, not .winter.env.
 
     The sentinel value 9999 is set only in os.environ (the file would have a
-    different value, or be absent).  After _build_ctx replaces env_vars
-    with dict(os.environ), the orchestrator's ctx.env_vars must contain 9999.
+    different value, or be absent). After _build_ctx replaces env_vars with
+    dict(os.environ), the orchestrator's ctx.env_vars must contain 9999.
     """
     monkeypatch.setenv("WINTER_PORT_BASE", "9999")
 
@@ -167,8 +168,7 @@ def test_status_port_base_comes_from_process_env_not_env_file(
     # WINTER_PORT_BASE must be the sentinel from os.environ, not from any file
     assert env_vars.get("WINTER_PORT_BASE") == "9999", (
         f"ctx.env_vars['WINTER_PORT_BASE'] = {env_vars.get('WINTER_PORT_BASE')!r}; "
-        "expected '9999' from the injected os.environ — status path may still be "
-        "self-sourcing the env file"
+        "expected '9999' from the injected os.environ baseline"
     )
 
     # Also verify build was called with skip_env_file=True on the status path

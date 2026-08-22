@@ -98,6 +98,7 @@ target  = "2.0"
     names = [s.name for s in result.services]
     assert "worker" in names
     assert "api" in names  # original preserved
+    assert next(s for s in result.services if s.name == "worker").env == {}
 
 
 def test_ext_service_target_parsed_correctly(tmp_path: Path) -> None:

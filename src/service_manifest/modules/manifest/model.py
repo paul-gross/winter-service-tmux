@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
+from types import MappingProxyType
 
 # Valid port expression: optional whitespace around "WINTER_PORT_BASE + <int>"
 _PORT_EXPR_RE = re.compile(r"^\s*WINTER_PORT_BASE\s*\+\s*(\d+)\s*$")
@@ -77,10 +79,11 @@ class HealthType(StrEnum):
 class Health:
     """Optional readiness probe for a declared service.
 
-    ``target`` may contain ``${VAR}`` placeholders resolved against the env file
-    before the probe runs — EXCEPT for ``HealthType.LOG``, where ``target`` is a
-    regular expression used VERBATIM (no ``${VAR}`` interpolation), so regex
-    syntax is never mangled.  For ``HealthType.UPTIME``, ``target`` is a
+    ``target`` may contain ``${VAR}`` placeholders resolved against the
+    effective scope/env_file/service environment before the probe runs — EXCEPT
+    for ``HealthType.LOG``, where ``target`` is a regular expression used
+    VERBATIM (no ``${VAR}`` interpolation), so regex syntax is never mangled.
+    For ``HealthType.UPTIME``, ``target`` is a
     duration (``parse_uptime_duration``) — the service is ``healthy`` once its
     measured process has been alive at least that long; there are no
     placeholders to interpolate in a duration.  ``timeout`` is seconds; ``None``
@@ -231,6 +234,11 @@ class Service:
     port: int | str | None = None
     cwd: str | None = None
     depends_on: tuple[str, ...] = ()
+    env: Mapping[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        """Freeze the mapping even when callers construct ``Service`` directly."""
+        object.__setattr__(self, "env", MappingProxyType(dict(self.env)))
 
 
 @dataclass(frozen=True)

@@ -167,13 +167,7 @@ def _run_restart(
     # Intercept workspace patterns before the general pattern engine.
     workspace_pats, env_pats = selector.split_workspace_patterns(patterns)
 
-    rc = 0
-
-    if workspace_pats:
-        rc = dispatch.restart_workspace(selector, workspace_pats, workspace_root, rc)
-        if rc != 0 and not env_pats:
-            return rc
-
+    env_services: dict[str, list[str]] = {}
     if env_pats:
         try:
             manifest_info = selector.read_manifest_context(env_pats, workspace_root)
@@ -199,9 +193,7 @@ def _run_restart(
                 )
             return 1
 
-        rc = dispatch.restart_env_services(env_services, workspace_root, current_rc=rc)
-
-    return rc
+    return dispatch.restart_selected(selector, workspace_pats, env_services, workspace_root)
 
 
 def _run_logs(

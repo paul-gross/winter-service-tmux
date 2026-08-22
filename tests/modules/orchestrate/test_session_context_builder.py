@@ -2,7 +2,7 @@
 
 Covers:
 - build_workspace: worktree_dir==workspace_root, env=="workspace",
-  session=="<prefix>-workspace", env_vars is None, inject_scope is None,
+  session=="<prefix>-workspace", env_vars is None, inject_scope == "workspace",
   ctx.services == the manifest's workspace_services (scope selected directly).
 - build_for_target: routes "workspace" to build_workspace, routes any other
   name to build().
@@ -144,7 +144,7 @@ def _make_workspace_ctx(
         layout_hook=manifest.workspace_layout_hook,
         logs=manifest.logs,
         env_vars=None,
-        inject_scope=None,
+        inject_scope=WORKSPACE_TARGET,
         env_file_path=None,
     )
 
@@ -216,6 +216,35 @@ def test_build_env_file_path_set_even_when_skip_env_file_true() -> None:
     assert ctx.env_vars is None  # skip_env_file DID suppress in-process reading
 
 
+def test_build_skips_global_env_file_read_for_dispatched_contexts() -> None:
+    toml = '''\
+session_prefix = "mp"
+env_file = ".winter.env"
+
+[[service]]
+name = "backend"
+target = "0.0"
+cmd = "cmd"
+
+[service.env]
+PORT = "${BASE_PORT}"
+'''
+    config_path = _CONFIG_DIR / _MANIFEST_COMMITTED_PATH
+    env_path = _WORKSPACE / "alpha" / ".winter.env"
+    fake_fs = FakeFilesystemReader({config_path: toml, env_path: "BASE_PORT=4100\n"})
+    sm = sm_container_mod.Container(fs=fake_fs)
+    builder = SessionContextBuilder(
+        locator=FakeWorkspaceLocator(_WORKSPACE),
+        manifest_reader=sm.manifest_reader,
+        env_reader=sm.env_reader,
+    )
+
+    ctx = builder.build("alpha", skip_env_file=True)
+
+    assert ctx.env_vars is None
+    assert ctx.env_file_path == env_path
+
+
 def test_build_workspace_config_dir_from_locator() -> None:
     """build_workspace() sets ctx.config_dir from locator.config_dir()."""
     builder = _make_builder()
@@ -270,17 +299,17 @@ def test_build_workspace_env_vars_is_none() -> None:
     assert ctx.env_vars is None
 
 
-def test_build_workspace_inject_scope_is_none() -> None:
+def test_build_workspace_injects_workspace_scope() -> None:
     builder = _make_builder()
     ctx = builder.build_workspace()
-    assert ctx.inject_scope is None
+    assert ctx.inject_scope == WORKSPACE_TARGET
 
 
-def test_build_workspace_env_file_path_is_none() -> None:
-    """Workspace sessions never dot-source a per-env machine-creds file."""
+def test_build_workspace_retains_global_env_file_path() -> None:
+    """Mapped workspace services resolve the global file at workspace root."""
     builder = _make_builder()
     ctx = builder.build_workspace()
-    assert ctx.env_file_path is None
+    assert ctx.env_file_path == _WORKSPACE / ".winter.env"
 
 
 def test_build_workspace_session_is_prefix_workspace() -> None:

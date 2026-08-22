@@ -20,12 +20,14 @@ from service_orchestrator.core.internal.subprocess_winter_cli import SubprocessW
 from service_orchestrator.core.winter_cli import IWinterCli
 from service_orchestrator.core.workspace_locator import IWorkspaceLocator
 from service_orchestrator.modules.orchestrate.dispatch_service import DispatchService
+from service_orchestrator.modules.orchestrate.environment_source import IEnvironmentSource
 from service_orchestrator.modules.orchestrate.follow_clock import IFollowClock
 from service_orchestrator.modules.orchestrate.health_checker import IHealthChecker
 from service_orchestrator.modules.orchestrate.internal.cli_tmux_repository import CliTmuxRepository
 from service_orchestrator.modules.orchestrate.internal.local_log_repository import LocalLogRepository
 from service_orchestrator.modules.orchestrate.internal.pgrep_process_reaper import PgrepProcessReaper
 from service_orchestrator.modules.orchestrate.internal.real_follow_clock import RealFollowClock
+from service_orchestrator.modules.orchestrate.internal.subprocess_environment_source import SubprocessEnvironmentSource
 from service_orchestrator.modules.orchestrate.internal.subprocess_health_checker import SubprocessHealthChecker
 from service_orchestrator.modules.orchestrate.internal.subprocess_layout_hook_runner import (
     SubprocessLayoutHookRunner,
@@ -58,6 +60,7 @@ class Container:
         manifest: sm_container_mod.Container | None = None,
         log_repo: ILogRepository | None = None,
         health_checker: IHealthChecker | None = None,
+        environment_source: IEnvironmentSource | None = None,
         follow_clock: IFollowClock | None = None,
         winter_cli: IWinterCli | None = None,
         log_sink: IO[str] | None = None,
@@ -72,6 +75,7 @@ class Container:
         self.locator: IWorkspaceLocator = locator or EnvWorkspaceLocator()
         self.log_repo: ILogRepository = log_repo or LocalLogRepository()
         self.health_checker: IHealthChecker = health_checker or SubprocessHealthChecker()
+        self.environment_source: IEnvironmentSource = environment_source or SubprocessEnvironmentSource()
         self.follow_clock: IFollowClock = follow_clock or RealFollowClock()
         self.winter_cli: IWinterCli = winter_cli or SubprocessWinterCli()
 
@@ -87,6 +91,7 @@ class Container:
             health_checker=self.health_checker,
             clock=self.follow_clock,
             winter_cli=self.winter_cli,
+            environment_source=self.environment_source,
             stdout=out_sink,
             stderr=err_sink,
         )

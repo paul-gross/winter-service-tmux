@@ -19,6 +19,9 @@
 #     after all committed services. The per-entry "scope" ("project" default,
 #     or "workspace") travels inside the entry: an override omitting "scope"
 #     keeps the committed scope, and a new entry sets its own.
+#     The nested [service.env] table is merged by key: local keys replace
+#     matching committed keys without moving them, omitted committed keys are
+#     preserved, and local-only keys append in local declaration order.
 #     Nested [service.health] tables are atomic: if you override health locally,
 #     restate the whole health table (type, target, and optional timeout).
 #     Nested [service.startup] tables are atomic in the same way: if you
@@ -46,14 +49,19 @@ rotate_size_bytes = 52428800  # 50 MiB (committed default is 10 MiB)
 # restating type and target under the matching [[service]].
 # [service.startup] is atomic in overlays too: overriding startup requires
 # restating the whole startup table under the matching [[service]].
+# [service.env] is different: it is a per-key merge, so this local PORT value
+# replaces the committed PORT mapping while committed LOG_LEVEL remains.
 [[service]]
 name = "backend"
 cmd = "npm run start:debug"
 log = "pane"
 
+[service.env]
+PORT = "${LOCAL_BACKEND_PORT}"
+
 [service.health]
 type = "url"
-target = "http://localhost:${LOCAL_BACKEND_PORT}/health"
+target = "http://localhost:${PORT}/health"
 timeout = 1
 
 # Override the startup retry policy for a committed service — e.g. disable

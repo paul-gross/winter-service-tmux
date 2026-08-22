@@ -1,7 +1,8 @@
 """Tests for OrchestratorService — full action matrix against hand-rolled fakes.
 
-All four actions are tested: up, down, status, restart.  No subprocess calls
-are made; all I/O is mediated through the fakes defined in tests/conftest.py.
+All four actions are tested: up, down, status, restart. Runtime environment
+resolution is injected through the environment-source seam; the separate
+subprocess-source tests cover its shell adapter.
 """
 
 from __future__ import annotations
@@ -25,8 +26,10 @@ from service_manifest.modules.manifest.model import (
     Target,
 )
 from service_orchestrator.core.winter_cli import DependencyStatus, WinterCliUnavailableError
+from service_orchestrator.modules.orchestrate.environment_source import IEnvironmentSource
 from service_orchestrator.modules.orchestrate.errors import OrchestratorError
 from service_orchestrator.modules.orchestrate.health_checker import IHealthChecker
+from service_orchestrator.modules.orchestrate.internal.subprocess_environment_source import SubprocessEnvironmentSource
 from service_orchestrator.modules.orchestrate.internal.subprocess_health_checker import SubprocessHealthChecker
 from service_orchestrator.modules.orchestrate.orchestrator_service import (
     OrchestratorService,
@@ -37,6 +40,7 @@ from service_orchestrator.modules.orchestrate.orchestrator_service import (
     _topological_order,
 )
 from service_orchestrator.modules.orchestrate.session_context import SessionContext
+from service_orchestrator.modules.orchestrate.session_context_builder import WORKSPACE_TARGET
 from service_orchestrator.modules.orchestrate.status_report import logwriter_path
 from tests.conftest import (
     FakeFollowClock,
@@ -121,6 +125,7 @@ def _make_service(
     health_checker: IHealthChecker | None = None,
     clock: FakeFollowClock | None = None,
     winter_cli: FakeWinterCli | None = None,
+    environment_source: IEnvironmentSource | None = None,
     stdout: io.StringIO | None = None,
     stderr: io.StringIO | None = None,
 ) -> OrchestratorService:
@@ -140,6 +145,7 @@ def _make_service(
         health_checker=health_checker,
         clock=clock,
         winter_cli=winter_cli,
+        environment_source=environment_source,
         stdout=stdout,
         stderr=stderr,
     )
@@ -275,6 +281,214 @@ def test_up_send_keys_exact_launch_line_without_scope() -> None:
     assert backend_line == expected
 
 
+def test_up_resolves_service_env_before_sending_after_global_file_source() -> None:
+    tmux = FakeTmuxRepository()
+    hook = FakeLayoutHookRunner()
+    service = Service(
+        name="backend",
+        target=Target(0, 0),
+        cmd="npm run start:dev",
+        env={"PORT": "${BASE_PORT}", "URL": "http://localhost:${PORT}"},
+    )
+    manifest = ServiceManifest(
+        session_prefix="mp",
+        env_file=".winter.env",
+        layout_hook="layout-hook.sh",
+        services=(service,),
+    )
+    ctx = _make_ctx(
+        manifest=manifest,
+        env_vars={"BASE_PORT": "4100"},
+        env_file_path=_WORKTREE / ".winter.env",
+    )
+    hook._side_effect = lambda: tmux.seed_session("mp-alpha", {"0.0": 100})
+    svc = _make_service(tmux=tmux, hook_runner=hook)
+
+    assert svc.up(ctx) == 0
+
+    line = tmux.sent[0][2]
+    assert (
+        '&& set -a && . /fake/workspace/alpha/.winter.env && set +a && export PORT="${BASE_PORT}"'
+        ' && export URL=http://localhost:"${PORT}"'
+    ) in line
+    assert line.index("export URL") < line.index("echo '=== backend ==='")
+
+
+def test_up_unresolved_mapping_fails_before_session_creation_or_send() -> None:
+    service = Service(
+        name="backend",
+        target=Target(0, 0),
+        cmd="cmd",
+        env={"PORT": "${MISSING_SCOPE_PORT}"},
+    )
+    manifest = ServiceManifest(session_prefix="mp", env_file=None, layout_hook=None, services=(service,))
+    tmux = FakeTmuxRepository()
+    svc = _make_service(tmux=tmux)
+
+    with pytest.raises(OrchestratorError, match="unresolvable service environment"):
+        svc.up(_make_ctx(manifest=manifest, env_vars={}))
+
+    assert tmux.created_sessions == []
+    assert tmux.sent == []
+
+
+def test_up_nul_mapping_fails_before_session_creation_or_send() -> None:
+    service = Service(
+        name="backend",
+        target=Target(0, 0),
+        cmd="cmd",
+        env={"PORT": "4100\x00bad"},
+    )
+    manifest = ServiceManifest(session_prefix="mp", env_file=None, layout_hook=None, services=(service,))
+    tmux = FakeTmuxRepository()
+    svc = _make_service(tmux=tmux)
+
+    with pytest.raises(OrchestratorError, match=r"service 'backend'.*env\.PORT.*NUL"):
+        svc.up(_make_ctx(manifest=manifest, env_vars={}))
+
+    assert tmux.created_sessions == []
+    assert tmux.sent == []
+
+
+def test_workspace_mapping_uses_workspace_scope_baseline_for_launch() -> None:
+    service = Service(
+        name="docker",
+        target=Target(0, 0),
+        cmd="docker compose up",
+        env={
+            "PORT": "${WINTER_WORKSPACE_PORT_BASE}",
+            "REGISTRY": "${REGISTRY_HOST}",
+        },
+    )
+    manifest = ServiceManifest(
+        session_prefix="mp",
+        env_file=None,
+        layout_hook=None,
+        services=(),
+        workspace_services=(service,),
+    )
+    ctx = SessionContext(
+        env=WORKSPACE_TARGET,
+        workspace_root=_WORKSPACE,
+        worktree_dir=_WORKSPACE,
+        config_dir=_CONFIG_DIR,
+        session_prefix="mp",
+        services=manifest.workspace_services,
+        layout_hook=None,
+        logs=manifest.logs,
+        env_vars={},
+        inject_scope=WORKSPACE_TARGET,
+        env_file_path=_WORKSPACE / ".winter.env",
+    )
+
+    class _WorkspaceSource:
+        def scope_environment(self, scope, *, cwd, base):  # type: ignore[no-untyped-def]
+            assert scope == WORKSPACE_TARGET
+            return {**base, "WINTER_WORKSPACE_PORT_BASE": "4000"}
+
+        def env_file_environment(self, path, *, cwd, base):  # type: ignore[no-untyped-def]
+            assert path == _WORKSPACE / ".winter.env"
+            assert cwd == _WORKSPACE
+            return {**base, "REGISTRY_HOST": "registry.local"}
+
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-workspace", {"0.0": 100})
+    svc = _make_service(tmux=tmux, environment_source=_WorkspaceSource())  # type: ignore[arg-type]
+
+    assert svc.restart(ctx, "docker") == 0
+    line = tmux.sent[0][2]
+    assert 'eval "$(winter env workspace)"' in line
+    assert f"set -a && . {_WORKSPACE / '.winter.env'} && set +a" in line
+    assert 'export PORT="${WINTER_WORKSPACE_PORT_BASE}"' in line
+    assert 'export REGISTRY="${REGISTRY_HOST}"' in line
+
+
+def test_unmapped_workspace_launch_stays_source_free_but_health_uses_current_sources() -> None:
+    service = Service(
+        name="docker",
+        target=Target(0, 0),
+        cmd="docker compose up",
+        health=Health(type=HealthType.CMD, target='test "$WORKSPACE_HEALTH" = ready'),
+    )
+    manifest = ServiceManifest(
+        session_prefix="mp",
+        env_file=".winter.env",
+        layout_hook=None,
+        services=(),
+        workspace_services=(service,),
+        workspace_layout_hook="workspace-layout-hook.sh",
+    )
+    ctx = SessionContext(
+        env=WORKSPACE_TARGET,
+        workspace_root=_WORKSPACE,
+        worktree_dir=_WORKSPACE,
+        config_dir=_CONFIG_DIR,
+        session_prefix="mp",
+        services=manifest.workspace_services,
+        layout_hook=manifest.workspace_layout_hook,
+        logs=manifest.logs,
+        env_vars={},
+        inject_scope=WORKSPACE_TARGET,
+        env_file_path=_WORKSPACE / ".winter.env",
+    )
+
+    class _UnexpectedSource:
+        evaluate = False
+
+        def scope_environment(self, scope, *, cwd, base):  # type: ignore[no-untyped-def]
+            assert self.evaluate
+            return {**base, "WORKSPACE_HEALTH": "ready"}
+
+        def env_file_environment(self, path, *, cwd, base):  # type: ignore[no-untyped-def]
+            assert self.evaluate
+            return dict(base)
+
+    tmux = FakeTmuxRepository()
+    hook = FakeLayoutHookRunner()
+    hook._side_effect = lambda: tmux.seed_session("mp-workspace", {"0.0": 100})
+    source = _UnexpectedSource()
+    health = FakeHealthChecker({'test "$WORKSPACE_HEALTH" = ready': True})
+    svc = _make_service(
+        tmux=tmux,
+        reaper=FakeProcessReaper(children_set={100}),
+        hook_runner=hook,
+        health_checker=health,
+        environment_source=source,  # type: ignore[arg-type]
+    )
+
+    assert svc.up(ctx) == 0
+    assert len(hook.calls) == 1
+    line = tmux.sent[0][2]
+    assert "winter env workspace" not in line
+    assert ".winter.env" not in line
+    source.evaluate = True
+    assert svc.status_env_document(ctx)["services"][0]["health"] == "healthy"
+    assert health.calls
+    effective_environment = health.calls[0][1]
+    assert effective_environment is not None
+    assert effective_environment["WORKSPACE_HEALTH"] == "ready"
+
+
+def test_unmapped_project_hook_does_not_evaluate_provider_scope() -> None:
+    class _UnexpectedSource:
+        def scope_environment(self, scope, *, cwd, base):  # type: ignore[no-untyped-def]
+            raise AssertionError("unmapped project hook must not evaluate scope")
+
+        def env_file_environment(self, path, *, cwd, base):  # type: ignore[no-untyped-def]
+            raise AssertionError("unmapped project hook must not evaluate env_file")
+
+    tmux = FakeTmuxRepository()
+    hook = FakeLayoutHookRunner()
+    hook._side_effect = lambda: tmux.seed_session("mp-alpha", {"0.0": 100, "0.1": 101})
+
+    assert _make_service(
+        tmux=tmux,
+        hook_runner=hook,
+        environment_source=_UnexpectedSource(),  # type: ignore[arg-type]
+    ).up(_make_ctx()) == 0
+    assert len(hook.calls) == 1
+
+
 def test_up_hook_path_is_config_dir_relative() -> None:
     """layout_hook is resolved relative to config_dir, NOT workspace_root."""
     tmux = FakeTmuxRepository()
@@ -348,6 +562,30 @@ def test_up_idempotent_when_session_exists() -> None:
     assert result == 0
     assert tmux.sent == []
     assert "already running" in out.getvalue()
+
+
+def test_up_existing_session_noop_does_not_preflight_mappings() -> None:
+    service = Service(
+        name="backend",
+        target=Target(0, 0),
+        cmd="cmd",
+        env={"PORT": "${MISSING}"},
+    )
+    manifest = ServiceManifest(
+        session_prefix="mp",
+        env_file=None,
+        layout_hook=None,
+        services=(service,),
+    )
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 100})
+
+    result = _make_service(tmux=tmux).up(
+        _make_ctx(manifest=manifest, env_vars={}, inject_scope=None),
+    )
+
+    assert result == 0
+    assert tmux.sent == []
 
 
 # ---------------------------------------------------------------------------
@@ -622,6 +860,33 @@ def test_up_partial_missing_pane_in_existing_session_is_skipped_not_raised() -> 
     assert [t for _, t, _ in tmux.sent] == ["0.0"]
 
 
+def test_up_existing_session_preflights_only_stopped_panes() -> None:
+    manifest = ServiceManifest(
+        session_prefix="mp",
+        env_file=None,
+        layout_hook=None,
+        services=(
+            Service(name="backend", target=Target(0, 0), cmd="cmd", env={"PORT": "4100"}),
+            Service(name="frontend", target=Target(0, 1), cmd="cmd", env={"PORT": "${MISSING_RUNNING}"}),
+            Service(name="worker", target=Target(0, 2), cmd="cmd", env={"PORT": "${MISSING_PANE}"}),
+            Service(name="other", target=Target(0, 3), cmd="cmd", env={"PORT": "${MISSING_UNSELECTED}"}),
+        ),
+    )
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 100, "0.1": 200})
+    svc = _make_service(tmux=tmux, reaper=FakeProcessReaper(children_set={200}))
+
+    result = svc.up(
+        _make_ctx(manifest=manifest, env_vars={}, inject_scope=None),
+        services=("backend", "frontend", "worker"),
+    )
+
+    assert result == 0
+    assert len(tmux.sent) == 1
+    assert tmux.sent[0][1] == "0.0"
+    assert "export PORT=4100" in tmux.sent[0][2]
+
+
 _MANIFEST_PARTIAL_STARTUP_TOML = """\
 session_prefix = "mp"
 
@@ -836,6 +1101,93 @@ def test_restart_reaps_children_and_resends() -> None:
     assert line == expected
 
 
+def test_restart_resends_the_service_environment_mapping() -> None:
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 10})
+    service = Service(
+        name="backend",
+        target=Target(0, 0),
+        cmd="cmd",
+        env={"PORT": "${BASE_PORT}"},
+    )
+    manifest = ServiceManifest(
+        session_prefix="mp",
+        env_file=".winter.env",
+        layout_hook=None,
+        services=(service,),
+    )
+    ctx = _make_ctx(
+        manifest=manifest,
+        env_vars={"BASE_PORT": "4100"},
+        env_file_path=_WORKTREE / ".winter.env",
+    )
+    svc = _make_service(tmux=tmux)
+
+    assert svc.restart(ctx, "backend") == 0
+
+    assert '&& export PORT="${BASE_PORT}" && echo \'=== backend ===\'' in tmux.sent[0][2]
+
+
+def test_restart_batch_preflights_all_mappings_before_reaping() -> None:
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 10, "0.1": 20})
+    reaper = FakeProcessReaper(descendant_map={10: [100], 20: [200]})
+    manifest = ServiceManifest(
+        session_prefix="mp",
+        env_file=None,
+        layout_hook=None,
+        services=(
+            Service(name="backend", target=Target(0, 0), cmd="cmd", env={"PORT": "${BASE_PORT}"}),
+            Service(name="frontend", target=Target(0, 1), cmd="cmd", env={"PORT": "${MISSING_PORT}"}),
+        ),
+    )
+    ctx = _make_ctx(manifest=manifest, env_vars={"BASE_PORT": "4100"})
+    svc = _make_service(tmux=tmux, reaper=reaper)
+
+    with pytest.raises(OrchestratorError, match="MISSING_PORT"):
+        svc.restart_services(ctx, ("backend", "frontend"))
+
+    assert reaper.killed == []
+    assert tmux.sent == []
+
+
+def test_restart_mapped_service_missing_env_file_fails_before_reaping(tmp_path: Path) -> None:
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 10})
+    reaper = FakeProcessReaper(descendant_map={10: [100]})
+    service = Service(name="backend", target=Target(0, 0), cmd="cmd", env={"PORT": "4100"})
+    manifest = ServiceManifest(
+        session_prefix="mp",
+        env_file=".missing.env",
+        layout_hook=None,
+        services=(service,),
+    )
+    ctx = SessionContext(
+        env="alpha",
+        workspace_root=tmp_path,
+        worktree_dir=tmp_path,
+        config_dir=tmp_path,
+        session_prefix="mp",
+        services=manifest.services,
+        layout_hook=None,
+        logs=manifest.logs,
+        env_vars={},
+        inject_scope=None,
+        env_file_path=tmp_path / ".missing.env",
+    )
+    svc = _make_service(
+        tmux=tmux,
+        reaper=reaper,
+        environment_source=SubprocessEnvironmentSource(),
+    )
+
+    with pytest.raises(OrchestratorError, match="file does not exist"):
+        svc.restart(ctx, "backend")
+
+    assert reaper.killed == []
+    assert tmux.sent == []
+
+
 def test_restart_no_children_is_noop_reap() -> None:
     """A stopped service (no children) restarts without reaping."""
     tmux = FakeTmuxRepository()
@@ -941,6 +1293,36 @@ cmd = ""
     assert len(tmux.sent) == 1
     _, _, line = tmux.sent[0]
     assert line == f"cd {shlex.quote(str(_WORKTREE))} && echo {shlex.quote('=== shell ===')} ".strip()
+
+
+def test_up_interactive_service_exports_mapping_before_banner() -> None:
+    toml = '''\
+session_prefix = "mp"
+
+[[service]]
+name = "shell"
+target = "0.0"
+cmd = ""
+
+[service.env]
+SHELL_PROFILE = "debug"
+'''
+    tmux = FakeTmuxRepository()
+    manifest = _make_manifest(toml)
+    ctx = _make_ctx(manifest=manifest, inject_scope=None)
+    original_new_session = tmux.new_session
+
+    def _new_session_with_pane(session: str, cwd: object, width: object, height: object) -> None:
+        original_new_session(session, cwd, width, height)  # type: ignore[arg-type]
+        tmux._sessions[session]["0.0"] = 100
+
+    tmux.new_session = _new_session_with_pane  # type: ignore[method-assign]
+    svc = _make_service(tmux=tmux)
+
+    assert svc.up(ctx) == 0
+
+    line = tmux.sent[0][2]
+    assert line == "cd /fake/workspace/alpha && export SHELL_PROFILE=debug && echo '=== shell ==='"
 
 
 # ---------------------------------------------------------------------------
@@ -1521,6 +1903,210 @@ def test_status_env_document_populates_declared_health() -> None:
     ]
 
 
+def test_status_health_checker_receives_effective_service_environment() -> None:
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 10})
+    health = FakeHealthChecker({"http://localhost:${PORT}/health": True})
+    manifest = ServiceManifest(
+        session_prefix="mp",
+        env_file=".winter.env",
+        layout_hook=None,
+        services=(
+            Service(
+                name="backend",
+                target=Target(0, 0),
+                cmd="cmd",
+                env={"PORT": "${BASE_PORT}"},
+                health=Health(type=HealthType.URL, target="http://localhost:${PORT}/health"),
+            ),
+        ),
+    )
+    ctx = _make_ctx(
+        manifest=manifest,
+        env_vars={"BASE_PORT": "4100"},
+    )
+    svc = _make_service(
+        tmux=tmux,
+        reaper=FakeProcessReaper(children_set={10}),
+        health_checker=health,
+    )
+
+    document = svc.status_env_document(ctx)
+
+    assert document["services"][0]["health"] == "healthy"
+    effective_env = health.calls[0][1]
+    assert effective_env is not None
+    assert effective_env["BASE_PORT"] == "4100"
+    assert effective_env["PORT"] == "4100"
+
+
+def test_status_health_uses_scope_source_when_provider_has_no_scope_band() -> None:
+    service = Service(
+        name="api",
+        target=Target(0, 0),
+        cmd="cmd",
+        env={"PORT": "${WTS_API_PORT}"},
+        health=Health(type=HealthType.CMD, target='test "$PORT" = 4020'),
+    )
+    manifest = ServiceManifest(session_prefix="mp", env_file=None, layout_hook=None, services=(service,))
+
+    class _ScopeSource:
+        def scope_environment(self, scope, *, cwd, base):  # type: ignore[no-untyped-def]
+            return {**base, "WTS_API_PORT": "4020"}
+
+        def env_file_environment(self, path, *, cwd, base):  # type: ignore[no-untyped-def]
+            return dict(base)
+
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 10})
+    svc = _make_service(
+        tmux=tmux,
+        reaper=FakeProcessReaper(children_set={10}),
+        health_checker=SubprocessHealthChecker(),
+        environment_source=_ScopeSource(),  # type: ignore[arg-type]
+    )
+
+    ctx = dataclasses.replace(_make_ctx(manifest=manifest, env_vars={}), worktree_dir=Path.cwd())
+    document = svc.status_env_document(ctx)
+
+    assert document["services"][0]["health"] == "healthy"
+
+
+def test_env_file_scope_expansion_is_shared_by_launch_and_health(tmp_path: Path) -> None:
+    env_file = tmp_path / ".winter.env"
+    counter = tmp_path / "counter"
+    env_file.write_text(
+        f"GLOBAL_PORT=$(printf x >> {shlex.quote(str(counter))}; printf %s ${{WTS_API_PORT}})\n",
+        encoding="utf-8",
+    )
+    service = Service(
+        name="api",
+        target=Target(0, 0),
+        cmd="cmd",
+        env={"PORT": "${GLOBAL_PORT}"},
+        health=Health(type=HealthType.CMD, target='test "$PORT" = 4020'),
+    )
+    manifest = ServiceManifest(session_prefix="mp", env_file=".winter.env", layout_hook=None, services=(service,))
+
+    class _ScopeAndShellSource:
+        def __init__(self) -> None:
+            self._shell = SubprocessEnvironmentSource()
+
+        def scope_environment(self, scope, *, cwd, base):  # type: ignore[no-untyped-def]
+            return {**base, "WTS_API_PORT": "4020"}
+
+        def env_file_environment(self, path, *, cwd, base):  # type: ignore[no-untyped-def]
+            return self._shell.env_file_environment(path, cwd=cwd, base=base)
+
+    ctx = SessionContext(
+        env="alpha",
+        workspace_root=tmp_path,
+        worktree_dir=tmp_path,
+        config_dir=tmp_path,
+        session_prefix="mp",
+        services=manifest.services,
+        layout_hook=None,
+        logs=manifest.logs,
+        env_vars={},
+        inject_scope="alpha",
+        env_file_path=env_file,
+    )
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 10})
+    svc = _make_service(
+        tmux=tmux,
+        reaper=FakeProcessReaper(children_set={10}),
+        health_checker=SubprocessHealthChecker(),
+        environment_source=_ScopeAndShellSource(),  # type: ignore[arg-type]
+    )
+
+    assert svc.restart(ctx, "api") == 0
+    assert 'export PORT="${GLOBAL_PORT}"' in tmux.sent[0][2]
+    assert ".winter.env" in tmux.sent[0][2]
+    assert counter.read_text(encoding="utf-8") == "x"
+    document = svc.status_env_document(ctx)
+    assert document["services"][0]["health"] == "healthy"
+    assert counter.read_text(encoding="utf-8") == "xx"
+
+
+def test_service_cwd_drives_mapping_and_health_environment(tmp_path: Path) -> None:
+    service_dir = tmp_path / "apps" / "api"
+    service_dir.mkdir(parents=True)
+    env_file = tmp_path / ".winter.env"
+    env_file.write_text('BASE="$(pwd)"\n', encoding="utf-8")
+    service = Service(
+        name="api",
+        target=Target(0, 0),
+        cmd="cmd",
+        cwd="apps/api",
+        env={"VALUE": "${BASE}"},
+        health=Health(type=HealthType.CMD, target="true"),
+    )
+    manifest = ServiceManifest(
+        session_prefix="mp",
+        env_file=".winter.env",
+        layout_hook=None,
+        services=(service,),
+    )
+    ctx = SessionContext(
+        env="alpha",
+        workspace_root=tmp_path,
+        worktree_dir=tmp_path,
+        config_dir=tmp_path,
+        session_prefix="mp",
+        services=manifest.services,
+        layout_hook=None,
+        logs=manifest.logs,
+        env_vars={},
+        inject_scope=None,
+        env_file_path=env_file,
+    )
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 10})
+    health = FakeHealthChecker({"true": True})
+    svc = _make_service(
+        tmux=tmux,
+        reaper=FakeProcessReaper(children_set={10}),
+        health_checker=health,
+        environment_source=SubprocessEnvironmentSource(),
+    )
+
+    assert svc.restart(ctx, "api") == 0
+    assert 'export VALUE="${BASE}"' in tmux.sent[0][2]
+    assert svc.status_env_document(ctx)["services"][0]["health"] == "healthy"
+    effective_env = health.calls[0][1]
+    assert effective_env is not None
+    assert effective_env["VALUE"] == str(service_dir)
+    assert health.calls[0][2] == service_dir
+
+
+def test_unmapped_health_service_keeps_plain_env_file_sourcing() -> None:
+    env_file = _WORKTREE / ".winter.env"
+    service = Service(
+        name="api",
+        target=Target(0, 0),
+        cmd="cmd",
+        health=Health(type=HealthType.URL, target="http://localhost:${PORT}/health"),
+    )
+    manifest = ServiceManifest(
+        session_prefix="mp",
+        env_file=".winter.env",
+        layout_hook=None,
+        services=(service,),
+    )
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 10})
+
+    assert _make_service(tmux=tmux).restart(
+        _make_ctx(manifest=manifest, env_file_path=env_file),
+        "api",
+    ) == 0
+
+    line = tmux.sent[0][2]
+    assert f"&& . {shlex.quote(str(env_file))} && echo" in line
+    assert "set -a" not in line
+
+
 def test_status_env_document_declared_health_is_unhealthy_without_running_service() -> None:
     manifest = ServiceManifest(
         session_prefix="mp",
@@ -2067,6 +2653,38 @@ def test_up_retry_true_dead_then_alive_after_one_retry() -> None:
     # Settle sleep + one retry_delay sleep (1.0)
     assert clock.sleep_calls == [0.5, 1.0]
     assert err.getvalue() == ""
+
+
+def test_up_retry_reuses_the_service_environment_mapping() -> None:
+    toml = '''\
+session_prefix = "mp"
+
+[[service]]
+name = "backend"
+target = "0.0"
+cmd = "npm run start:dev"
+
+[service.env]
+PORT = "4100"
+
+[service.startup]
+retries = 1
+retry_delay = 1.0
+'''
+    reaper = FakeProcessReaper(children_sequence={100: [False, True]})
+    clock = FakeFollowClock()
+
+    rc, tmux, _out, _err = _up_with_panes(
+        toml,
+        {"0.0": 100},
+        reaper=reaper,
+        clock=clock,
+        retry=True,
+    )
+
+    assert rc == 0
+    assert len(tmux.sent) == 2
+    assert all("export PORT=4100" in line for _, _, line in tmux.sent)
 
 
 def test_up_retry_true_exhausted_retries_returns_rc1_with_failed_name() -> None:
@@ -2752,3 +3370,21 @@ def test_status_env_document_offset_expression_without_port_base_renders_blank()
 
     web = doc["services"][0]
     assert web["ports"] == []
+
+
+def test_unmapped_string_port_status_does_not_require_env_file(tmp_path: Path) -> None:
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 10})
+    reaper = FakeProcessReaper(children_set={10})
+    manifest = ServiceManifest(
+        session_prefix="mp",
+        env_file=".missing.env",
+        layout_hook=None,
+        services=(Service(name="web", target=Target(0, 0), cmd="cmd", port="WINTER_PORT_BASE + 10"),),
+    )
+    ctx = dataclasses.replace(_make_ctx(manifest=manifest, env_vars={"WINTER_PORT_BASE": "4060"}), worktree_dir=tmp_path)
+    svc = _make_service(tmux=tmux, reaper=reaper, stdout=io.StringIO())
+
+    doc = svc.status_env_document(ctx)
+
+    assert doc["services"][0]["ports"] == [4070]

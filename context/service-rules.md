@@ -98,24 +98,33 @@ Once installed, the workspace conventions are:
   `winter service logs workspace` is not wired; read the log files directly.
 - **A `[[service]]` may declare a `port` field** — either a literal integer (`port = 8080`) or an env-relative offset
   expression (`port = "WINTER_PORT_BASE + 10"`). A bare integer is an absolute port number (the same in every
-  environment); the `WINTER_PORT_BASE + <offset>` form is resolved per-env at status time against the `WINTER_PORT_BASE`
-  that core injects into the provider's process environment (see the env-injection note below). Declared ports are
-  surfaced in the `ports` field of winter's status document and the `PORTS` column of the rendered table — see
-  `workspace:/context/winter-cli/usage/service.md` for the wire shape. Services without `port` emit an empty `ports`
-  field.
-- **Env-injection contract:** Core (winter-cli) computes and injects the scope's full environment into the provider
-  subprocess. The injected variable list and the per-action injection matrix (which actions receive the env, and which
-  do not) are owned by `workspace:/context/winter-cli/contracts/service-orchestrator.md`. This provider reads those vars
-  from `os.environ` and does **not** locate, open, or shell-source any `.winter.env` file. There is no
-  `WINTER_INJECTED_KEYS`. Tmux panes are children of the tmux server, not of the provider process, so they do not
-  inherit the process environment automatically. Instead, each pane's launch line self-sources via
-  `eval "$(winter env <scope>)"` before running its command — this brings `WINTER_PORT_BASE` and all declared env-var
-  band entries into the pane shell regardless of tmux session lifecycle. When the manifest declares an `env_file`, that
-  file is additionally dot-sourced (`&& . '<env_file>'`) after the scope eval, layering machine-specific credentials on
-  top of winter's vars. **PATH requirement:** the `winter` CLI must be on the PATH of the tmux pane's shell (a non-login
-  shell by default) since each pane self-sources `eval "$(winter env <scope>)"` unguarded. If `winter` is absent, the
-  pane prints `winter: command not found` and the service starts without its scope env. This is normally satisfied in a
-  winter workspace where the PATH is configured in the shell's rc file.
+  environment); the `WINTER_PORT_BASE + <offset>` form is resolved per-env at status time against the unified scope
+  environment (see the env-injection note below). Declared ports are surfaced in the `ports` field of winter's status
+  document and the `PORTS` column of the rendered table — see `workspace:/context/winter-cli/usage/service.md` for the
+  wire shape. Services without `port` emit an empty `ports` field.
+- **Env-injection contract:** Core (winter-cli) computes the scope environment and injects it into the provider only on
+  the actions listed by `workspace:/context/winter-cli/contracts/service-orchestrator.md`; `restart` and `logs` receive
+  only the base extension variables. This provider overlays the dispatched process environment where present and uses
+  the canonical `winter env <scope>` source for the missing scope baseline, including the explicit `workspace` scope
+  when workspace mappings need it. Tmux panes are children of the tmux server, not of the provider process, so unmapped
+  project panes use the `eval "$(winter env <scope>)"` and `env_file` source prefix. The provider evaluates those
+  sources during mapping preflight. The pane then sources them once for its launch and resolves mapping references
+  there, so the mapping and command use the same shell evaluation without exposing file values in the tmux launch line.
+  URL/CMD health probes re-evaluate the current scope and env_file sources when status runs, without changing unmapped
+  launch behavior. Services without mappings use the plain dot-source behavior. There is no `WINTER_INJECTED_KEYS`. A
+  service may then declare an optional `[service.env]` table. Its string values are resolved in declaration order
+  against scope, the shell-evaluated global `env_file`, and earlier mapping keys, then exported before the banner and
+  command. The values are additive, and a direct assignment in `cmd` can still override one. Health applies the same
+  precedence and mapping rules again against current sources when status runs. In `config.local.toml`, `[service.env]`
+  merges by key: overridden committed keys retain their original positions, omitted committed keys remain, and
+  local-only keys append in local declaration order. Static validation rejects invalid names and malformed `${...}`
+  references; unresolved names and missing configured files are context-dependent and fail the selected lifecycle
+  operation before pane mutation. Layout hooks retain the provider process environment and never receive service
+  mappings. This mapping is configuration, not a secret store; keep machine-local credentials in `env_file`. **PATH
+  requirement:** the `winter` CLI must be on the PATH of both the provider and tmux pane shells since the canonical
+  scope source is used in both places. If it is absent, scope-dependent preflight fails clearly and a pane cannot
+  self-source its scope. This is normally satisfied in a winter workspace where the PATH is configured in the shell's rc
+  file.
 - **Not all services are captured the same way.** Each `[[service]]` entry has a `log` field (default `"file"`) that
   controls how its output is captured and read:
   - `"file"` (default): stdout/stderr is captured to `<env>/.winter/logs/<svc>.log` via the capture writer; `logs` reads

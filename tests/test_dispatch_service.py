@@ -13,19 +13,28 @@ and a minimal fake builder/tmux) to verify:
 
 from __future__ import annotations
 
+import os
 from io import StringIO
 from pathlib import Path
 
+import service_manifest.container as sm_container_mod
 from service_manifest.modules.manifest.errors import ManifestError
 from service_manifest.modules.manifest.model import Service, ServiceManifest, Target
 from service_orchestrator.modules.orchestrate.dispatch_service import DispatchService, _split_scope_pattern
 from service_orchestrator.modules.orchestrate.errors import OrchestratorError
 from service_orchestrator.modules.orchestrate.log_query import LogRenderOptions
+from service_orchestrator.modules.orchestrate.orchestrator_service import OrchestratorService
 from service_orchestrator.modules.orchestrate.selector_service import SelectorService
 from service_orchestrator.modules.orchestrate.session_context import SessionContext
-from service_orchestrator.modules.orchestrate.session_context_builder import WORKSPACE_TARGET
-from tests.conftest import FakeTmuxRepository
-from tests.fakes import FakeLogService, FakeOrchestrator
+from service_orchestrator.modules.orchestrate.session_context_builder import WORKSPACE_TARGET, SessionContextBuilder
+from tests.conftest import (
+    FakeLayoutHookRunner,
+    FakeLogRepository,
+    FakeProcessReaper,
+    FakeTmuxRepository,
+    FakeWorkspaceLocator,
+)
+from tests.fakes import FakeFilesystemReader, FakeLogService, FakeOrchestrator
 
 # ---------------------------------------------------------------------------
 # Shared test data
@@ -76,7 +85,7 @@ def _make_workspace_ctx() -> SessionContext:
         layout_hook=_MANIFEST.workspace_layout_hook,
         logs=_MANIFEST.logs,
         env_vars=None,
-        inject_scope=None,
+        inject_scope=WORKSPACE_TARGET,
         env_file_path=None,
     )
 
@@ -438,6 +447,185 @@ def test_restart_env_services_rc_passthrough() -> None:
     svc, _b, _o, _ls, _err = _make_dispatch(service_rc=7)
     rc = svc.restart_env_services({"alpha": ["backend"]}, _WORKSPACE)
     assert rc == 7
+
+
+def test_restart_selected_preflights_all_scopes_before_any_restart() -> None:
+    events: list[tuple[str, str]] = []
+
+    class _AtomicOrchestrator(FakeOrchestrator):
+        def preflight_restart_services(self, ctx: SessionContext, service_names: tuple[str, ...]) -> None:
+            events.append(("preflight", ctx.env))
+            if ctx.env == "beta":
+                raise OrchestratorError("unresolved mapping")
+
+        def restart_services(self, ctx: SessionContext, service_names: tuple[str, ...]) -> int:
+            events.append(("restart", ctx.env))
+            return 0
+
+    builder = _FakeBuilder()
+    orchestrator = _AtomicOrchestrator()
+    err = StringIO()
+    dispatch = DispatchService(builder, orchestrator, FakeLogService(), err)  # type: ignore[arg-type]
+    selector = SelectorService(FakeTmuxRepository(), builder)  # type: ignore[arg-type]
+
+    result = dispatch.restart_selected(
+        selector,
+        [],
+        {"alpha": ["backend"], "beta": ["worker"]},
+        _WORKSPACE,
+    )
+
+    assert result == 1
+    assert events == [("preflight", "alpha"), ("preflight", "beta")]
+    assert "orchestrate: env 'beta': unresolved mapping" in err.getvalue()
+
+
+def test_dispatched_restart_preflights_scope_mapping_without_provider_scope(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """The actual dispatch path resolves restart mappings before reaping/sending."""
+    manifest_toml = '''\
+session_prefix = "mp"
+
+[[service]]
+name = "api"
+target = "0.0"
+cmd = "python -m api"
+
+[service.env]
+PORT = "${WTS_API_PORT}"
+'''
+    config_path = _CONFIG_DIR / "config.toml"
+    sm = sm_container_mod.Container(FakeFilesystemReader({config_path: manifest_toml}))
+    builder = SessionContextBuilder(
+        locator=FakeWorkspaceLocator(_WORKSPACE),
+        manifest_reader=sm.manifest_reader,
+        env_reader=sm.env_reader,
+    )
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 100})
+
+    class _ScopeSource:
+        def scope_environment(self, scope, *, cwd, base):  # type: ignore[no-untyped-def]
+            assert scope == "alpha"
+            return {**base, "WTS_API_PORT": "4031"}
+
+        def env_file_environment(self, path, *, cwd, base):  # type: ignore[no-untyped-def]
+            return dict(base)
+
+    orchestrator = OrchestratorService(
+        tmux=tmux,
+        reaper=FakeProcessReaper(),
+        hook_runner=FakeLayoutHookRunner(),
+        log_repo=FakeLogRepository(),
+        environment_source=_ScopeSource(),  # type: ignore[arg-type]
+    )
+    err = StringIO()
+    dispatch = DispatchService(builder, orchestrator, FakeLogService(), err)  # type: ignore[arg-type]
+    monkeypatch.delenv("WTS_API_PORT", raising=False)
+
+    assert "WTS_API_PORT" not in os.environ
+    assert dispatch.restart_env_services({"alpha": ["api"]}, _WORKSPACE) == 0
+    assert len(tmux.sent) == 1
+    line = tmux.sent[0][2]
+    assert 'eval "$(winter env alpha)"' in line
+    assert 'export PORT="${WTS_API_PORT}"' in line
+
+
+def test_dispatched_up_resolves_scope_mapping_without_provider_scope(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """The actual up dispatch resolves mappings before sending the pane command."""
+    manifest_toml = '''\
+session_prefix = "mp"
+layout_hook = "layout-hook.sh"
+
+[[service]]
+name = "api"
+target = "0.0"
+cmd = "python -m api"
+
+[service.env]
+PORT = "${WTS_API_PORT}"
+'''
+    config_path = _CONFIG_DIR / "config.toml"
+    sm = sm_container_mod.Container(FakeFilesystemReader({config_path: manifest_toml}))
+    builder = SessionContextBuilder(
+        locator=FakeWorkspaceLocator(_WORKSPACE),
+        manifest_reader=sm.manifest_reader,
+        env_reader=sm.env_reader,
+    )
+    tmux = FakeTmuxRepository()
+
+    class _ScopeSource:
+        def scope_environment(self, scope, *, cwd, base):  # type: ignore[no-untyped-def]
+            assert scope == "alpha"
+            return {**base, "WTS_API_PORT": "4031"}
+
+        def env_file_environment(self, path, *, cwd, base):  # type: ignore[no-untyped-def]
+            return dict(base)
+
+    hook_runner = FakeLayoutHookRunner(side_effect=lambda: tmux.add_pane("mp-alpha", "0.0", 100))
+    orchestrator = OrchestratorService(
+        tmux=tmux,
+        reaper=FakeProcessReaper(),
+        hook_runner=hook_runner,
+        log_repo=FakeLogRepository(),
+        environment_source=_ScopeSource(),  # type: ignore[arg-type]
+    )
+    err = StringIO()
+    dispatch = DispatchService(builder, orchestrator, FakeLogService(), err)  # type: ignore[arg-type]
+    monkeypatch.delenv("WTS_API_PORT", raising=False)
+
+    assert "WTS_API_PORT" not in os.environ
+    assert dispatch.up("alpha", _WORKSPACE) == 0
+    assert len(tmux.sent) == 1
+    line = tmux.sent[0][2]
+    assert 'eval "$(winter env alpha)"' in line
+    assert 'export PORT="${WTS_API_PORT}"' in line
+
+
+def test_dispatched_restart_does_not_reap_or_send_when_mapping_is_unresolved(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    manifest_toml = '''\
+session_prefix = "mp"
+
+[[service]]
+name = "api"
+target = "0.0"
+cmd = "python -m api"
+
+[service.env]
+PORT = "${WTS_API_PORT}"
+'''
+    config_path = _CONFIG_DIR / "config.toml"
+    sm = sm_container_mod.Container(FakeFilesystemReader({config_path: manifest_toml}))
+    builder = SessionContextBuilder(
+        locator=FakeWorkspaceLocator(_WORKSPACE),
+        manifest_reader=sm.manifest_reader,
+        env_reader=sm.env_reader,
+    )
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 100})
+    reaper = FakeProcessReaper(descendant_map={100: [200]})
+
+    class _MissingScopeSource:
+        def scope_environment(self, scope, *, cwd, base):  # type: ignore[no-untyped-def]
+            return dict(base)
+
+        def env_file_environment(self, path, *, cwd, base):  # type: ignore[no-untyped-def]
+            return dict(base)
+
+    orchestrator = OrchestratorService(
+        tmux=tmux,
+        reaper=reaper,
+        hook_runner=FakeLayoutHookRunner(),
+        log_repo=FakeLogRepository(),
+        environment_source=_MissingScopeSource(),  # type: ignore[arg-type]
+    )
+    err = StringIO()
+    dispatch = DispatchService(builder, orchestrator, FakeLogService(), err)  # type: ignore[arg-type]
+    monkeypatch.delenv("WTS_API_PORT", raising=False)
+
+    assert dispatch.restart_env_services({"alpha": ["api"]}, _WORKSPACE) == 1
+    assert tmux.sent == []
+    assert reaper.killed == []
+    assert "WTS_API_PORT" in err.getvalue()
 
 
 def test_restart_env_services_orchestrator_error_prints_env_line() -> None:

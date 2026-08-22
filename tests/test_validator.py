@@ -235,6 +235,108 @@ def test_resolvable_var_in_service_health_no_violation() -> None:
     assert _validator.validate(manifest, env={"BACKEND_PORT": "3000"}) == []
 
 
+def test_service_env_mapping_resolves_against_env_and_prior_keys() -> None:
+    manifest = _make_manifest(
+        services=(
+            Service(
+                name="backend",
+                target=Target(0, 0),
+                cmd="cmd",
+                env={"PORT": "${BASE_PORT}", "URL": "http://localhost:${PORT}"},
+            ),
+        )
+    )
+
+    assert _validator.validate(manifest, env={"BASE_PORT": "4100"}) == []
+
+
+def test_service_env_invalid_name_is_violation() -> None:
+    manifest = _make_manifest(
+        services=(Service(name="backend", target=Target(0, 0), cmd="cmd", env={"PORT-NAME": "3000"}),)
+    )
+
+    violations = _validator.validate(manifest, env={})
+
+    assert any("backend" in violation and "PORT-NAME" in violation and "POSIX" in violation for violation in violations)
+
+
+def test_service_env_nul_value_is_violation() -> None:
+    manifest = _make_manifest(
+        services=(Service(name="backend", target=Target(0, 0), cmd="cmd", env={"PORT": "4100\x00bad"}),)
+    )
+
+    violations = _validator.validate(manifest, env={})
+
+    assert any("backend" in violation and "PORT" in violation and "NUL" in violation for violation in violations)
+
+
+def test_service_env_malformed_reference_is_violation() -> None:
+    manifest = _make_manifest(
+        services=(Service(name="backend", target=Target(0, 0), cmd="cmd", env={"PORT": "${BASE-PORT}"}),)
+    )
+
+    violations = _validator.validate(manifest, env={})
+
+    assert any("backend" in violation and "malformed" in violation for violation in violations)
+
+
+def test_service_env_unresolvable_reference_is_runtime_error_not_doctor_violation() -> None:
+    manifest = _make_manifest(
+        env_file=".winter.env",
+        services=(Service(name="backend", target=Target(0, 0), cmd="cmd", env={"PORT": "${BASE_PORT}"}),)
+    )
+
+    assert _validator.validate(manifest, env={}) == []
+
+
+def test_service_env_core_band_reference_is_not_rejected_with_env_file() -> None:
+    manifest = _make_manifest(
+        env_file=".winter.env",
+        services=(
+            Service(
+                name="api",
+                target=Target(0, 0),
+                cmd="cmd",
+                env={"PORT": "${WTS_API_PORT}"},
+            ),
+        ),
+    )
+
+    assert _validator.validate(manifest, env={"OTHER": "value"}) == []
+
+
+def test_service_health_can_reference_service_env_mapping() -> None:
+    manifest = _make_manifest(
+        services=(
+            Service(
+                name="backend",
+                target=Target(0, 0),
+                cmd="cmd",
+                env={"PORT": "${BASE_PORT}"},
+                health=Health(type=HealthType.URL, target="http://localhost:${PORT}/health"),
+            ),
+        )
+    )
+
+    assert _validator.validate(manifest, env={"BASE_PORT": "4100"}) == []
+
+
+def test_workspace_health_can_reference_its_service_env_mapping() -> None:
+    manifest = _make_manifest(
+        workspace_services=(
+            Service(
+                name="docker",
+                target=Target(0, 0),
+                cmd="cmd",
+                env={"PORT": "5000"},
+                health=Health(type=HealthType.URL, target="http://localhost:${PORT}/health"),
+            ),
+        )
+    )
+
+    assert _validator.validate(manifest, env=None) == []
+
+
 def test_service_health_blank_target_is_violation() -> None:
     manifest = _make_manifest(services=(_service_with_health("backend", Health(type=HealthType.CMD, target=" ")),))
     violations = _validator.validate(manifest)
@@ -289,20 +391,16 @@ def test_log_health_target_with_dollar_brace_is_not_flagged_as_unresolved_var() 
     assert _validator.validate(manifest, env={}) == []
 
 
-def test_workspace_service_health_var_is_violation() -> None:
+def test_workspace_service_health_scope_reference_is_runtime_resolved() -> None:
     manifest = _make_manifest(
         workspace_services=(
             _service_with_health(
                 "docker",
-                Health(type=HealthType.URL, target="http://localhost:${DOCKER_PORT}/health"),
+                Health(type=HealthType.URL, target="http://localhost:${WINTER_WORKSPACE_PORT_BASE}/health"),
             ),
         ),
     )
-    violations = _validator.validate(manifest, env={"DOCKER_PORT": "5000"})
-
-    assert len(violations) == 1
-    assert "workspace service 'docker' health" in violations[0]
-    assert "DOCKER_PORT" in violations[0]
+    assert _validator.validate(manifest, env={}) == []
 
 
 def test_workspace_service_log_health_dollar_brace_is_not_a_var_violation() -> None:

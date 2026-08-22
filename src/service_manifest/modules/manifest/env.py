@@ -17,6 +17,7 @@ unit-testable without touching the filesystem.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 
 
 def parse_env_text(text: str) -> dict[str, str]:
@@ -27,6 +28,9 @@ def parse_env_text(text: str) -> dict[str, str]:
     value are removed.
 
     No variable expansion is performed here — values are returned verbatim.
+    Lifecycle code that must match a pane's POSIX shell uses the runtime
+    environment-source adapter instead of treating this static parser as an
+    evaluation engine.
     """
     result: dict[str, str] = {}
     for raw_line in text.splitlines():
@@ -53,7 +57,7 @@ def parse_env_text(text: str) -> dict[str, str]:
 _VAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
-def interpolate(template: str, env: dict[str, str]) -> tuple[str, list[str]]:
+def interpolate(template: str, env: Mapping[str, str]) -> tuple[str, list[str]]:
     """Substitute ``${VAR}`` placeholders in *template* using *env*.
 
     Only the brace form ``${NAME}`` is interpolated; bare ``$NAME`` is left
@@ -102,3 +106,49 @@ def referenced_vars(template: str) -> list[str]:
             seen.add(name)
             result.append(name)
     return result
+
+
+_ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def is_valid_env_name(name: str) -> bool:
+    """Return whether *name* is a valid POSIX-style environment name."""
+    return _ENV_NAME_RE.fullmatch(name) is not None
+
+
+def malformed_references(template: str) -> list[str]:
+    """Return malformed ``${...}`` references in *template* in source order."""
+    malformed: list[str] = []
+    for marker in re.finditer(r"\$\{", template):
+        start = marker.start()
+        if _VAR_RE.match(template, start) is not None:
+            continue
+        end = template.find("}", start + 2)
+        if end < 0:
+            end = len(template)
+        malformed.append(template[start : end + 1])
+    return malformed
+
+
+def resolve_service_env(
+    mapping: Mapping[str, str],
+    env: Mapping[str, str],
+) -> tuple[dict[str, str], list[tuple[str, str]]]:
+    """Resolve a service mapping against *env*, in declaration order.
+
+    Resolved entries are added to the environment before the next mapping
+    entry, so a later value can reference an earlier one. Entries with missing
+    references are not added to the resolution base and are reported as
+    ``(mapping_key, variable_name)`` pairs.
+    """
+    effective = dict(env)
+    resolved: dict[str, str] = {}
+    unresolved: list[tuple[str, str]] = []
+    for key, value in mapping.items():
+        rendered, missing = interpolate(value, effective)
+        if missing:
+            unresolved.extend((key, name) for name in missing)
+            continue
+        resolved[key] = rendered
+        effective[key] = rendered
+    return resolved, unresolved

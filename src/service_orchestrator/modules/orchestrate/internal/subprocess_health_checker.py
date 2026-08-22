@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import urllib.error
@@ -44,7 +45,7 @@ class SubprocessHealthChecker:
         if health.type == HealthType.URL:
             return self._check_url(target, timeout)
         if health.type == HealthType.CMD:
-            return self._check_cmd(target, timeout, cwd)
+            return self._check_cmd(target, timeout, cwd, env)
         return False
 
     @staticmethod
@@ -56,7 +57,7 @@ class SubprocessHealthChecker:
             return False
 
     @staticmethod
-    def _check_cmd(target: str, timeout: float, cwd: Path | None) -> bool:
+    def _check_cmd(target: str, timeout: float, cwd: Path | None, env: dict[str, str] | None) -> bool:
         try:
             result = subprocess.run(
                 target,
@@ -66,6 +67,7 @@ class SubprocessHealthChecker:
                 stderr=subprocess.DEVNULL,
                 check=False,
                 cwd=cwd,
+                env=dict(env) if env is not None else dict(os.environ),
             )
         except (OSError, subprocess.TimeoutExpired):
             return False

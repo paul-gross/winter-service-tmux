@@ -2,6 +2,8 @@
 
 from dataclasses import FrozenInstanceError
 
+import pytest
+
 from service_manifest.modules.manifest.model import (
     Health,
     HealthType,
@@ -43,6 +45,22 @@ def test_service_empty_command_is_legal() -> None:
     """An empty command represents an interactive pane — this must not be rejected."""
     svc = Service(name="shell", target=Target(window=1, pane=0), cmd="")
     assert svc.cmd == ""
+
+
+def test_service_env_defaults_to_an_immutable_empty_mapping() -> None:
+    svc = Service(name="shell", target=Target(0, 0), cmd="")
+
+    assert svc.env == {}
+    with pytest.raises(TypeError):
+        svc.env["PORT"] = "3000"  # type: ignore[index]
+
+
+def test_service_env_is_copied_when_constructed_directly() -> None:
+    values = {"PORT": "3000"}
+    svc = Service(name="api", target=Target(0, 0), cmd="cmd", env=values)
+    values["PORT"] = "4000"
+
+    assert svc.env == {"PORT": "3000"}
 
 
 def test_service_health_is_optional() -> None:
