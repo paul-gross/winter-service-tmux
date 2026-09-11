@@ -152,6 +152,99 @@ def _make_service(
 
 
 # ---------------------------------------------------------------------------
+# command-entry gate — which actions ask winter to resolve command band entries
+# ---------------------------------------------------------------------------
+
+
+class _RecordingScopeSource:
+    """Records the ``resolve_commands`` flag of every scope read it serves."""
+
+    def __init__(self) -> None:
+        self.flags: list[bool] = []
+
+    def scope_environment(self, scope, *, cwd, base, resolve_commands):  # type: ignore[no-untyped-def]
+        self.flags.append(resolve_commands)
+        return {**base, "WTS_API_PORT": "4020"}
+
+    def env_file_environment(self, path, *, cwd, base):  # type: ignore[no-untyped-def]
+        return dict(base)
+
+
+_MAPPED_MANIFEST_TOML = """\
+session_prefix = "mp"
+layout_hook = "layout-hook.sh"
+
+[[service]]
+name = "backend"
+target = "0.0"
+cmd = "npm run start:dev"
+
+[service.env]
+PORT = "${WTS_API_PORT}"
+"""
+
+
+def test_up_resolves_command_entries_for_the_mapping_baseline() -> None:
+    """A launch reads the scope with --resolve, so a mapping sees real values."""
+    manifest = _make_manifest(_MAPPED_MANIFEST_TOML)
+    tmux = FakeTmuxRepository()
+    hook = FakeLayoutHookRunner()
+    hook._side_effect = lambda: tmux.seed_session("mp-alpha", {"0.0": 100})
+    source = _RecordingScopeSource()
+    svc = _make_service(tmux=tmux, hook_runner=hook, environment_source=source)
+
+    assert svc.up(_make_ctx(manifest=manifest, env_vars={})) == 0
+
+    assert source.flags == [True]
+    assert 'export PORT="${WTS_API_PORT}"' in tmux.sent[0][2]
+
+
+def test_restart_resolves_command_entries_for_the_mapping_baseline() -> None:
+    """Restart relaunches panes, so it reads the scope the same way up does."""
+    manifest = _make_manifest(_MAPPED_MANIFEST_TOML)
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 100})
+    source = _RecordingScopeSource()
+    svc = _make_service(
+        tmux=tmux,
+        reaper=FakeProcessReaper(children_set={100}),
+        environment_source=source,
+    )
+
+    assert svc.restart(_make_ctx(manifest=manifest, env_vars={}), "backend") == 0
+
+    assert source.flags == [True]
+
+
+def test_status_never_resolves_command_entries() -> None:
+    """A status poll must not execute a configured command entry."""
+    manifest = _make_manifest(_MAPPED_MANIFEST_TOML)
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 100})
+    source = _RecordingScopeSource()
+    svc = _make_service(tmux=tmux, environment_source=source)
+
+    assert svc.status(_make_ctx(manifest=manifest, env_vars={})) == 0
+
+    assert source.flags
+    assert not any(source.flags)
+
+
+def test_status_document_never_resolves_command_entries() -> None:
+    """The status wire document reads the same masked scope the table does."""
+    manifest = _make_manifest(_MAPPED_MANIFEST_TOML)
+    tmux = FakeTmuxRepository()
+    tmux.seed_session("mp-alpha", {"0.0": 100})
+    source = _RecordingScopeSource()
+    svc = _make_service(tmux=tmux, environment_source=source)
+
+    svc.status_env_document(_make_ctx(manifest=manifest, env_vars={}))
+
+    assert source.flags
+    assert not any(source.flags)
+
+
+# ---------------------------------------------------------------------------
 # up — happy path
 # ---------------------------------------------------------------------------
 
@@ -226,7 +319,7 @@ def test_up_send_keys_exact_launch_line_with_scope() -> None:
     backend_line = next(line for _, t, line in tmux.sent if t == "0.0")
     backend_logfile = log_repo.log_path(_WORKTREE, "backend")
     expected_backend = (
-        f'cd {shlex.quote(str(_WORKTREE))} && eval "$(winter env alpha)"'
+        f'cd {shlex.quote(str(_WORKTREE))} && eval "$(winter env alpha --resolve)"'
         f" && echo {shlex.quote('=== backend ===')} && "
         f"{{ npm run start:dev ; }} 2>&1 | "
         f"{shlex.quote(sys.executable)} {shlex.quote(str(writer))} {shlex.quote(str(backend_logfile))} "
@@ -238,7 +331,7 @@ def test_up_send_keys_exact_launch_line_with_scope() -> None:
     frontend_line = next(line for _, t, line in tmux.sent if t == "0.1")
     frontend_logfile = log_repo.log_path(_WORKTREE, "frontend")
     expected_frontend = (
-        f'cd {shlex.quote(str(_WORKTREE))} && eval "$(winter env alpha)"'
+        f'cd {shlex.quote(str(_WORKTREE))} && eval "$(winter env alpha --resolve)"'
         f" && echo {shlex.quote('=== frontend ===')} && "
         f"{{ npm run dev ; }} 2>&1 | "
         f"{shlex.quote(sys.executable)} {shlex.quote(str(writer))} {shlex.quote(str(frontend_logfile))} "
@@ -382,7 +475,7 @@ def test_workspace_mapping_uses_workspace_scope_baseline_for_launch() -> None:
     )
 
     class _WorkspaceSource:
-        def scope_environment(self, scope, *, cwd, base):  # type: ignore[no-untyped-def]
+        def scope_environment(self, scope, *, cwd, base, resolve_commands):  # type: ignore[no-untyped-def]
             assert scope == WORKSPACE_TARGET
             return {**base, "WINTER_WORKSPACE_PORT_BASE": "4000"}
 
@@ -397,7 +490,7 @@ def test_workspace_mapping_uses_workspace_scope_baseline_for_launch() -> None:
 
     assert svc.restart(ctx, "docker") == 0
     line = tmux.sent[0][2]
-    assert 'eval "$(winter env workspace)"' in line
+    assert 'eval "$(winter env workspace --resolve)"' in line
     assert f"set -a && . {_WORKSPACE / '.winter.env'} && set +a" in line
     assert 'export PORT="${WINTER_WORKSPACE_PORT_BASE}"' in line
     assert 'export REGISTRY="${REGISTRY_HOST}"' in line
@@ -435,7 +528,7 @@ def test_unmapped_workspace_launch_stays_source_free_but_health_uses_current_sou
     class _UnexpectedSource:
         evaluate = False
 
-        def scope_environment(self, scope, *, cwd, base):  # type: ignore[no-untyped-def]
+        def scope_environment(self, scope, *, cwd, base, resolve_commands):  # type: ignore[no-untyped-def]
             assert self.evaluate
             return {**base, "WORKSPACE_HEALTH": "ready"}
 
@@ -471,7 +564,7 @@ def test_unmapped_workspace_launch_stays_source_free_but_health_uses_current_sou
 
 def test_unmapped_project_hook_does_not_evaluate_provider_scope() -> None:
     class _UnexpectedSource:
-        def scope_environment(self, scope, *, cwd, base):  # type: ignore[no-untyped-def]
+        def scope_environment(self, scope, *, cwd, base, resolve_commands):  # type: ignore[no-untyped-def]
             raise AssertionError("unmapped project hook must not evaluate scope")
 
         def env_file_environment(self, path, *, cwd, base):  # type: ignore[no-untyped-def]
@@ -481,11 +574,14 @@ def test_unmapped_project_hook_does_not_evaluate_provider_scope() -> None:
     hook = FakeLayoutHookRunner()
     hook._side_effect = lambda: tmux.seed_session("mp-alpha", {"0.0": 100, "0.1": 101})
 
-    assert _make_service(
-        tmux=tmux,
-        hook_runner=hook,
-        environment_source=_UnexpectedSource(),  # type: ignore[arg-type]
-    ).up(_make_ctx()) == 0
+    assert (
+        _make_service(
+            tmux=tmux,
+            hook_runner=hook,
+            environment_source=_UnexpectedSource(),  # type: ignore[arg-type]
+        ).up(_make_ctx())
+        == 0
+    )
     assert len(hook.calls) == 1
 
 
@@ -1095,7 +1191,7 @@ def test_restart_reaps_children_and_resends() -> None:
     assert session == "mp-alpha"
     assert target == "0.0"
     expected = (
-        f'cd {shlex.quote(str(_WORKTREE))} && eval "$(winter env alpha)"'
+        f'cd {shlex.quote(str(_WORKTREE))} && eval "$(winter env alpha --resolve)"'
         f" && echo {shlex.quote('=== backend ===')} && npm run start:dev"
     )
     assert line == expected
@@ -1125,7 +1221,7 @@ def test_restart_resends_the_service_environment_mapping() -> None:
 
     assert svc.restart(ctx, "backend") == 0
 
-    assert '&& export PORT="${BASE_PORT}" && echo \'=== backend ===\'' in tmux.sent[0][2]
+    assert "&& export PORT=\"${BASE_PORT}\" && echo '=== backend ==='" in tmux.sent[0][2]
 
 
 def test_restart_batch_preflights_all_mappings_before_reaping() -> None:
@@ -1296,7 +1392,7 @@ cmd = ""
 
 
 def test_up_interactive_service_exports_mapping_before_banner() -> None:
-    toml = '''\
+    toml = """\
 session_prefix = "mp"
 
 [[service]]
@@ -1306,7 +1402,7 @@ cmd = ""
 
 [service.env]
 SHELL_PROFILE = "debug"
-'''
+"""
     tmux = FakeTmuxRepository()
     manifest = _make_manifest(toml)
     ctx = _make_ctx(manifest=manifest, inject_scope=None)
@@ -1951,7 +2047,7 @@ def test_status_health_uses_scope_source_when_provider_has_no_scope_band() -> No
     manifest = ServiceManifest(session_prefix="mp", env_file=None, layout_hook=None, services=(service,))
 
     class _ScopeSource:
-        def scope_environment(self, scope, *, cwd, base):  # type: ignore[no-untyped-def]
+        def scope_environment(self, scope, *, cwd, base, resolve_commands):  # type: ignore[no-untyped-def]
             return {**base, "WTS_API_PORT": "4020"}
 
         def env_file_environment(self, path, *, cwd, base):  # type: ignore[no-untyped-def]
@@ -1992,7 +2088,7 @@ def test_env_file_scope_expansion_is_shared_by_launch_and_health(tmp_path: Path)
         def __init__(self) -> None:
             self._shell = SubprocessEnvironmentSource()
 
-        def scope_environment(self, scope, *, cwd, base):  # type: ignore[no-untyped-def]
+        def scope_environment(self, scope, *, cwd, base, resolve_commands):  # type: ignore[no-untyped-def]
             return {**base, "WTS_API_PORT": "4020"}
 
         def env_file_environment(self, path, *, cwd, base):  # type: ignore[no-untyped-def]
@@ -2097,10 +2193,13 @@ def test_unmapped_health_service_keeps_plain_env_file_sourcing() -> None:
     tmux = FakeTmuxRepository()
     tmux.seed_session("mp-alpha", {"0.0": 10})
 
-    assert _make_service(tmux=tmux).restart(
-        _make_ctx(manifest=manifest, env_file_path=env_file),
-        "api",
-    ) == 0
+    assert (
+        _make_service(tmux=tmux).restart(
+            _make_ctx(manifest=manifest, env_file_path=env_file),
+            "api",
+        )
+        == 0
+    )
 
     line = tmux.sent[0][2]
     assert f"&& . {shlex.quote(str(env_file))} && echo" in line
@@ -2656,7 +2755,7 @@ def test_up_retry_true_dead_then_alive_after_one_retry() -> None:
 
 
 def test_up_retry_reuses_the_service_environment_mapping() -> None:
-    toml = '''\
+    toml = """\
 session_prefix = "mp"
 
 [[service]]
@@ -2670,7 +2769,7 @@ PORT = "4100"
 [service.startup]
 retries = 1
 retry_delay = 1.0
-'''
+"""
     reaper = FakeProcessReaper(children_sequence={100: [False, True]})
     clock = FakeFollowClock()
 
@@ -3382,7 +3481,9 @@ def test_unmapped_string_port_status_does_not_require_env_file(tmp_path: Path) -
         layout_hook=None,
         services=(Service(name="web", target=Target(0, 0), cmd="cmd", port="WINTER_PORT_BASE + 10"),),
     )
-    ctx = dataclasses.replace(_make_ctx(manifest=manifest, env_vars={"WINTER_PORT_BASE": "4060"}), worktree_dir=tmp_path)
+    ctx = dataclasses.replace(
+        _make_ctx(manifest=manifest, env_vars={"WINTER_PORT_BASE": "4060"}), worktree_dir=tmp_path
+    )
     svc = _make_service(tmux=tmux, reaper=reaper, stdout=io.StringIO())
 
     doc = svc.status_env_document(ctx)

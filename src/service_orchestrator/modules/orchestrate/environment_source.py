@@ -23,8 +23,18 @@ class IEnvironmentSource(Protocol):
         *,
         cwd: Path,
         base: Mapping[str, str],
+        resolve_commands: bool,
     ) -> dict[str, str]:
-        """Return *base* after applying the canonical ``winter env`` scope."""
+        """Return *base* after applying the canonical ``winter env`` scope.
+
+        *resolve_commands* selects which of winter's two scope readings to
+        take.  A command-valued env band entry only runs under
+        ``winter env --resolve``; without the flag winter masks that key with
+        its ``<unresolved:command>`` placeholder rather than executing
+        anything.  Callers on a launch path pass ``True`` so a service sees the
+        real value; callers reporting on a scope pass ``False``, keeping a
+        status poll free of the side effects of a configured command.
+        """
         ...
 
     def env_file_environment(
@@ -53,8 +63,9 @@ class ProcessEnvironmentSource:
         *,
         cwd: Path,
         base: Mapping[str, str],
+        resolve_commands: bool,
     ) -> dict[str, str]:
-        del scope, cwd
+        del scope, cwd, resolve_commands
         return dict(base)
 
     def env_file_environment(

@@ -482,7 +482,7 @@ def test_restart_selected_preflights_all_scopes_before_any_restart() -> None:
 
 def test_dispatched_restart_preflights_scope_mapping_without_provider_scope(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     """The actual dispatch path resolves restart mappings before reaping/sending."""
-    manifest_toml = '''\
+    manifest_toml = """\
 session_prefix = "mp"
 
 [[service]]
@@ -492,7 +492,7 @@ cmd = "python -m api"
 
 [service.env]
 PORT = "${WTS_API_PORT}"
-'''
+"""
     config_path = _CONFIG_DIR / "config.toml"
     sm = sm_container_mod.Container(FakeFilesystemReader({config_path: manifest_toml}))
     builder = SessionContextBuilder(
@@ -504,7 +504,7 @@ PORT = "${WTS_API_PORT}"
     tmux.seed_session("mp-alpha", {"0.0": 100})
 
     class _ScopeSource:
-        def scope_environment(self, scope, *, cwd, base):  # type: ignore[no-untyped-def]
+        def scope_environment(self, scope, *, cwd, base, resolve_commands):  # type: ignore[no-untyped-def]
             assert scope == "alpha"
             return {**base, "WTS_API_PORT": "4031"}
 
@@ -526,13 +526,13 @@ PORT = "${WTS_API_PORT}"
     assert dispatch.restart_env_services({"alpha": ["api"]}, _WORKSPACE) == 0
     assert len(tmux.sent) == 1
     line = tmux.sent[0][2]
-    assert 'eval "$(winter env alpha)"' in line
+    assert 'eval "$(winter env alpha --resolve)"' in line
     assert 'export PORT="${WTS_API_PORT}"' in line
 
 
 def test_dispatched_up_resolves_scope_mapping_without_provider_scope(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     """The actual up dispatch resolves mappings before sending the pane command."""
-    manifest_toml = '''\
+    manifest_toml = """\
 session_prefix = "mp"
 layout_hook = "layout-hook.sh"
 
@@ -543,7 +543,7 @@ cmd = "python -m api"
 
 [service.env]
 PORT = "${WTS_API_PORT}"
-'''
+"""
     config_path = _CONFIG_DIR / "config.toml"
     sm = sm_container_mod.Container(FakeFilesystemReader({config_path: manifest_toml}))
     builder = SessionContextBuilder(
@@ -554,7 +554,7 @@ PORT = "${WTS_API_PORT}"
     tmux = FakeTmuxRepository()
 
     class _ScopeSource:
-        def scope_environment(self, scope, *, cwd, base):  # type: ignore[no-untyped-def]
+        def scope_environment(self, scope, *, cwd, base, resolve_commands):  # type: ignore[no-untyped-def]
             assert scope == "alpha"
             return {**base, "WTS_API_PORT": "4031"}
 
@@ -577,12 +577,12 @@ PORT = "${WTS_API_PORT}"
     assert dispatch.up("alpha", _WORKSPACE) == 0
     assert len(tmux.sent) == 1
     line = tmux.sent[0][2]
-    assert 'eval "$(winter env alpha)"' in line
+    assert 'eval "$(winter env alpha --resolve)"' in line
     assert 'export PORT="${WTS_API_PORT}"' in line
 
 
 def test_dispatched_restart_does_not_reap_or_send_when_mapping_is_unresolved(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    manifest_toml = '''\
+    manifest_toml = """\
 session_prefix = "mp"
 
 [[service]]
@@ -592,7 +592,7 @@ cmd = "python -m api"
 
 [service.env]
 PORT = "${WTS_API_PORT}"
-'''
+"""
     config_path = _CONFIG_DIR / "config.toml"
     sm = sm_container_mod.Container(FakeFilesystemReader({config_path: manifest_toml}))
     builder = SessionContextBuilder(
@@ -605,7 +605,7 @@ PORT = "${WTS_API_PORT}"
     reaper = FakeProcessReaper(descendant_map={100: [200]})
 
     class _MissingScopeSource:
-        def scope_environment(self, scope, *, cwd, base):  # type: ignore[no-untyped-def]
+        def scope_environment(self, scope, *, cwd, base, resolve_commands):  # type: ignore[no-untyped-def]
             return dict(base)
 
         def env_file_environment(self, path, *, cwd, base):  # type: ignore[no-untyped-def]

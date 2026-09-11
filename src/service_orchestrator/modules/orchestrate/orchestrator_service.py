@@ -474,12 +474,19 @@ class OrchestratorService:
 
         ``capture_logs=False`` keeps restart's historical bare-command
         behavior while sharing the same preflight and launch-line assembly.
+
+        Every caller of this method is starting services, so both halves of a
+        launch resolve command-valued env band entries: the mapping baseline
+        below and the ``--resolve`` scope source in each pane's prefix.  They
+        have to agree — a mapping resolved against a masked baseline would be
+        exported into the pane as a literal placeholder, shadowing the real
+        value the pane's own source went on to fetch.
         """
 
         lines: dict[str, str] = {}
         for svc in services:
             mapping = self._service_environment(svc)
-            self._resolved_service_mapping(ctx, svc, mapping=mapping)
+            self._resolved_service_mapping(ctx, svc, mapping=mapping, resolve_commands=True)
             captured = capture_logs and bool(svc.cmd) and svc.log == LogMode.FILE
             logfile = self._log_repo.log_path(ctx.worktree_dir, svc.name) if captured else None
             pane_uses_sources = ctx.env != WORKSPACE_TARGET or bool(mapping)
@@ -506,9 +513,7 @@ class OrchestratorService:
             if not isinstance(key, str) or not is_valid_env_name(key):
                 raise OrchestratorError(f"service '{svc.name}': env key {key!r} is not a valid POSIX name")
             if not isinstance(value, str):
-                raise OrchestratorError(
-                    f"service '{svc.name}': env.{key} must be a string, got {type(value).__name__}"
-                )
+                raise OrchestratorError(f"service '{svc.name}': env.{key} must be a string, got {type(value).__name__}")
             if "\x00" in value:
                 raise OrchestratorError(f"service '{svc.name}': env.{key} contains a NUL byte")
             malformed = malformed_references(value)
@@ -519,7 +524,12 @@ class OrchestratorService:
         return dict(svc.env)
 
     def _runtime_environment(
-        self, ctx: SessionContext, *, cwd: Path | None = None, include_env_file: bool = True
+        self,
+        ctx: SessionContext,
+        *,
+        resolve_commands: bool,
+        cwd: Path | None = None,
+        include_env_file: bool = True,
     ) -> dict[str, str]:
         """Build one scope-then-env_file baseline at *cwd*.
 
@@ -527,6 +537,13 @@ class OrchestratorService:
         line starts. Callers that need a service snapshot pass
         ``launch_cwd(ctx.worktree_dir, svc.cwd)``; the omitted cwd is reserved
         for scope-level consumers such as the layout hook and port base.
+
+        *resolve_commands* is forwarded to the scope source and mirrors winter
+        core's own per-action gate on command-valued env band entries: a
+        baseline built to launch a service resolves them, a baseline built to
+        report on one does not.  Every caller states it explicitly — there is
+        no default, because guessing wrong either leaks a placeholder into a
+        running service or runs a configured command on every status poll.
         """
         runtime_cwd = ctx.worktree_dir if cwd is None else cwd
         effective = dict(ctx.env_vars) if ctx.env_vars is not None else dict(os.environ)
@@ -535,6 +552,7 @@ class OrchestratorService:
                 ctx.inject_scope,
                 cwd=runtime_cwd,
                 base=effective,
+                resolve_commands=resolve_commands,
             )
         if include_env_file and ctx.env_file_path is not None:
             effective = self._environment_source.env_file_environment(
@@ -549,6 +567,7 @@ class OrchestratorService:
         ctx: SessionContext,
         svc: Service,
         *,
+        resolve_commands: bool,
         base_environment: dict[str, str] | None = None,
         mapping: dict[str, str] | None = None,
     ) -> dict[str, str]:
@@ -558,7 +577,11 @@ class OrchestratorService:
         effective = (
             dict(base_environment)
             if base_environment is not None
-            else self._runtime_environment(ctx, cwd=launch_cwd(ctx.worktree_dir, svc.cwd))
+            else self._runtime_environment(
+                ctx,
+                cwd=launch_cwd(ctx.worktree_dir, svc.cwd),
+                resolve_commands=resolve_commands,
+            )
         )
         resolved, unresolved = resolve_service_env(mapping, effective)
         if unresolved:
@@ -573,12 +596,20 @@ class OrchestratorService:
         *,
         base_environment: dict[str, str] | None = None,
     ) -> dict[str, str]:
-        """Return the exact environment snapshot passed to health probes."""
+        """Return the exact environment snapshot passed to health probes.
+
+        A probe reports on a service rather than starting one, so the scope it
+        reads never resolves command entries.
+        """
         effective = (
             dict(base_environment)
             if base_environment is not None
             else (
-                self._runtime_environment(ctx, cwd=launch_cwd(ctx.worktree_dir, svc.cwd))
+                self._runtime_environment(
+                    ctx,
+                    cwd=launch_cwd(ctx.worktree_dir, svc.cwd),
+                    resolve_commands=False,
+                )
                 if self._service_needs_runtime_environment(ctx, svc)
                 else self._process_environment(ctx)
             )
@@ -957,16 +988,18 @@ class OrchestratorService:
         """Whether one service needs a cwd-specific scope/env-file snapshot."""
         if ctx.env == WORKSPACE_TARGET and not svc.env:
             return svc.health is not None and svc.health.type in (HealthType.URL, HealthType.CMD)
-        return bool(svc.env) or (
-            svc.health is not None and svc.health.type in (HealthType.URL, HealthType.CMD)
-        )
+        return bool(svc.env) or (svc.health is not None and svc.health.type in (HealthType.URL, HealthType.CMD))
 
     def _service_environment_snapshots(
         self,
         ctx: SessionContext,
         services: tuple[Service, ...],
     ) -> dict[str, dict[str, str]]:
-        """Build independent runtime snapshots for selected mapping/health services."""
+        """Build independent runtime snapshots for selected mapping/health services.
+
+        Only ``status`` and the status document build these, so the scope they
+        read leaves command entries unresolved.
+        """
         snapshots: dict[str, dict[str, str]] = {}
         for svc in services:
             if not self._service_needs_runtime_environment(ctx, svc):
@@ -978,6 +1011,7 @@ class OrchestratorService:
             snapshots[svc.name] = self._runtime_environment(
                 ctx,
                 cwd=launch_cwd(ctx.worktree_dir, svc.cwd),
+                resolve_commands=False,
             )
         return snapshots
 
@@ -985,8 +1019,9 @@ class OrchestratorService:
         """Resolve the scope-level environment used for declared port bases."""
         if any(isinstance(svc.port, str) for svc in services):
             # Unmapped port expressions use scope state only; an unrelated
-            # optional env_file must not make status fail.
-            return self._runtime_environment(ctx, include_env_file=False)
+            # optional env_file must not make status fail.  A port base is read
+            # for reporting, so command entries stay unresolved.
+            return self._runtime_environment(ctx, include_env_file=False, resolve_commands=False)
         return self._process_environment(ctx)
 
     def _preflight_service_mappings(
@@ -995,11 +1030,20 @@ class OrchestratorService:
         services: tuple[Service, ...],
         service_environments: dict[str, dict[str, str]] | None = None,
     ) -> None:
-        """Resolve selected mappings before status or health is reported."""
+        """Resolve selected mappings before status or health is reported.
+
+        Reporting-only, so a fallback baseline built here leaves command
+        entries unresolved; the launch path resolves its own.
+        """
         for svc in services:
             if svc.env:
                 base_environment = service_environments.get(svc.name) if service_environments is not None else None
-                self._resolved_service_mapping(ctx, svc, base_environment=base_environment)
+                self._resolved_service_mapping(
+                    ctx,
+                    svc,
+                    base_environment=base_environment,
+                    resolve_commands=False,
+                )
 
     def _log_source_for_health(self, svc: Service, ctx: SessionContext) -> str:
         """Return the captured-output text a ``log`` health probe matches against.

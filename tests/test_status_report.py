@@ -60,7 +60,7 @@ def test_logwriter_path_falls_back_to_file_relative_when_unset(monkeypatch: pyte
 def test_build_launch_line_with_scope_and_command() -> None:
     line = build_launch_line(_WORKTREE, _SCOPE, "backend", "npm run start:dev")
     expected = (
-        f'cd {shlex.quote(str(_WORKTREE))} && eval "$(winter env {shlex.quote(_SCOPE)})"'
+        f'cd {shlex.quote(str(_WORKTREE))} && eval "$(winter env {shlex.quote(_SCOPE)} --resolve)"'
         f" && echo {shlex.quote('=== backend ===')} && npm run start:dev"
     )
     assert line == expected
@@ -76,7 +76,7 @@ def test_build_launch_line_empty_command_banner_only_with_scope() -> None:
     """Empty command → banner only; no trailing '&& <cmd>'."""
     line = build_launch_line(_WORKTREE, _SCOPE, "shell", "")
     expected = (
-        f'cd {shlex.quote(str(_WORKTREE))} && eval "$(winter env {shlex.quote(_SCOPE)})"'
+        f'cd {shlex.quote(str(_WORKTREE))} && eval "$(winter env {shlex.quote(_SCOPE)} --resolve)"'
         f" && echo {shlex.quote('=== shell ===')}"
     )
     assert line == expected
@@ -93,7 +93,7 @@ def test_build_launch_line_with_scope_and_env_file() -> None:
     env_file = Path("/workspace/alpha/.env.local")
     line = build_launch_line(_WORKTREE, _SCOPE, "backend", "npm run start:dev", env_file_path=env_file)
     expected = (
-        f'cd {shlex.quote(str(_WORKTREE))} && eval "$(winter env {shlex.quote(_SCOPE)})"'
+        f'cd {shlex.quote(str(_WORKTREE))} && eval "$(winter env {shlex.quote(_SCOPE)} --resolve)"'
         f" && . {shlex.quote(str(env_file))}"
         f" && echo {shlex.quote('=== backend ===')} && npm run start:dev"
     )
@@ -179,7 +179,9 @@ def test_build_launch_line_resolves_mapping_from_one_pane_env_file_evaluation(tm
 
 
 def test_build_launch_line_treats_mapping_values_as_data() -> None:
-    line = build_launch_line(Path("/"), None, "backend", 'test "$PORT" = \'${MISSING}\'', service_env={"PORT": "${MISSING}"})
+    line = build_launch_line(
+        Path("/"), None, "backend", "test \"$PORT\" = '${MISSING}'", service_env={"PORT": "${MISSING}"}
+    )
 
     result = subprocess.run(["sh", "-c", line], env={}, capture_output=True, text=True, check=False)
 
@@ -361,7 +363,7 @@ def test_build_launch_line_cwd_joins_worktree_dir() -> None:
     line = build_launch_line(_WORKTREE, _SCOPE, "backend", "npm run start:dev", cwd="apps/backend")
     expected_dir = _WORKTREE / "apps/backend"
     expected = (
-        f'cd {shlex.quote(str(expected_dir))} && eval "$(winter env {shlex.quote(_SCOPE)})"'
+        f'cd {shlex.quote(str(expected_dir))} && eval "$(winter env {shlex.quote(_SCOPE)} --resolve)"'
         f" && echo {shlex.quote('=== backend ===')} && npm run start:dev"
     )
     assert line == expected

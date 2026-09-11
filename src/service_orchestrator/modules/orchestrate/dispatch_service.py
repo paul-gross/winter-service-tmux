@@ -96,7 +96,9 @@ class DispatchService:
     # environment for up/down/status. Restart/logs receive only the base
     # extension environment by contract. The orchestrator therefore uses the
     # canonical `winter env <scope>` source for all actions that need a scope
-    # baseline; the pane uses the same source in its launch prefix.
+    # baseline; the pane uses the same source in its launch prefix. That source
+    # is taken with `--resolve` on a launch and without it when reporting,
+    # mirroring core's own gate on command-valued band entries.
     #
     # _build_ctx and _build_workspace_ctx are the shared
     # implementations: they build a SessionContext with skip_env_file=True
@@ -451,9 +453,7 @@ class DispatchService:
                     rc = result
             except OrchestratorError as exc:
                 prefix = (
-                    "orchestrate: restart: workspace"
-                    if scope == WORKSPACE_TARGET
-                    else f"orchestrate: env '{scope}'"
+                    "orchestrate: restart: workspace" if scope == WORKSPACE_TARGET else f"orchestrate: env '{scope}'"
                 )
                 print(f"{prefix}: {exc}", file=self._err)
                 rc = 1

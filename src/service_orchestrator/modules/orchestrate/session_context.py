@@ -53,15 +53,16 @@ class SessionContext:
             environment-source seam, so this field is not a parsed env-file
             substitute.
         inject_scope: When not ``None``, each pane's launch prefix includes
-            ``eval "$(winter env <inject_scope>)"`` so the pane shell
-            self-sources the full scope environment.  ``None`` for local/env-
-            less mode (e.g. ``./up local``). The workspace context uses the
-            explicit ``"workspace"`` scope baseline.
+            ``eval "$(winter env <inject_scope> --resolve)"`` so the pane shell
+            self-sources the full scope environment, command-valued band
+            entries included.  ``None`` for local/env-less mode (e.g.
+            ``./up local``). The workspace context uses the explicit
+            ``"workspace"`` scope baseline.
         env_file_path: Absolute path to the manifest's machine-credentials env
             file (e.g. ``<worktree>/.env.local``), or ``None`` when the
             manifest declares no ``env_file``.  When not ``None``, each pane's
             launch prefix appends ``&& . '<env_file_path>'`` after the
-            ``eval "$(winter env ...)"`` segment so machine-specific vars
+            ``eval "$(winter env ... --resolve)"`` segment so machine-specific vars
             (credentials not managed by core) are also available to service
             commands.  This is independent of ``inject_scope``: the file is
             sourced even when ``inject_scope`` is not ``None``, and vice versa.

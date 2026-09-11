@@ -21,7 +21,10 @@ _SHIM_ABS="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 # available for the layout hook and port/health resolution.  Best-effort,
 # POSIX, silent on failure (e.g. winter not installed or env not yet seeded).
 _ENV="${WINTER_ENV:-$(basename "$(dirname "$_SHIM_ABS")")}"
-if command -v winter >/dev/null 2>&1; then eval "$(winter env "$_ENV" 2>/dev/null)" || true; fi
+# `--resolve` because this door starts services: it makes winter run a
+# command-valued env band entry instead of masking it, matching the pane
+# prefix each service is launched with.
+if command -v winter >/dev/null 2>&1; then eval "$(winter env "$_ENV" --resolve 2>/dev/null)" || true; fi
 
 export PYTHONPATH="$_SRC${PYTHONPATH:+:$PYTHONPATH}"
 exec python3 -c "

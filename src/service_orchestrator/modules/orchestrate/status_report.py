@@ -88,7 +88,7 @@ def build_launch_line(
 
     Assembles the pane launch line::
 
-        cd '<worktree_dir>' [&& eval "$(winter env '<scope>')"]
+        cd '<worktree_dir>' [&& eval "$(winter env '<scope>' --resolve)"]
             [&& . '<env_file>']
             && echo '=== <name> ===' [&& <command>]
 
@@ -99,16 +99,21 @@ def build_launch_line(
     unchanged.
 
     When *scope* is not ``None`` the pane shell self-sources the full scope
-    environment via POSIX ``eval "$(winter env <scope>)"`` before the banner.
-    This brings all ``WINTER_*`` base vars and the scope's env-var band entries
-    (see ``workspace:/context/winter-cli/configuration/ports-and-environments.md#env-var-bands``)
-    into the pane. The orchestrator also evaluates this canonical source during
-    preflight when a selected service mapping needs it, so launch and health
-    share one scope baseline.
+    environment via POSIX ``eval "$(winter env <scope> --resolve)"`` before the
+    banner.  This brings all ``WINTER_*`` base vars and the scope's env-var band
+    entries (see
+    ``workspace:/context/winter-cli/configuration/ports-and-environments.md#env-var-bands``)
+    into the pane.  ``--resolve`` is what makes a command-valued band entry
+    actually run for the pane rather than arriving as winter's
+    ``<unresolved:command>`` placeholder; a pane is only ever built to start a
+    service, which is the action winter core resolves command entries for.  The
+    orchestrator also evaluates this canonical source during preflight when a
+    selected service mapping needs it, so launch and health share one scope
+    baseline.
 
     When *env_file_path* is not ``None`` the file is sourced after the
-    ``eval "$(winter env ...)"`` segment (or after ``cd <wt>`` when *scope*
-    is ``None``).  For a service mapping or an env-dependent URL/CMD health
+    ``eval "$(winter env ... --resolve)"`` segment (or after ``cd <wt>`` when
+    *scope* is ``None``).  For a service mapping or an env-dependent URL/CMD health
     probe, *evaluate_env_file* temporarily enables POSIX ``set -a`` around
     that source so launch uses the same exported shell model as provider-side
     mapping and health resolution.  When it is false, the historical plain
@@ -130,7 +135,7 @@ def build_launch_line(
     **and** *command* is non-empty, the command is wrapped so its stdout and
     stderr pipe through the capture writer::
 
-        cd '<wt>' [&& eval "$(winter env '<scope>')"] [&& . '<env_file>'] && echo '=== <name> ===' &&
+        cd '<wt>' [&& eval "$(winter env '<scope>' --resolve)"] [&& . '<env_file>'] && echo '=== <name> ===' &&
         { <command> ; } 2>&1 | '<sys.executable>' '<writer>' '<logfile>'
         --rotate-size <N> --max-rotations <M>
 
@@ -146,7 +151,7 @@ def build_launch_line(
     target_dir = launch_cwd(worktree_dir, cwd)
     prefix = f"cd {shlex.quote(str(target_dir))}"
     if scope is not None:
-        prefix = f'{prefix} && eval "$(winter env {shlex.quote(scope)})"'
+        prefix = f'{prefix} && eval "$(winter env {shlex.quote(scope)} --resolve)"'
     if env_file_path is not None:
         quoted_env_file = shlex.quote(str(env_file_path))
         if evaluate_env_file or service_env:

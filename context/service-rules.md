@@ -107,9 +107,15 @@ Once installed, the workspace conventions are:
   only the base extension variables. This provider overlays the dispatched process environment where present and uses
   the canonical `winter env <scope>` source for the missing scope baseline, including the explicit `workspace` scope
   when workspace mappings need it. Tmux panes are children of the tmux server, not of the provider process, so unmapped
-  project panes use the `eval "$(winter env <scope>)"` and `env_file` source prefix. The provider evaluates those
+  project panes use the `eval "$(winter env <scope> --resolve)"` and `env_file` source prefix. The provider evaluates those
   sources during mapping preflight. The pane then sources them once for its launch and resolves mapping references
   there, so the mapping and command use the same shell evaluation without exposing file values in the tmux launch line.
+  A band entry in `.winter/config.toml` may be a command whose output supplies the value, and winter only runs it when
+  asked: the provider passes `--resolve` on every scope read that launches a service — the pane prefix, and the
+  baseline a `[service.env]` mapping resolves against — and omits it everywhere it is only reporting, so `status`, the
+  status document, health probes, and port-base resolution never execute a configured command. The two halves of a
+  launch have to agree; a mapping resolved against a masked baseline would export winter's `<unresolved:command>`
+  placeholder into the pane, shadowing the value the pane's own source went on to fetch.
   URL/CMD health probes re-evaluate the current scope and env_file sources when status runs, without changing unmapped
   launch behavior. Services without mappings use the plain dot-source behavior. There is no `WINTER_INJECTED_KEYS`. A
   service may then declare an optional `[service.env]` table. Its string values are resolved in declaration order

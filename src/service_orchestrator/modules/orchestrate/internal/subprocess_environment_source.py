@@ -15,7 +15,7 @@ _SHELL = shutil.which("sh", path=os.defpath)
 
 _SCOPE_SCRIPT = """
 set -eu
-scope_output=$(winter env "$1") || exit $?
+scope_output=$(winter env "$1" ${2:+"$2"}) || exit $?
 eval "$scope_output"
 command -p env -0
 """
@@ -40,8 +40,11 @@ class SubprocessEnvironmentSource:
         *,
         cwd: Path,
         base: Mapping[str, str],
+        resolve_commands: bool,
     ) -> dict[str, str]:
-        return self._run(_SCOPE_SCRIPT, scope, cwd=cwd, base=base, description=f"winter env {scope}")
+        flag = "--resolve" if resolve_commands else ""
+        description = f"winter env {scope} --resolve" if resolve_commands else f"winter env {scope}"
+        return self._run(_SCOPE_SCRIPT, scope, flag, cwd=cwd, base=base, description=description)
 
     def env_file_environment(
         self,
@@ -56,6 +59,7 @@ class SubprocessEnvironmentSource:
         return self._run(
             _ENV_FILE_SCRIPT,
             str(source_path),
+            "",
             cwd=cwd,
             base=base,
             description=f"source {source_path}",
@@ -65,16 +69,23 @@ class SubprocessEnvironmentSource:
     def _run(
         script: str,
         argument: str,
+        option: str,
         *,
         cwd: Path,
         base: Mapping[str, str],
         description: str,
     ) -> dict[str, str]:
+        """Run *script* under ``sh`` with *argument* as ``$1`` and *option* as ``$2``.
+
+        *option* is an empty string when the script takes no second argument;
+        ``_SCOPE_SCRIPT`` uses ``${2:+"$2"}`` so an empty value expands to no
+        word at all rather than an empty one ``winter env`` would reject.
+        """
         if _SHELL is None:
             raise OrchestratorError(f"could not {description}: POSIX shell not found")
         try:
             completed = subprocess.run(
-                [_SHELL, "-c", script, "winter-service-tmux-env", argument],
+                [_SHELL, "-c", script, "winter-service-tmux-env", argument, option],
                 cwd=cwd,
                 env=dict(base),
                 capture_output=True,

@@ -157,7 +157,10 @@ retention_seconds = 604800    # 7 days
 #              not parse as a valid duration.
 #              Workspace-scoped services use the canonical `winter env workspace`
 #              baseline, so their health targets and [service.env] mappings may
-#              reference workspace-scope variables as well.
+#              reference workspace-scope variables as well.  A health target is
+#              evaluated to report on a service, not to start one, so the scope
+#              it reads leaves command-valued band entries masked; a
+#              [service.env] mapping resolved for a launch sees them resolved.
 #              timeout is optional seconds; default is 5 (unused by type = "log"
 #              and type = "uptime", neither of which has I/O to time out).
 #   port     (optional) — declared port for this service, surfaced in the
