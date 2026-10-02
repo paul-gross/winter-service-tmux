@@ -36,6 +36,15 @@ def test_scope_environment_uses_winter_env_even_when_provider_lacks_band(tmp_pat
     assert result["WTS_API_PORT"] == "4020"
 
 
+def test_scope_environment_captures_the_scope_path_unchanged(tmp_path: Path) -> None:
+    source = SubprocessEnvironmentSource()
+    base = _fake_winter(tmp_path)
+
+    result = source.scope_environment("alpha", cwd=tmp_path, base=base, resolve_commands=False)
+
+    assert result["PATH"] == base["PATH"]
+
+
 def test_scope_environment_capture_survives_scope_path_override(tmp_path: Path) -> None:
     winter = tmp_path / "winter"
     winter.write_text(
