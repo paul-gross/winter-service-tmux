@@ -39,7 +39,7 @@ def test_badge_resolves_service_prefixed_session_name(monkeypatch):
     plugin.tmux_session_badge(env_status, Path("/ws/alpha"))
 
     # Session name is `<service_prefix>-<env>`, and the running badge is stamped.
-    assert captured["args"] == ["tmux", "has-session", "-t", "mp-alpha"]
+    assert captured["args"] == ["tmux", "-L", "winter", "has-session", "-t", "mp-alpha"]
     assert env_status.extensions["wst"] == "●"
 
 

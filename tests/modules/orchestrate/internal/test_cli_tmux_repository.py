@@ -12,6 +12,7 @@ correct structured fields.
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -20,6 +21,7 @@ from service_orchestrator.modules.orchestrate.errors import TmuxError
 from service_orchestrator.modules.orchestrate.internal import cli_tmux_repository as adapter_module
 from service_orchestrator.modules.orchestrate.internal.cli_tmux_repository import CliTmuxRepository
 from service_orchestrator.modules.orchestrate.tmux_repository import PaneInfo
+from service_orchestrator.modules.orchestrate.tmux_server import BASELINE_PATH
 
 
 def _completed(returncode: int = 0, stdout: str = "", stderr: str = "", args: list[str] | None = None):
@@ -44,7 +46,7 @@ def test_has_session_returns_true_on_zero_exit(monkeypatch):
     repo = CliTmuxRepository()
     assert repo.has_session("my-session") is True
     fake_subprocess.run.assert_called_once_with(
-        ["tmux", "has-session", "-t", "my-session"],
+        ["tmux", "-L", "winter", "has-session", "-t", "my-session"],
         capture_output=True,
         text=True,
         check=False,
@@ -74,7 +76,7 @@ def test_list_sessions_returns_names(monkeypatch):
     result = repo.list_sessions()
 
     fake_subprocess.run.assert_called_once_with(
-        ["tmux", "list-sessions", "-F", "#{session_name}"],
+        ["tmux", "-L", "winter", "list-sessions", "-F", "#{session_name}"],
         capture_output=True,
         text=True,
         check=False,
@@ -101,20 +103,40 @@ def test_new_session_passes_correct_argv(monkeypatch):
     fake_subprocess.run.return_value = _completed(returncode=0)
     monkeypatch.setattr(adapter_module, "subprocess", fake_subprocess)
 
+    monkeypatch.setattr(adapter_module, "shutil", SimpleNamespace(which=lambda name: "/opt/homebrew/bin/tmux"))
+    monkeypatch.setattr(
+        adapter_module, "os", SimpleNamespace(environ={"HOME": "/home/u", "PATH": "/ws/alpha/.venv/bin:/usr/bin"})
+    )
+
     repo = CliTmuxRepository()
     repo.new_session("mp-alpha", cwd=Path("/workspace/alpha"), width=200, height=50)
 
     fake_subprocess.run.assert_called_once_with(
-        ["tmux", "new-session", "-d", "-s", "mp-alpha", "-c", "/workspace/alpha", "-x", "200", "-y", "50"],
+        [
+            "/opt/homebrew/bin/tmux",
+            "-L",
+            "winter",
+            "new-session",
+            "-d",
+            "-s",
+            "mp-alpha",
+            "-c",
+            "/workspace/alpha",
+            "-x",
+            "200",
+            "-y",
+            "50",
+        ],
         capture_output=True,
         text=True,
         check=False,
+        env={"HOME": "/home/u", "PATH": BASELINE_PATH},
     )
 
 
 def test_new_session_raises_tmux_error_on_failure(monkeypatch):
     fake_subprocess = MagicMock()
-    completed = _completed(returncode=1, stderr="duplicate session", args=["tmux", "new-session"])
+    completed = _completed(returncode=1, stderr="duplicate session", args=["tmux", "-L", "winter", "new-session"])
     fake_subprocess.run.return_value = completed
     monkeypatch.setattr(adapter_module, "subprocess", fake_subprocess)
 
@@ -140,7 +162,7 @@ def test_kill_session_passes_correct_argv(monkeypatch):
     repo.kill_session("mp-alpha")
 
     fake_subprocess.run.assert_called_once_with(
-        ["tmux", "kill-session", "-t", "mp-alpha"],
+        ["tmux", "-L", "winter", "kill-session", "-t", "mp-alpha"],
         capture_output=True,
         text=True,
         check=False,
@@ -171,7 +193,7 @@ def test_list_windows_passes_correct_argv(monkeypatch):
     result = repo.list_windows("mp-alpha")
 
     fake_subprocess.run.assert_called_once_with(
-        ["tmux", "list-windows", "-t", "mp-alpha", "-F", "#{window_index}"],
+        ["tmux", "-L", "winter", "list-windows", "-t", "mp-alpha", "-F", "#{window_index}"],
         capture_output=True,
         text=True,
         check=False,
@@ -181,7 +203,9 @@ def test_list_windows_passes_correct_argv(monkeypatch):
 
 def test_list_windows_raises_on_failure(monkeypatch):
     fake_subprocess = MagicMock()
-    fake_subprocess.run.return_value = _completed(returncode=1, stderr="no session", args=["tmux", "list-windows"])
+    fake_subprocess.run.return_value = _completed(
+        returncode=1, stderr="no session", args=["tmux", "-L", "winter", "list-windows"]
+    )
     monkeypatch.setattr(adapter_module, "subprocess", fake_subprocess)
 
     repo = CliTmuxRepository()
@@ -203,7 +227,17 @@ def test_list_panes_passes_correct_argv(monkeypatch):
     result = repo.list_panes("mp-alpha")
 
     fake_subprocess.run.assert_called_once_with(
-        ["tmux", "list-panes", "-s", "-t", "mp-alpha", "-F", "#{window_index}.#{pane_index} #{pane_pid}"],
+        [
+            "tmux",
+            "-L",
+            "winter",
+            "list-panes",
+            "-s",
+            "-t",
+            "mp-alpha",
+            "-F",
+            "#{window_index}.#{pane_index} #{pane_pid}",
+        ],
         capture_output=True,
         text=True,
         check=False,
@@ -230,7 +264,9 @@ def test_list_panes_parses_pane_info_correctly(monkeypatch):
 
 def test_list_panes_raises_on_failure(monkeypatch):
     fake_subprocess = MagicMock()
-    fake_subprocess.run.return_value = _completed(returncode=1, stderr="no session", args=["tmux", "list-panes"])
+    fake_subprocess.run.return_value = _completed(
+        returncode=1, stderr="no session", args=["tmux", "-L", "winter", "list-panes"]
+    )
     monkeypatch.setattr(adapter_module, "subprocess", fake_subprocess)
 
     repo = CliTmuxRepository()
@@ -252,7 +288,7 @@ def test_send_keys_passes_correct_argv(monkeypatch):
     repo.send_keys("mp-alpha", "0.1", "echo hello")
 
     fake_subprocess.run.assert_called_once_with(
-        ["tmux", "send-keys", "-t", "mp-alpha:0.1", "echo hello", "Enter"],
+        ["tmux", "-L", "winter", "send-keys", "-t", "mp-alpha:0.1", "echo hello", "Enter"],
         capture_output=True,
         text=True,
         check=False,
@@ -261,7 +297,9 @@ def test_send_keys_passes_correct_argv(monkeypatch):
 
 def test_send_keys_raises_on_failure(monkeypatch):
     fake_subprocess = MagicMock()
-    fake_subprocess.run.return_value = _completed(returncode=1, stderr="bad target", args=["tmux", "send-keys"])
+    fake_subprocess.run.return_value = _completed(
+        returncode=1, stderr="bad target", args=["tmux", "-L", "winter", "send-keys"]
+    )
     monkeypatch.setattr(adapter_module, "subprocess", fake_subprocess)
 
     repo = CliTmuxRepository()
@@ -283,7 +321,7 @@ def test_capture_pane_passes_correct_argv(monkeypatch):
     result = repo.capture_pane("mp-alpha", "0.0")
 
     fake_subprocess.run.assert_called_once_with(
-        ["tmux", "capture-pane", "-t", "mp-alpha:0.0", "-p"],
+        ["tmux", "-L", "winter", "capture-pane", "-t", "mp-alpha:0.0", "-p"],
         capture_output=True,
         text=True,
         check=False,
@@ -293,9 +331,50 @@ def test_capture_pane_passes_correct_argv(monkeypatch):
 
 def test_capture_pane_raises_on_failure(monkeypatch):
     fake_subprocess = MagicMock()
-    fake_subprocess.run.return_value = _completed(returncode=1, stderr="no pane", args=["tmux", "capture-pane"])
+    fake_subprocess.run.return_value = _completed(
+        returncode=1, stderr="no pane", args=["tmux", "-L", "winter", "capture-pane"]
+    )
     monkeypatch.setattr(adapter_module, "subprocess", fake_subprocess)
 
     repo = CliTmuxRepository()
     with pytest.raises(TmuxError):
         repo.capture_pane("mp-alpha", "0.0")
+
+
+# ---------------------------------------------------------------------------
+# tmux_env_value
+# ---------------------------------------------------------------------------
+
+
+def test_tmux_env_value_formats_like_tmux_own_pane_variable(monkeypatch):
+    fake_subprocess = MagicMock()
+    fake_subprocess.run.return_value = _completed(returncode=0, stdout="/tmp/tmux-1000/winter,4242,$3\n")
+    monkeypatch.setattr(adapter_module, "subprocess", fake_subprocess)
+
+    repo = CliTmuxRepository()
+    assert repo.tmux_env_value("mp-alpha") == "/tmp/tmux-1000/winter,4242,3"
+    fake_subprocess.run.assert_called_once_with(
+        ["tmux", "-L", "winter", "display-message", "-p", "-t", "mp-alpha", "#{socket_path},#{pid},#{session_id}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_tmux_env_value_raises_tmux_error_on_failure(monkeypatch):
+    fake_subprocess = MagicMock()
+    fake_subprocess.run.return_value = _completed(returncode=1, stderr="can't find session", args=["tmux"])
+    monkeypatch.setattr(adapter_module, "subprocess", fake_subprocess)
+
+    repo = CliTmuxRepository()
+    with pytest.raises(TmuxError):
+        repo.tmux_env_value("mp-alpha")
+
+
+def test_tmux_env_value_raises_tmux_error_on_unexpected_output(monkeypatch):
+    fake_subprocess = MagicMock()
+    fake_subprocess.run.return_value = _completed(returncode=0, stdout="garbage\n", args=["tmux"])
+    monkeypatch.setattr(adapter_module, "subprocess", fake_subprocess)
+
+    with pytest.raises(TmuxError):
+        CliTmuxRepository().tmux_env_value("mp-alpha")

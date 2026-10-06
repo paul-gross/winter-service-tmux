@@ -61,6 +61,7 @@ from service_orchestrator.modules.orchestrate.session_context_builder import (
     build_for_target,
 )
 from service_orchestrator.modules.orchestrate.tmux_repository import ITmuxRepository
+from service_orchestrator.modules.orchestrate.tmux_server import TMUX_SOCKET_NAME
 
 _ACTIONS = ("up", "down", "status", "restart")
 
@@ -215,7 +216,7 @@ def _handle_up(argv: list[str], env: str, cli: IWinterCli) -> int:
         # Session name is `<prefix>-<env>` (see SessionContext.session). The
         # env-var prefix is authoritative for the normal path; a manifest
         # `session_prefix` override would not be reflected here.
-        os.execvp("tmux", ["tmux", "attach-session", "-t", f"{prefix}-{env}"])
+        os.execvp("tmux", ["tmux", "-L", TMUX_SOCKET_NAME, "attach-session", "-t", f"{prefix}-{env}"])
 
     return rc
 

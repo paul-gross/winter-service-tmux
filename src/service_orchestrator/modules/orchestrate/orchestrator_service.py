@@ -34,6 +34,7 @@ from service_orchestrator.modules.orchestrate.status_report import (
     truncate_status_line,
 )
 from service_orchestrator.modules.orchestrate.tmux_repository import ITmuxRepository
+from service_orchestrator.modules.orchestrate.tmux_server import TMUX_SOCKET_NAME
 
 _TMUX_WIDTH = 200
 _TMUX_HEIGHT = 50
@@ -327,6 +328,15 @@ class OrchestratorService:
         if ctx.layout_hook is not None:
             assert hook_path is not None
             assert hook_env is not None
+            # Point the hook's unflagged `tmux` calls at the session's server,
+            # overriding any TMUX the caller's own pane carries.
+            try:
+                hook_env["TMUX"] = self._tmux.tmux_env_value(ctx.session)
+            except OrchestratorError as exc:
+                self._tmux.kill_session(ctx.session)
+                raise OrchestratorError(
+                    f"could not resolve the tmux server for the layout hook; session '{ctx.session}' torn down: {exc}"
+                ) from exc
             try:
                 self._hook_runner.run(hook_path, hook_env, ctx.worktree_dir)
             except OrchestratorError as exc:
@@ -1161,6 +1171,10 @@ class OrchestratorService:
         # Layout hooks keep their historical provider-process environment;
         # service mappings apply only to pane launches and health probes.
         base = dict(ctx.env_vars) if ctx.env_vars is not None else dict(os.environ)
+        # The caller's pane, if any, belongs to another server; ``TMUX`` itself
+        # is set once the session exists (see ``up``).
+        base.pop("TMUX_PANE", None)
+        base["WINTER_TMUX_SOCKET"] = TMUX_SOCKET_NAME
         base["WINTER_TMUX_SESSION"] = ctx.session
         base["WINTER_TMUX_WORKTREE_DIR"] = str(ctx.worktree_dir)
         base["WINTER_ENV"] = ctx.env

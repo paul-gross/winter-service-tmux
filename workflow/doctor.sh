@@ -5,10 +5,12 @@
 # workspace:/context/winter-cli/configuration/doctor.md#probe-output-contract. One object per line:
 #   {"name": "...", "status": "pass|warn|fail", "message"?: "...", "remediation"?: "..."}
 #
-# Four checks:
+# Six checks:
 #   1. tmux binary on PATH
 #   2. config.toml manifest present and valid (required — this is now live config)
-#   3. session-name collision with foreign tmux sessions sharing the prefix
+#   3. session-name collision with foreign sessions on the `winter` tmux server
+#   3b. own sessions stranded on the default tmux server
+#   3c. the `winter` server's global environment is the sanitized one
 #   4. layout_hook exists and is executable (when declared in the manifest)
 #
 # Each probe is implemented as an explicit branch that emits its own NDJSON;
@@ -155,6 +157,38 @@ print("; ".join(violations))
 fi
 
 # ---- Probe 3: session-name collision ------------------------------------------
+#
+# Sessions run on the dedicated `winter` tmux server (`tmux -L winter`, owned by
+# TMUX_SOCKET_NAME in src/service_orchestrator/modules/orchestrate/tmux_server.py),
+# which every winter workspace on the machine shares.
+
+TMUX_SOCKET_NAME="winter"
+
+# A session is "ours" iff either:
+#   - its suffix is the reserved `workspace` scope name, used by the provider's
+#     own workspace-scoped singleton session (e.g. a `scope = "workspace"`
+#     service's `<prefix>-workspace` session). `workspace` is owned as a reserved
+#     scope name by `_VALID_SCOPES` in src/service_manifest/modules/manifest/reader.py
+#     and documented in context/workspace-singletons.md ("The `workspace` token
+#     is an exact reserved name") — rename it there first if ever renamed here.
+#     This branch is harmless even if a workspace somehow used `workspace` as a
+#     feature env name too: it would just also treat that env's session as own.
+#   - `<workspace>/<suffix>/` is a feature env — detected by a worktree-marker
+#     .git FILE in any immediate child directory (git worktrees add a .git FILE;
+#     source checkouts and extension clones have a .git DIRECTORY, not a file).
+#     Plain directory existence is too weak: the workspace root also contains
+#     source checkouts, helper dirs (`tools/`, `projects/`, `docs/`), and
+#     standalone extension clones whose names could otherwise mask a real
+#     collision.
+is_own_session() {
+  local suffix="${1#"$session_prefix"-}" child
+  [[ "$suffix" == "workspace" ]] && return 0
+  [[ -d "$WORKSPACE_DIR/$suffix" ]] || return 1
+  for child in "$WORKSPACE_DIR/$suffix"/*/; do
+    [[ -f "${child}.git" ]] && return 0
+  done
+  return 1
+}
 
 if [[ "$tmux_ok" != true ]]; then
   emit "session-name collision" warn "skipped: tmux not installed"
@@ -166,47 +200,14 @@ elif [[ -z "$session_prefix" ]]; then
 else
   # `tmux ls` exits non-zero when no tmux server is running; treat that as
   # "no collision possible" rather than an error.
-  if ! sessions=$(tmux ls -F '#{session_name}' 2>/dev/null); then
-    emit "session-name collision" pass "no tmux server running"
+  if ! sessions=$(tmux -L "$TMUX_SOCKET_NAME" ls -F '#{session_name}' 2>/dev/null); then
+    emit "session-name collision" pass "no \`$TMUX_SOCKET_NAME\` tmux server running"
   else
     conflicting=()
     while IFS= read -r session; do
       [[ -z "$session" ]] && continue
       [[ "$session" == "$session_prefix"-* ]] || continue
-      suffix="${session#"$session_prefix"-}"
-      # A session is "ours" iff either:
-      #   - `suffix` is the reserved `workspace` scope name, used by the
-      #     provider's own workspace-scoped singleton session (e.g. a
-      #     `scope = "workspace"` service's `<prefix>-workspace` session).
-      #     `workspace` is owned as a reserved scope name by `_VALID_SCOPES`
-      #     in src/service_manifest/modules/manifest/reader.py and documented
-      #     in context/workspace-singletons.md ("The `workspace` token is an
-      #     exact reserved name") — rename it there first if ever renamed
-      #     here. This branch is harmless even if a workspace somehow used
-      #     `workspace` as a feature env name too: it would just also treat
-      #     that env's session as own.
-      #   - `<workspace>/<suffix>/` is a feature env — detected by a
-      #     worktree-marker .git FILE in any immediate child directory (git
-      #     worktrees add a .git FILE; source checkouts and extension clones
-      #     have a .git DIRECTORY, not a file). Plain directory existence is
-      #     too weak: the workspace root also contains source checkouts,
-      #     helper dirs (`tools/`, `projects/`, `docs/`), and standalone
-      #     extension clones whose names could otherwise mask a real
-      #     collision.
-      is_own_session=false
-      if [[ "$suffix" == "workspace" ]]; then
-        is_own_session=true
-      elif [[ -d "$WORKSPACE_DIR/$suffix" ]]; then
-        for _child in "$WORKSPACE_DIR/$suffix"/*/; do
-          if [[ -f "${_child}.git" ]]; then
-            is_own_session=true
-            break
-          fi
-        done
-      fi
-      if [[ "$is_own_session" == "true" ]]; then
-        continue
-      fi
+      is_own_session "$session" && continue
       conflicting+=("$session")
     done <<< "$sessions"
 
@@ -217,6 +218,67 @@ else
         "foreign tmux sessions match \`${session_prefix}-*\`: ${conflicting[*]}" \
         "Change the workspace's WINTER_SERVICE_PREFIX (or the deprecated config.toml session_prefix override) or stop the foreign sessions."
     fi
+  fi
+fi
+
+# ---- Probe 3b: sessions stranded on the default tmux server ---------------------
+#
+# Sessions started before the move to the `winter` server still run on the
+# user's default server, where `./down` and `./status` no longer look — and a
+# fresh `./up` would start a second copy of every service beside them. `-L
+# default` is explicit so a doctor run from inside a winter pane (whose TMUX
+# points at the `winter` server) still inspects the default server.
+
+if [[ "$tmux_ok" == true && "$manifest_ok" == true && -n "$session_prefix" ]]; then
+  stranded=()
+  if legacy=$(tmux -L default ls -F '#{session_name}' 2>/dev/null); then
+    while IFS= read -r session; do
+      [[ -z "$session" ]] && continue
+      [[ "$session" == "$session_prefix"-* ]] || continue
+      is_own_session "$session" && stranded+=("$session")
+    done <<< "$legacy"
+  fi
+
+  if [[ ${#stranded[@]} -eq 0 ]]; then
+    emit "default-server sessions" pass "no \`${session_prefix}-*\` sessions on the default tmux server"
+  else
+    emit "default-server sessions" warn \
+      "sessions still on the default tmux server, out of reach of ./down: ${stranded[*]}" \
+      "Stop each with \`tmux -L default kill-session -t <session>\`, then ./up to restart it on the \`$TMUX_SOCKET_NAME\` server."
+  fi
+fi
+
+# ---- Probe 3c: `winter` server environment -------------------------------------
+#
+# The orchestrator only ever starts the `winter` server from a sanitized
+# environment; a server someone started by hand (`tmux -L winter new …` from a
+# feature env's shell) carries that shell's variables into every pane on the
+# machine. The allow-list is owned by tmux_server.py — read it from there.
+
+if [[ "$tmux_ok" != true ]]; then
+  emit "winter server environment" warn "skipped: tmux not installed"
+elif ! server_env=$(tmux -L "$TMUX_SOCKET_NAME" show-environment -g 2>/dev/null); then
+  emit "winter server environment" pass "no \`$TMUX_SOCKET_NAME\` tmux server running"
+else
+  PY3=$(command -v python3 || command -v python || true)
+  if [[ -z "$PY3" ]]; then
+    emit "winter server environment" warn "skipped: python3 not found"
+  elif ! leaked=$(printf '%s\n' "$server_env" | PYTHONPATH="$EXT_SRC" "$PY3" -c '
+import sys
+from service_orchestrator.modules.orchestrate.tmux_server import leaked_names
+env = dict(line.split("=", 1) for line in sys.stdin.read().splitlines() if "=" in line)
+names = leaked_names(env)
+if names:
+    shown = ", ".join(names[:8]) + (", ..." if len(names) > 8 else "")
+    print("%d (%s)" % (len(names), shown))
+' 2>/dev/null); then
+    emit "winter server environment" warn "skipped: environment check unavailable (tmux_server import failed)"
+  elif [[ -z "$leaked" ]]; then
+    emit "winter server environment" pass "\`$TMUX_SOCKET_NAME\` tmux server started from a clean environment"
+  else
+    emit "winter server environment" warn \
+      "\`$TMUX_SOCKET_NAME\` tmux server carries variables a clean start never sets: $leaked" \
+      "If your ~/.tmux.conf sets these with \`set-environment -g\`, this is expected. Otherwise restart it clean: \`winter service down\` every env using it (and \`workspace\`), confirm \`tmux -L $TMUX_SOCKET_NAME ls\` is empty, then ./up."
   fi
 fi
 

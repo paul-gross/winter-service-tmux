@@ -11,7 +11,10 @@ conflicts.
 ## ✨ Features
 
 - **Per-env service sessions** — every feature environment gets its own tmux session running the project's services.
-  Humans attach to watch logs in real time while agents drive the lifecycle.
+  Humans attach (`./up -a`, or `tmux -L winter attach -t <prefix>-<env>`) to watch logs in real time while agents drive
+  the lifecycle.
+- **Isolated, clean tmux server** — sessions run on a dedicated `winter` tmux server started from a sanitized
+  environment, so neither your personal tmux sessions nor another workspace's variables leak into service panes.
 - **Conflict-free parallel runs** — sessions are namespaced per env (`<prefix>-<env>`), so alpha and beta can both run
   the full app stack at once without colliding.
 - **One-command lifecycle** — `./up`, `./down`, `./status`, and `./restart` land in every feature environment on
@@ -52,7 +55,8 @@ conflicts.
   `orchestrate_services` (manifest) are still accepted as deprecated aliases.
 - **Built-in `winter doctor` probe** — checks tmux is installed, no foreign tmux sessions collide with the resolved
   session-name prefix (manifest `session_prefix` override if declared, otherwise the injected `WINTER_SERVICE_PREFIX` —
-  the doctor dispatch receives it too), and the manifest validates cleanly. Surfaces these results under `[wst]` in
+  the doctor dispatch receives it too), no own sessions are stranded on the default tmux server, the `winter` server
+  started from a clean environment, and the manifest validates cleanly. Surfaces these results under `[wst]` in
   `winter doctor`'s output.
 
 ## 🚀 Installation & Setup
@@ -85,6 +89,14 @@ Agentic setup is hooked into `/ws-setup`.
    control. Keep any `config.local.toml` overlay gitignored.
 
 See [`index.md`](./index.md) for what this extension contributes and how it plugs into a workspace.
+
+## Upgrading to the `winter` tmux server
+
+Sessions now run on a dedicated `winter` tmux server instead of your default one. Sessions started by an earlier version
+stay on the default server, out of reach of `./down` and `./status`, and a fresh `./up` would start a second copy of
+their services. Run `./down` in every environment before upgrading; if you already upgraded, `winter doctor` lists the
+leftover sessions under "default-server sessions" — stop each with `tmux -L default kill-session -t <session>`, then
+`./up`.
 
 ## License
 

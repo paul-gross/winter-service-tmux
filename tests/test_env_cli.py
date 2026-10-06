@@ -324,7 +324,7 @@ def test_up_attach_execs_tmux(
     rc = main(["up", "-a"])
 
     assert rc == 0
-    execvp.assert_called_once_with("tmux", ["tmux", "attach-session", "-t", "wws-alpha"])
+    execvp.assert_called_once_with("tmux", ["tmux", "-L", "winter", "attach-session", "-t", "wws-alpha"])
 
 
 def test_up_attach_without_prefix_does_not_exec(

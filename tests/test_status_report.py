@@ -60,7 +60,7 @@ def test_logwriter_path_falls_back_to_file_relative_when_unset(monkeypatch: pyte
 def test_build_launch_line_with_scope_and_command() -> None:
     line = build_launch_line(_WORKTREE, _SCOPE, "backend", "npm run start:dev")
     expected = (
-        f'cd {shlex.quote(str(_WORKTREE))} && eval "$(winter env {shlex.quote(_SCOPE)} --resolve)"'
+        f'cd {shlex.quote(str(_WORKTREE))} && __winter_env="$(winter env {shlex.quote(_SCOPE)} --resolve)" && eval "$__winter_env"'
         f" && echo {shlex.quote('=== backend ===')} && npm run start:dev"
     )
     assert line == expected
@@ -76,7 +76,7 @@ def test_build_launch_line_empty_command_banner_only_with_scope() -> None:
     """Empty command → banner only; no trailing '&& <cmd>'."""
     line = build_launch_line(_WORKTREE, _SCOPE, "shell", "")
     expected = (
-        f'cd {shlex.quote(str(_WORKTREE))} && eval "$(winter env {shlex.quote(_SCOPE)} --resolve)"'
+        f'cd {shlex.quote(str(_WORKTREE))} && __winter_env="$(winter env {shlex.quote(_SCOPE)} --resolve)" && eval "$__winter_env"'
         f" && echo {shlex.quote('=== shell ===')}"
     )
     assert line == expected
@@ -93,7 +93,7 @@ def test_build_launch_line_with_scope_and_env_file() -> None:
     env_file = Path("/workspace/alpha/.env.local")
     line = build_launch_line(_WORKTREE, _SCOPE, "backend", "npm run start:dev", env_file_path=env_file)
     expected = (
-        f'cd {shlex.quote(str(_WORKTREE))} && eval "$(winter env {shlex.quote(_SCOPE)} --resolve)"'
+        f'cd {shlex.quote(str(_WORKTREE))} && __winter_env="$(winter env {shlex.quote(_SCOPE)} --resolve)" && eval "$__winter_env"'
         f" && . {shlex.quote(str(env_file))}"
         f" && echo {shlex.quote('=== backend ===')} && npm run start:dev"
     )
@@ -112,12 +112,12 @@ def test_build_launch_line_exports_service_env_after_env_file_before_banner() ->
     )
     parts = line.split(" && ")
 
-    assert parts[2] == "set -a"
-    assert parts[3] == f". {shlex.quote(str(env_file))}"
-    assert parts[4] == "set +a"
-    assert parts[5] == "export PORT=4100"
-    assert parts[6] == "export GREETING='hello world'"
-    assert parts[7] == f"echo {shlex.quote('=== backend ===')}"
+    assert parts[3] == "set -a"
+    assert parts[4] == f". {shlex.quote(str(env_file))}"
+    assert parts[5] == "set +a"
+    assert parts[6] == "export PORT=4100"
+    assert parts[7] == "export GREETING='hello world'"
+    assert parts[8] == f"echo {shlex.quote('=== backend ===')}"
 
 
 def test_build_launch_line_quotes_resolved_mapping_values() -> None:
@@ -192,7 +192,7 @@ def test_build_launch_line_scope_only_no_env_file() -> None:
     """scope set, env_file_path=None → eval prefix but no dot-source."""
     line = build_launch_line(_WORKTREE, _SCOPE, "backend", "npm run start:dev", env_file_path=None)
     assert ". " not in line.split("&&")[1] if len(line.split("&&")) > 2 else True
-    assert 'eval "$(winter env' in line
+    assert '__winter_env="$(winter env' in line
     assert f". {shlex.quote(_SCOPE)}" not in line  # no dot-source of scope name
 
 
@@ -233,9 +233,10 @@ def test_build_launch_line_env_file_before_banner() -> None:
     line = build_launch_line(_WORKTREE, _SCOPE, "svc", "cmd", env_file_path=env_file)
     parts = line.split(" && ")
     assert parts[0].startswith("cd ")
-    assert 'eval "$(winter env' in parts[1]
-    assert parts[2].startswith(". ")
-    assert shlex.quote("=== svc ===") in parts[3]
+    assert '__winter_env="$(winter env' in parts[1]
+    assert parts[2] == 'eval "$__winter_env"'
+    assert parts[3].startswith(". ")
+    assert shlex.quote("=== svc ===") in parts[4]
 
 
 def test_build_launch_line_env_file_path_quoted() -> None:
@@ -308,8 +309,9 @@ def test_build_launch_line_eval_before_banner() -> None:
     line = build_launch_line(_WORKTREE, _SCOPE, "svc", "cmd")
     parts = line.split(" && ")
     assert parts[0].startswith("cd ")
-    assert 'eval "$(winter env' in parts[1]
-    assert shlex.quote("=== svc ===") in parts[2]
+    assert '__winter_env="$(winter env' in parts[1]
+    assert parts[2] == 'eval "$__winter_env"'
+    assert shlex.quote("=== svc ===") in parts[3]
 
 
 def test_build_launch_line_wrapped_when_logfile_supplied() -> None:
@@ -363,7 +365,7 @@ def test_build_launch_line_cwd_joins_worktree_dir() -> None:
     line = build_launch_line(_WORKTREE, _SCOPE, "backend", "npm run start:dev", cwd="apps/backend")
     expected_dir = _WORKTREE / "apps/backend"
     expected = (
-        f'cd {shlex.quote(str(expected_dir))} && eval "$(winter env {shlex.quote(_SCOPE)} --resolve)"'
+        f'cd {shlex.quote(str(expected_dir))} && __winter_env="$(winter env {shlex.quote(_SCOPE)} --resolve)" && eval "$__winter_env"'
         f" && echo {shlex.quote('=== backend ===')} && npm run start:dev"
     )
     assert line == expected

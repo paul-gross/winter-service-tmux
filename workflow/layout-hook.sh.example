@@ -18,6 +18,11 @@
 #   WINTER_ENV                — env name (e.g. "alpha")
 #   WINTER_ENV_INDEX          — numeric env index (e.g. "1" for alpha)
 #   WINTER_PORT_BASE          — base port for this env (e.g. "4100")
+#   WINTER_TMUX_SOCKET        — the tmux server's socket name, always "winter"
+#   TMUX                      — points a bare `tmux` at that server, so the
+#                               unflagged `tmux split-window …` calls below reach
+#                               the session even when `./up` ran inside another
+#                               tmux server's pane
 #
 # WORKSPACE HOOK (activated by workspace_layout_hook in config.toml)
 #   A separate script (e.g. workspace-layout-hook.sh alongside config.toml) is
@@ -27,7 +32,8 @@
 #   WINTER_TMUX_SESSION       — e.g. "mp-workspace"
 #   WINTER_TMUX_WORKTREE_DIR  — absolute path to the WORKSPACE ROOT (not a worktree)
 #   WINTER_ENV                — always "workspace"
-#   (WINTER_ENV_INDEX and WINTER_PORT_BASE are NOT set for the workspace hook)
+#   (WINTER_ENV_INDEX and WINTER_PORT_BASE are NOT set for the workspace hook;
+#   WINTER_TMUX_SOCKET and TMUX are)
 #
 # PURPOSE — LAYOUT ONLY
 #   This script creates the windows and panes that the manifest's [[service]]

@@ -104,6 +104,9 @@ class FakeTmuxRepository:
     def capture_pane(self, session: str, target: str) -> str:
         return self.capture_text.get(target, "")
 
+    def tmux_env_value(self, session: str) -> str:
+        return f"/tmp/tmux-1000/winter,4242,{list(self._sessions).index(session)}"
+
 
 def _conforms_fake_tmux_repository(x: FakeTmuxRepository) -> ITmuxRepository:
     """Typecheck-time sentinel: FakeTmuxRepository satisfies ITmuxRepository."""

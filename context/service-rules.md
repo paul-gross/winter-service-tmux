@@ -5,7 +5,19 @@ Once installed, the workspace conventions are:
 - **Never start services as background processes** (no `nohup`, no `&`). Always go through `./up`, which starts
   everything the workspace registers.
 - **Never kill services directly** (no `kill`, `pkill`, `tmux kill-session`). Always use `./down` so child processes get
-  reaped cleanly.
+  reaped cleanly. The one exception is an own `<prefix>-*` session stranded on the default tmux server by the move to
+  the `winter` server: `./down` cannot reach it, so follow the remediation `winter doctor`'s "default-server sessions"
+  probe prints.
+- **Sessions run on the dedicated `winter` tmux server, not your default one.** Address it with `tmux -L winter …`
+  (`tmux -L winter ls`, `tmux -L winter attach -t <prefix>-<env>`); a bare `tmux` only reaches it from inside one of its
+  own panes. Every winter workspace on the machine shares this server, which always starts from a sanitized environment
+  — an allow-list of per-user variables and a fixed baseline `PATH`, both owned by
+  `src/service_orchestrator/modules/orchestrate/tmux_server.py` — so no feature env's or workspace's variables leak into
+  another's panes. Pane shells are login shells and rebuild the user's `PATH` from their profile on top of that
+  baseline. **Never start the `winter` server by hand** (`tmux -L winter new-session` from your shell when it is not
+  running): the server takes its global environment from whichever client starts it, so that one command leaks your
+  shell's variables into every session on the machine until the server exits. Let `./up` start it; `winter doctor` warns
+  when it is dirty.
 - **The env-root `./up`/`./down`/`./status`/`./restart` delegate to `winter service`.** They are thin convenience doors
   over `winter service <action> <env>`, so they fan out across *every* bound provider (capability dispatch), not just
   this tmux orchestrator — e.g. in a workspace that also runs a docker provider, `./up` starts the docker services too.
@@ -107,30 +119,31 @@ Once installed, the workspace conventions are:
   only the base extension variables. This provider overlays the dispatched process environment where present and uses
   the canonical `winter env <scope>` source for the missing scope baseline, including the explicit `workspace` scope
   when workspace mappings need it. Tmux panes are children of the tmux server, not of the provider process, so unmapped
-  project panes use the `eval "$(winter env <scope> --resolve)"` and `env_file` source prefix. The provider evaluates those
-  sources during mapping preflight. The pane then sources them once for its launch and resolves mapping references
+  project panes use the `winter env <scope> --resolve` scope source and `env_file` source prefix. The provider evaluates
+  those sources during mapping preflight. The pane then sources them once for its launch and resolves mapping references
   there, so the mapping and command use the same shell evaluation without exposing file values in the tmux launch line.
   A band entry in `.winter/config.toml` may be a command whose output supplies the value, and winter only runs it when
-  asked: the provider passes `--resolve` on every scope read that launches a service — the pane prefix, and the
-  baseline a `[service.env]` mapping resolves against — and omits it everywhere it is only reporting, so `status`, the
-  status document, health probes, and port-base resolution never execute a configured command. The two halves of a
-  launch have to agree; a mapping resolved against a masked baseline would export winter's `<unresolved:command>`
-  placeholder into the pane, shadowing the value the pane's own source went on to fetch.
-  URL/CMD health probes re-evaluate the current scope and env_file sources when status runs, without changing unmapped
-  launch behavior. Services without mappings use the plain dot-source behavior. There is no `WINTER_INJECTED_KEYS`. A
-  service may then declare an optional `[service.env]` table. Its string values are resolved in declaration order
-  against scope, the shell-evaluated global `env_file`, and earlier mapping keys, then exported before the banner and
-  command. The values are additive, and a direct assignment in `cmd` can still override one. Health applies the same
-  precedence and mapping rules again against current sources when status runs. In `config.local.toml`, `[service.env]`
-  merges by key: overridden committed keys retain their original positions, omitted committed keys remain, and
-  local-only keys append in local declaration order. Static validation rejects invalid names and malformed `${...}`
-  references; unresolved names and missing configured files are context-dependent and fail the selected lifecycle
-  operation before pane mutation. Layout hooks retain the provider process environment and never receive service
-  mappings. This mapping is configuration, not a secret store; keep machine-local credentials in `env_file`. **PATH
-  requirement:** the `winter` CLI must be on the PATH of both the provider and tmux pane shells since the canonical
-  scope source is used in both places. If it is absent, scope-dependent preflight fails clearly and a pane cannot
-  self-source its scope. This is normally satisfied in a winter workspace where the PATH is configured in the shell's rc
-  file.
+  asked: the provider passes `--resolve` on every scope read that launches a service — the pane prefix, and the baseline
+  a `[service.env]` mapping resolves against — and omits it everywhere it is only reporting, so `status`, the status
+  document, health probes, and port-base resolution never execute a configured command. The two halves of a launch have
+  to agree; a mapping resolved against a masked baseline would export winter's `<unresolved:command>` placeholder into
+  the pane, shadowing the value the pane's own source went on to fetch. URL/CMD health probes re-evaluate the current
+  scope and env_file sources when status runs, without changing unmapped launch behavior. Services without mappings use
+  the plain dot-source behavior. There is no `WINTER_INJECTED_KEYS`. A service may then declare an optional
+  `[service.env]` table. Its string values are resolved in declaration order against scope, the shell-evaluated global
+  `env_file`, and earlier mapping keys, then exported before the banner and command. The values are additive, and a
+  direct assignment in `cmd` can still override one. Health applies the same precedence and mapping rules again against
+  current sources when status runs. In `config.local.toml`, `[service.env]` merges by key: overridden committed keys
+  retain their original positions, omitted committed keys remain, and local-only keys append in local declaration order.
+  Static validation rejects invalid names and malformed `${...}` references; unresolved names and missing configured
+  files are context-dependent and fail the selected lifecycle operation before pane mutation. Layout hooks retain the
+  provider process environment and never receive service mappings. This mapping is configuration, not a secret store;
+  keep machine-local credentials in `env_file`. **PATH requirement:** the `winter` CLI must be on the PATH of both the
+  provider and tmux pane shells since the canonical scope source is used in both places. If the provider lacks it,
+  scope-dependent preflight fails clearly; if a pane lacks it, that service's launch stops at the scope source (the pane
+  shows `winter: command not found` and `status` reports the service stopped) rather than starting unconfigured. Panes
+  never inherit the caller's PATH (see the `winter` server rule above), so the shell's login profile must put `winter`
+  on it — the normal setup in a winter workspace.
 - **Not all services are captured the same way.** Each `[[service]]` entry has a `log` field (default `"file"`) that
   controls how its output is captured and read:
   - `"file"` (default): stdout/stderr is captured to `<env>/.winter/logs/<svc>.log` via the capture writer; `logs` reads

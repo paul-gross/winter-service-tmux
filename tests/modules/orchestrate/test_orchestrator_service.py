@@ -274,6 +274,41 @@ def test_up_creates_session_and_runs_hook() -> None:
     assert hook_cwd == _WORKTREE
 
 
+def test_up_points_hook_at_the_winter_server() -> None:
+    """The hook's bare `tmux` reaches the session's server, not the caller's pane."""
+    tmux = FakeTmuxRepository()
+    hook = FakeLayoutHookRunner()
+    ctx = _make_ctx(env_vars={"TMUX": "/tmp/tmux-1000/default,99,3", "TMUX_PANE": "%7", "KEEP": "1"})
+    svc = _make_service(tmux=tmux, hook_runner=hook)
+    hook._side_effect = lambda: tmux.seed_session("mp-alpha", {"0.0": 100, "0.1": 101})
+
+    assert svc.up(ctx) == 0
+
+    _, hook_env, _ = hook.calls[0]
+    assert hook_env["TMUX"] == "/tmp/tmux-1000/winter,4242,0"
+    assert hook_env["WINTER_TMUX_SOCKET"] == "winter"
+    assert "TMUX_PANE" not in hook_env
+    assert hook_env["KEEP"] == "1"
+
+
+def test_up_tears_down_when_the_hook_server_cannot_be_resolved() -> None:
+    """A failed TMUX lookup is reported as itself, not as a layout-hook failure."""
+    tmux = FakeTmuxRepository()
+    hook = FakeLayoutHookRunner()
+    svc = _make_service(tmux=tmux, hook_runner=hook)
+
+    def _fail(session: str) -> str:
+        raise OrchestratorError("display-message failed")
+
+    tmux.tmux_env_value = _fail  # type: ignore[method-assign]
+
+    with pytest.raises(OrchestratorError, match="could not resolve the tmux server"):
+        svc.up(_make_ctx())
+
+    assert hook.calls == []
+    assert tmux.killed_sessions == ["mp-alpha"]
+
+
 def test_up_sends_one_send_keys_per_service() -> None:
     tmux = FakeTmuxRepository()
     hook = FakeLayoutHookRunner()
@@ -319,7 +354,7 @@ def test_up_send_keys_exact_launch_line_with_scope() -> None:
     backend_line = next(line for _, t, line in tmux.sent if t == "0.0")
     backend_logfile = log_repo.log_path(_WORKTREE, "backend")
     expected_backend = (
-        f'cd {shlex.quote(str(_WORKTREE))} && eval "$(winter env alpha --resolve)"'
+        f'cd {shlex.quote(str(_WORKTREE))} && __winter_env="$(winter env alpha --resolve)" && eval "$__winter_env"'
         f" && echo {shlex.quote('=== backend ===')} && "
         f"{{ npm run start:dev ; }} 2>&1 | "
         f"{shlex.quote(sys.executable)} {shlex.quote(str(writer))} {shlex.quote(str(backend_logfile))} "
@@ -331,7 +366,7 @@ def test_up_send_keys_exact_launch_line_with_scope() -> None:
     frontend_line = next(line for _, t, line in tmux.sent if t == "0.1")
     frontend_logfile = log_repo.log_path(_WORKTREE, "frontend")
     expected_frontend = (
-        f'cd {shlex.quote(str(_WORKTREE))} && eval "$(winter env alpha --resolve)"'
+        f'cd {shlex.quote(str(_WORKTREE))} && __winter_env="$(winter env alpha --resolve)" && eval "$__winter_env"'
         f" && echo {shlex.quote('=== frontend ===')} && "
         f"{{ npm run dev ; }} 2>&1 | "
         f"{shlex.quote(sys.executable)} {shlex.quote(str(writer))} {shlex.quote(str(frontend_logfile))} "
@@ -490,7 +525,7 @@ def test_workspace_mapping_uses_workspace_scope_baseline_for_launch() -> None:
 
     assert svc.restart(ctx, "docker") == 0
     line = tmux.sent[0][2]
-    assert 'eval "$(winter env workspace --resolve)"' in line
+    assert '__winter_env="$(winter env workspace --resolve)" && eval "$__winter_env"' in line
     assert f"set -a && . {_WORKSPACE / '.winter.env'} && set +a" in line
     assert 'export PORT="${WINTER_WORKSPACE_PORT_BASE}"' in line
     assert 'export REGISTRY="${REGISTRY_HOST}"' in line
@@ -1191,7 +1226,7 @@ def test_restart_reaps_children_and_resends() -> None:
     assert session == "mp-alpha"
     assert target == "0.0"
     expected = (
-        f'cd {shlex.quote(str(_WORKTREE))} && eval "$(winter env alpha --resolve)"'
+        f'cd {shlex.quote(str(_WORKTREE))} && __winter_env="$(winter env alpha --resolve)" && eval "$__winter_env"'
         f" && echo {shlex.quote('=== backend ===')} && npm run start:dev"
     )
     assert line == expected

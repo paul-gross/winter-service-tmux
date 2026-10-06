@@ -33,7 +33,7 @@ class TmuxStatusPlugin:
 
 
 def tmux_session_badge(env_status, env_path) -> None:
-    """Probe `tmux has-session -t <prefix>-<env>` and stamp a badge on env_status.
+    """Probe `tmux -L winter has-session -t <prefix>-<env>` and stamp a badge on env_status.
 
     Filled circle = session running, hollow circle = stopped. tmux missing or
     timing out is treated as stopped — never raises, since failures here would
@@ -42,7 +42,10 @@ def tmux_session_badge(env_status, env_path) -> None:
     session = f"{env_status.environment.workspace.service_prefix}-{env_status.environment.name}"
     try:
         result = subprocess.run(
-            ["tmux", "has-session", "-t", session],
+            # The `winter` socket mirrors TMUX_SOCKET_NAME in
+            # src/service_orchestrator/modules/orchestrate/tmux_server.py; the
+            # plugin loads without src on sys.path, so it is spelled out here.
+            ["tmux", "-L", "winter", "has-session", "-t", session],
             capture_output=True,
             timeout=2,
             text=True,

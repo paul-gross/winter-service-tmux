@@ -67,8 +67,11 @@ service produces no file output by design.
 **Fallback — `tmux capture-pane`** (pane-mode services and interactive panes only):
 
 ```bash
-tmux capture-pane -t <session>:<window>.<pane> -p -S -500
+tmux -L winter capture-pane -t <session>:<window>.<pane> -p -S -500
 ```
+
+Sessions live on the dedicated `winter` tmux server — a bare `tmux` (without `-L winter`) looks at the default server
+and will not find them.
 
 Use this only when the service's `log` mode is `"pane"` or you need to see the raw terminal output of an interactive
 pane. Requires the tmux session to be running.

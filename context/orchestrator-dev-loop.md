@@ -49,9 +49,10 @@ tool's `run_in_background` facility and cancel when done.
 
 ## Doctor probe
 
-`workflow/doctor.sh` runs as part of `winter doctor`, checking tmux is on PATH, the manifest validates, no foreign tmux
-session collides with the resolved session prefix, and the `layout_hook` (when declared) exists and is executable. See
-`workspace:/context/winter-cli/configuration/doctor.md` for the doctor-probe contract.
+`workflow/doctor.sh` runs as part of `winter doctor`, checking tmux is on PATH, the manifest validates, no foreign
+session on the `winter` tmux server collides with the resolved session prefix, no own session is stranded on the default
+tmux server, the `winter` server's global environment is the sanitized one, and the `layout_hook` (when declared) exists
+and is executable. See `workspace:/context/winter-cli/configuration/doctor.md` for the doctor-probe contract.
 
 Prefer the automated route first: `tests/test_doctor_probe.py` drives the script end-to-end with a faked `tmux` on
 `PATH` — extend it when changing probe logic rather than relying on manual runs alone (see `CONTRIBUTING.md`).
@@ -72,15 +73,24 @@ WINTER_WORKSPACE_DIR=/path/to/workspace WINTER_SERVICE_PREFIX=<prefix> bash work
 - `WINTER_EXT_CONFIG_DIR` — optional; the extension config dir holding `config.toml`. Falls back to
   `<WINTER_WORKSPACE_DIR>/.winter/config/winter-service-tmux/` when unset.
 
-**Throwaway-session A/B procedure** for the collision probe specifically — create sessions distinctly named so you can't
-confuse them with a real env or another agent's session, and kill only those:
+**Throwaway-session A/B procedure** for the session probes specifically — create sessions distinctly named so you can't
+confuse them with a real env or another agent's session, and kill only those. Create the `winter`-server sessions
+through the orchestrator's own adapter, never a bare `tmux -L winter new-session` — see the `winter`-server rule in
+`winter-service-tmux:/context/service-rules.md`. Run from the extension worktree:
 
 ```bash
-tmux new-session -d -s "<prefix>-workspace"       # A: should classify as own (pass)
-tmux new-session -d -s "<prefix>-doctor-probe-zz"  # B: should classify as foreign (warn)
+probe_session() {  # create a session on the winter server from the sanitized environment
+  PYTHONPATH=src python3 -c 'import sys; from pathlib import Path
+from service_orchestrator.modules.orchestrate.internal.cli_tmux_repository import CliTmuxRepository
+CliTmuxRepository().new_session(sys.argv[1], Path.cwd(), 80, 24)' "$1"
+}
+probe_session "<prefix>-workspace"                              # A: probe 3 classifies as own (pass)
+probe_session "<prefix>-doctor-probe-zz"                        # B: probe 3 classifies as foreign (warn)
+tmux -L default new-session -d -s "<prefix>-<real-env>"         # C: probe 3b reports it stranded (warn); pick an env with no session running
 WINTER_WORKSPACE_DIR=/path/to/workspace WINTER_SERVICE_PREFIX=<prefix> bash workflow/doctor.sh
-tmux kill-session -t "<prefix>-workspace"
-tmux kill-session -t "<prefix>-doctor-probe-zz"
+tmux -L winter kill-session -t "<prefix>-workspace"
+tmux -L winter kill-session -t "<prefix>-doctor-probe-zz"
+tmux -L default kill-session -t "<prefix>-<real-env>"
 ```
 
 Never `tmux kill-session` a session you didn't create for this check — see

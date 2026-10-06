@@ -526,7 +526,7 @@ PORT = "${WTS_API_PORT}"
     assert dispatch.restart_env_services({"alpha": ["api"]}, _WORKSPACE) == 0
     assert len(tmux.sent) == 1
     line = tmux.sent[0][2]
-    assert 'eval "$(winter env alpha --resolve)"' in line
+    assert '__winter_env="$(winter env alpha --resolve)" && eval "$__winter_env"' in line
     assert 'export PORT="${WTS_API_PORT}"' in line
 
 
@@ -577,7 +577,7 @@ PORT = "${WTS_API_PORT}"
     assert dispatch.up("alpha", _WORKSPACE) == 0
     assert len(tmux.sent) == 1
     line = tmux.sent[0][2]
-    assert 'eval "$(winter env alpha --resolve)"' in line
+    assert '__winter_env="$(winter env alpha --resolve)" && eval "$__winter_env"' in line
     assert 'export PORT="${WTS_API_PORT}"' in line
 
 

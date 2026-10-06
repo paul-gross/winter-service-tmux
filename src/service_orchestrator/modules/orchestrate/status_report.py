@@ -88,7 +88,7 @@ def build_launch_line(
 
     Assembles the pane launch line::
 
-        cd '<worktree_dir>' [&& eval "$(winter env '<scope>' --resolve)"]
+        cd '<worktree_dir>' [&& __winter_env="$(winter env '<scope>' --resolve)" && eval "$__winter_env"]
             [&& . '<env_file>']
             && echo '=== <name> ===' [&& <command>]
 
@@ -135,7 +135,8 @@ def build_launch_line(
     **and** *command* is non-empty, the command is wrapped so its stdout and
     stderr pipe through the capture writer::
 
-        cd '<wt>' [&& eval "$(winter env '<scope>' --resolve)"] [&& . '<env_file>'] && echo '=== <name> ===' &&
+        cd '<wt>' [&& __winter_env="$(winter env '<scope>' --resolve)" && eval "$__winter_env"] [&& . '<env_file>']
+        && echo '=== <name> ===' &&
         { <command> ; } 2>&1 | '<sys.executable>' '<writer>' '<logfile>'
         --rotate-size <N> --max-rotations <M>
 
@@ -151,7 +152,10 @@ def build_launch_line(
     target_dir = launch_cwd(worktree_dir, cwd)
     prefix = f"cd {shlex.quote(str(target_dir))}"
     if scope is not None:
-        prefix = f'{prefix} && eval "$(winter env {shlex.quote(scope)} --resolve)"'
+        # Capture first so a failing `winter env` (e.g. `winter` missing from
+        # the pane's login PATH) stops the launch; a bare `eval "$(...)"`
+        # evaluates nothing, succeeds, and starts the service unconfigured.
+        prefix = f'{prefix} && __winter_env="$(winter env {shlex.quote(scope)} --resolve)" && eval "$__winter_env"'
     if env_file_path is not None:
         quoted_env_file = shlex.quote(str(env_file_path))
         if evaluate_env_file or service_env:

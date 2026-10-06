@@ -1,6 +1,7 @@
 """``tmux`` CLI adapter.  All subprocess calls to tmux are confined here.
 
-Matches the exact ``tmux`` invocations used by the bash scripts:
+Every invocation targets the dedicated ``winter`` server (``tmux -L winter``,
+see ``tmux_server``), elided from the list below:
 - ``has_session``    → ``tmux has-session -t <session>``
 - ``list_sessions``  → ``tmux list-sessions -F '#{session_name}'``
 - ``new_session``    → ``tmux new-session -d -s <session> -c <cwd> -x <w> -y <h>``
@@ -9,22 +10,27 @@ Matches the exact ``tmux`` invocations used by the bash scripts:
 - ``list_panes``     → ``tmux list-panes -s -t <session> -F '#{window_index}.#{pane_index} #{pane_pid}'``
 - ``send_keys``      → ``tmux send-keys -t <session>:<target> <line> Enter``
 - ``capture_pane``   → ``tmux capture-pane -t <session>:<target> -p``
+- ``tmux_env_value`` → ``tmux display-message -p -t <session> '#{socket_path},#{pid},#{session_id}'``
 """
 
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
 from pathlib import Path
 
 from service_orchestrator.modules.orchestrate.internal.tmux_error_factory import TmuxErrorFactory
 from service_orchestrator.modules.orchestrate.tmux_repository import ITmuxRepository, PaneInfo
+from service_orchestrator.modules.orchestrate.tmux_server import TMUX_SOCKET_NAME, clean_server_env
 
 
 class CliTmuxRepository:
     """Subprocess adapter for ``ITmuxRepository``.  All tmux I/O is confined here."""
 
-    def __init__(self, error_factory: TmuxErrorFactory | None = None) -> None:
+    def __init__(self, error_factory: TmuxErrorFactory | None = None, socket_name: str = TMUX_SOCKET_NAME) -> None:
         self._errors = error_factory or TmuxErrorFactory()
+        self._tmux = ["tmux", "-L", socket_name]
 
     # ------------------------------------------------------------------
     # Session lifecycle
@@ -33,7 +39,7 @@ class CliTmuxRepository:
     def has_session(self, session: str) -> bool:
         """Return ``True`` when the named tmux session exists."""
         result = subprocess.run(
-            ["tmux", "has-session", "-t", session],
+            [*self._tmux, "has-session", "-t", session],
             capture_output=True,
             text=True,
             check=False,
@@ -43,7 +49,7 @@ class CliTmuxRepository:
     def list_sessions(self) -> list[str]:
         """Return the names of all running tmux sessions."""
         result = subprocess.run(
-            ["tmux", "list-sessions", "-F", "#{session_name}"],
+            [*self._tmux, "list-sessions", "-F", "#{session_name}"],
             capture_output=True,
             text=True,
             check=False,
@@ -54,12 +60,34 @@ class CliTmuxRepository:
         return [line for line in result.stdout.splitlines() if line]
 
     def new_session(self, session: str, cwd: Path, width: int, height: int) -> None:
-        """Create a new detached tmux session."""
+        """Create a new detached tmux session, starting the server if it is not running.
+
+        Always runs from the sanitized server environment: it seeds the global
+        environment when this call starts the server, and keeps the caller's
+        ``update-environment`` variables out of the session environment when it
+        does not.  ``tmux`` is resolved against the caller's ``PATH`` first,
+        since the sanitized ``PATH`` may not reach it (e.g. Homebrew on macOS).
+        """
+        tmux = shutil.which("tmux") or "tmux"
         result = subprocess.run(
-            ["tmux", "new-session", "-d", "-s", session, "-c", str(cwd), "-x", str(width), "-y", str(height)],
+            [
+                tmux,
+                *self._tmux[1:],
+                "new-session",
+                "-d",
+                "-s",
+                session,
+                "-c",
+                str(cwd),
+                "-x",
+                str(width),
+                "-y",
+                str(height),
+            ],
             capture_output=True,
             text=True,
             check=False,
+            env=clean_server_env(os.environ),
         )
         if result.returncode != 0:
             raise self._errors.from_subprocess(result, f"new-session '{session}' failed", cwd=cwd)
@@ -67,7 +95,7 @@ class CliTmuxRepository:
     def kill_session(self, session: str) -> None:
         """Kill a tmux session (non-fatal when it no longer exists)."""
         result = subprocess.run(
-            ["tmux", "kill-session", "-t", session],
+            [*self._tmux, "kill-session", "-t", session],
             capture_output=True,
             text=True,
             check=False,
@@ -84,7 +112,7 @@ class CliTmuxRepository:
     def list_windows(self, session: str) -> list[str]:
         """Return window index strings for all windows in *session*."""
         result = subprocess.run(
-            ["tmux", "list-windows", "-t", session, "-F", "#{window_index}"],
+            [*self._tmux, "list-windows", "-t", session, "-F", "#{window_index}"],
             capture_output=True,
             text=True,
             check=False,
@@ -101,7 +129,7 @@ class CliTmuxRepository:
         bash ``tmux list-panes -s -t "$SESSION" -F '#{window_index}.#{pane_index} #{pane_pid}'``.
         """
         result = subprocess.run(
-            ["tmux", "list-panes", "-s", "-t", session, "-F", "#{window_index}.#{pane_index} #{pane_pid}"],
+            [*self._tmux, "list-panes", "-s", "-t", session, "-F", "#{window_index}.#{pane_index} #{pane_pid}"],
             capture_output=True,
             text=True,
             check=False,
@@ -130,7 +158,7 @@ class CliTmuxRepository:
     def send_keys(self, session: str, target: str, line: str) -> None:
         """Send *line* followed by Enter to the pane at *session*:*target*."""
         result = subprocess.run(
-            ["tmux", "send-keys", "-t", f"{session}:{target}", line, "Enter"],
+            [*self._tmux, "send-keys", "-t", f"{session}:{target}", line, "Enter"],
             capture_output=True,
             text=True,
             check=False,
@@ -145,7 +173,7 @@ class CliTmuxRepository:
         bash status script.
         """
         result = subprocess.run(
-            ["tmux", "capture-pane", "-t", f"{session}:{target}", "-p"],
+            [*self._tmux, "capture-pane", "-t", f"{session}:{target}", "-p"],
             capture_output=True,
             text=True,
             check=False,
@@ -153,6 +181,27 @@ class CliTmuxRepository:
         if result.returncode != 0:
             raise self._errors.from_subprocess(result, f"capture-pane '{session}:{target}' failed")
         return result.stdout
+
+    def tmux_env_value(self, session: str) -> str:
+        """Return the ``TMUX`` value that points a bare ``tmux`` client at *session*.
+
+        Same ``<socket_path>,<server_pid>,<session_index>`` shape tmux sets in
+        its own panes, so a layout hook's unflagged ``tmux`` calls reach the
+        ``winter`` server even when the caller sits inside another server.
+        """
+        result = subprocess.run(
+            [*self._tmux, "display-message", "-p", "-t", session, "#{socket_path},#{pid},#{session_id}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise self._errors.from_subprocess(result, f"display-message '{session}' failed")
+        fields = result.stdout.strip().rsplit(",", 2)
+        if len(fields) != 3:
+            raise self._errors.from_subprocess(result, f"display-message '{session}' returned {result.stdout!r}")
+        socket_path, pid, session_id = fields
+        return f"{socket_path},{pid},{session_id.lstrip('$')}"
 
 
 def _conforms_cli_tmux_repository(x: CliTmuxRepository) -> ITmuxRepository:
