@@ -51,7 +51,7 @@ Bash tool's `run_in_background` facility. Calling it bare hangs the tool.
 
 File-mode logs persist to `<env>/.winter/logs/<service>.log` on `up`, survive `down` and teardown, and carry per-line
 timestamps — prefer this path for diagnosis. The flag surface and rendering rules live in
-`workspace:/context/winter-cli/usage/service.md`.
+`workspace:/context/winter/cli/usage/service.md`.
 
 **Per-mode read path — match `log` to the right tool:**
 

@@ -15,16 +15,16 @@ panes, switch which env file gets sourced.
 ## Caller contract
 
 This guide is invoked by the `ws-setup` service-orchestration sub-guide
-(`workspace:/context/setup-service-orchestration.md`, Step 4) after it has already discovered and assigned services. The
-caller provides:
+(`workspace:/context/winter/setup/service-orchestration.md`, Step 4) after it has already discovered and assigned
+services. The caller provides:
 
 - **The set of services assigned to `winter-service-tmux`**, each with a **scope**: `"project"` (per-env) or
   `"workspace"`.
 - **Whatever wiring facts were already discovered upstream** for each service, in the schema defined by
-  `workspace:/context/service-discovery.md` — `start_command` and `port`, when the project's own evidence revealed them.
-  Treat these as given; a field the caller didn't supply is the only kind you derive or ask about. That schema does
-  **not** include a health/readiness signal — the health probe below is always this guide's own to derive or ask about,
-  never caller-supplied.
+  `workspace:/context/winter/setup/service-discovery.md` — `start_command` and `port`, when the project's own evidence
+  revealed them. Treat these as given; a field the caller didn't supply is the only kind you derive or ask about. That
+  schema does **not** include a health/readiness signal — the health probe below is always this guide's own to derive or
+  ask about, never caller-supplied.
 
 This guide does not re-discover or re-assign services, and does not re-derive wiring facts the caller already supplied.
 It collects the remaining tmux-specific wiring (pane targets, layout, health probes, and any fields the caller left
@@ -45,7 +45,7 @@ When an agent spins up a feature environment, it runs `./up` to start all the se
 `config.toml` tells the orchestrator exactly what to launch and in which tmux pane. Without it, `./up` errors out in
 every worktree.
 
-This extension follows the runtime contract in `workspace:/context/winter-cli/contracts/service-orchestrator.md` and
+This extension follows the runtime contract in `workspace:/context/winter/cli/contracts/service-orchestrator.md` and
 `winter-service-tmux:/context/service-rules.md`: each lifecycle operation resolves the current canonical scope and
 configured `env_file` sources. Mapped panes source those values and resolve `[service.env]` for that launch; URL/CMD
 health checks apply the same rules again when status runs. The `env_file` key is optional and is relative to the
@@ -121,9 +121,9 @@ Skip any service already declared in `config.toml` with a matching `[[service]]`
 **Start from what the caller supplied; only resolve what's missing — don't interrogate the user field by field.** For
 each remaining per-env service, use the wiring facts the caller already gave you (`cmd` from the schema's
 `start_command`, and `port`) wherever present — see the caller contract above for the full schema. For any field not
-supplied, infer it using the evidence sources `workspace:/context/service-discovery.md` defines for those fields
-(`package.json` scripts, `Procfile`, framework entry points, README) plus env-var declarations for anything the schema
-doesn't cover. Resolve:
+supplied, infer it using the evidence sources `workspace:/context/winter/setup/service-discovery.md` defines for those
+fields (`package.json` scripts, `Procfile`, framework entry points, README) plus env-var declarations for anything the
+schema doesn't cover. Resolve:
 
 - **cmd** — the start command. Use the caller-supplied command if given. A service at the worktree root is just its
   command (`cmd = "npm run dev"`); a service in a subdirectory uses `cwd` instead of prepending a `cd`

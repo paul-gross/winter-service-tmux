@@ -8,7 +8,7 @@ entry point that reaches the code you changed.
 
 The actual `up`/`down`/`status`/`restart`/`logs` orchestration runs through `winter service`, which resolves the
 **installed** provider. To exercise your in-progress worktree's provider code, point winter at it directly with
-`--service-orchestrator=` (see `workspace:/context/winter-cli/root-flags.md`):
+`--service-orchestrator=` (see `workspace:/context/winter/cli/root-flags.md`):
 
 ```bash
 winter --service-orchestrator=./alpha/winter-service-tmux service up alpha
@@ -52,7 +52,7 @@ tool's `run_in_background` facility and cancel when done.
 `workflow/doctor.sh` runs as part of `winter doctor`, checking tmux is on PATH, the manifest validates, no foreign
 session on the `winter` tmux server collides with the resolved session prefix, no own session is stranded on the default
 tmux server, the `winter` server's global environment is the sanitized one, and the `layout_hook` (when declared) exists
-and is executable. See `workspace:/context/winter-cli/configuration/doctor.md` for the doctor-probe contract.
+and is executable. See `workspace:/context/winter/cli/configuration/doctor.md` for the doctor-probe contract.
 
 Prefer the automated route first: `tests/test_doctor_probe.py` drives the script end-to-end with a faked `tmux` on
 `PATH` — extend it when changing probe logic rather than relying on manual runs alone (see `CONTRIBUTING.md`).

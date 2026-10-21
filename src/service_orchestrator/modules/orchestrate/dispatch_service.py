@@ -91,7 +91,7 @@ class DispatchService:
     #
     # Winter-cli core computes WINTER_ENV / WINTER_ENV_INDEX / WINTER_PORT_BASE /
     # WINTER_WORKSPACE_PORT_BASE and the scope's env-var band entries (see
-    # workspace:/context/winter-cli/configuration/ports-and-environments.md#env-var-bands) via
+    # workspace:/context/winter/cli/configuration/ports-and-environments.md#env-var-bands) via
     # EnvProvisionerService and injects them into the provider subprocess
     # environment for up/down/status. Restart/logs receive only the base
     # extension environment by contract. The orchestrator therefore uses the

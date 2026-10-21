@@ -65,7 +65,7 @@ Once installed, the workspace conventions are:
   now delegates to `winter service status <env>`, the two render **identically** — winter renders the structured
   env-keyed status document (human table by default, raw JSON under `winter service status --json`), and with a docker
   provider also bound the table merges both providers' services. The document shape is winter's contract — see
-  `workspace:/context/winter-cli/usage/service.md` (`status` wire contract); declared `[service.health]` probes populate
+  `workspace:/context/winter/cli/usage/service.md` (`status` wire contract); declared `[service.health]` probes populate
   `health` as `"healthy"` or `"unhealthy"`, and services without probes report `"unknown"`. Health probes are
   observability only — `./up` does not wait for them — and `cmd` probes run from the service worktree root. A `log`-type
   probe treats `target` as a regular expression matched (`re.search`) against the service's captured output — the live
@@ -105,17 +105,17 @@ Once installed, the workspace conventions are:
   `-f` follows ALL matched `(env, service)` streams concurrently until Ctrl-C, interleaving their lines into one output.
 
   The wire contract and rendering (plain lines vs. NDJSON) are winter's responsibility — see
-  `workspace:/context/winter-cli/usage/service.md`. There is no env-root `./logs` script; the interface is
+  `workspace:/context/winter/cli/usage/service.md`. There is no env-root `./logs` script; the interface is
   `winter service logs`. Workspace service logs land at `<workspace-root>/.winter/logs/<service>.log` —
   `winter service logs workspace` is not wired; read the log files directly.
 - **A `[[service]]` may declare a `port` field** — either a literal integer (`port = 8080`) or an env-relative offset
   expression (`port = "WINTER_PORT_BASE + 10"`). A bare integer is an absolute port number (the same in every
   environment); the `WINTER_PORT_BASE + <offset>` form is resolved per-env at status time against the unified scope
   environment (see the env-injection note below). Declared ports are surfaced in the `ports` field of winter's status
-  document and the `PORTS` column of the rendered table — see `workspace:/context/winter-cli/usage/service.md` for the
+  document and the `PORTS` column of the rendered table — see `workspace:/context/winter/cli/usage/service.md` for the
   wire shape. Services without `port` emit an empty `ports` field.
 - **Env-injection contract:** Core (winter-cli) computes the scope environment and injects it into the provider only on
-  the actions listed by `workspace:/context/winter-cli/contracts/service-orchestrator.md`; `restart` and `logs` receive
+  the actions listed by `workspace:/context/winter/cli/contracts/service-orchestrator.md`; `restart` and `logs` receive
   only the base extension variables. This provider overlays the dispatched process environment where present and uses
   the canonical `winter env <scope>` source for the missing scope baseline, including the explicit `workspace` scope
   when workspace mappings need it. Tmux panes are children of the tmux server, not of the provider process, so unmapped
@@ -158,7 +158,7 @@ Once installed, the workspace conventions are:
 Tmux session names are `<SESSION_PREFIX>-<env>` — e.g. `mp-alpha`. The prefix is controlled entirely by winter: it's
 resolved from the `WINTER_SERVICE_PREFIX` environment variable, a base extension var that winter injects into the
 provider process on every dispatched action (`up`/`down`/`status`/`restart`/`logs` — see
-`workspace:/context/winter-cli/contracts/service-orchestrator.md`) — the workspace-level prefix configured once for the
+`workspace:/context/winter/cli/contracts/service-orchestrator.md`) — the workspace-level prefix configured once for the
 whole workspace, not per-provider. A deprecated manifest `session_prefix` key in
 `workspace:/.winter/config/winter-service-tmux/config.toml` is an explicit per-provider override that takes precedence
 when set — checked first, used if declared — which happens to also cover the residual case where `WINTER_SERVICE_PREFIX`

@@ -33,7 +33,7 @@ manifest's optional ``session_prefix`` override wins when declared; otherwise
 the builder falls back to the ``WINTER_SERVICE_PREFIX`` environment variable,
 a base extension var that winter injects into the provider process on every
 dispatched action (see
-``workspace:/context/winter-cli/contracts/service-orchestrator.md``).
+``workspace:/context/winter/cli/contracts/service-orchestrator.md``).
 """
 
 from __future__ import annotations

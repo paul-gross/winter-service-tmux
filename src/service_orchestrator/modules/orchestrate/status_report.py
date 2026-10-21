@@ -102,7 +102,7 @@ def build_launch_line(
     environment via POSIX ``eval "$(winter env <scope> --resolve)"`` before the
     banner.  This brings all ``WINTER_*`` base vars and the scope's env-var band
     entries (see
-    ``workspace:/context/winter-cli/configuration/ports-and-environments.md#env-var-bands``)
+    ``workspace:/context/winter/cli/configuration/ports-and-environments.md#env-var-bands``)
     into the pane.  ``--resolve`` is what makes a command-valued band entry
     actually run for the pane rather than arriving as winter's
     ``<unresolved:command>`` placeholder; a pane is only ever built to start a
