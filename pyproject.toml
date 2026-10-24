@@ -2,6 +2,8 @@
 name = "service-manifest"
 version = "0.1.0"
 description = "Declarative TOML service manifest reader and validator for winter-service-tmux."
+license = "FSL-1.1-ALv2"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = []
 
