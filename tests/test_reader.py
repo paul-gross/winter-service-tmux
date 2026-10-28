@@ -119,7 +119,7 @@ cmd = "echo hi"
 
 
 def test_service_env_mapping_is_parsed() -> None:
-    content = '''\
+    content = """\
 session_prefix = "mp"
 
 [[service]]
@@ -130,14 +130,14 @@ cmd = "cmd"
 [service.env]
 PORT = "${BASE_PORT}"
 URL = "http://localhost:${PORT}"
-'''
+"""
     manifest = _read({_COMMITTED_PATH: content})
 
     assert manifest.services[0].env == {"PORT": "${BASE_PORT}", "URL": "http://localhost:${PORT}"}
 
 
 def test_service_env_overlay_merges_by_key() -> None:
-    committed = '''\
+    committed = """\
 [[service]]
 name = "backend"
 target = "0.0"
@@ -146,14 +146,14 @@ cmd = "cmd"
 [service.env]
 PORT = "3000"
 LOG_LEVEL = "info"
-'''
-    local = '''\
+"""
+    local = """\
 [[service]]
 name = "backend"
 
 [service.env]
 PORT = "4000"
-'''
+"""
 
     manifest = _read({_COMMITTED_PATH: committed, _LOCAL_PATH: local})
 
@@ -161,7 +161,7 @@ PORT = "4000"
 
 
 def test_service_env_overlay_preserves_order_for_cross_layer_references() -> None:
-    committed = '''\
+    committed = """\
 [[service]]
 name = "backend"
 target = "0.0"
@@ -171,8 +171,8 @@ cmd = "cmd"
 PORT = "3000"
 URL = "http://localhost:${PORT}"
 LOG_LEVEL = "info"
-'''
-    local = '''\
+"""
+    local = """\
 [[service]]
 name = "backend"
 
@@ -180,7 +180,7 @@ name = "backend"
 PORT = "4000"
 LOCAL_URL = "${URL}/local"
 ZED = "${LOCAL_URL}"
-'''
+"""
 
     manifest = _read({_COMMITTED_PATH: committed, _LOCAL_PATH: local})
     mapping = manifest.services[0].env
@@ -198,7 +198,7 @@ ZED = "${LOCAL_URL}"
 
 
 def test_service_env_non_string_value_is_manifest_error() -> None:
-    content = '''\
+    content = """\
 [[service]]
 name = "backend"
 target = "0.0"
@@ -206,7 +206,7 @@ cmd = "cmd"
 
 [service.env]
 PORT = 3000
-'''
+"""
 
     with pytest.raises(ManifestError, match=r"service 'backend'.*env\.PORT.*string"):
         _read({_COMMITTED_PATH: content})

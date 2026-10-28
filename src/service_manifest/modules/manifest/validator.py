@@ -337,9 +337,7 @@ class ManifestValidator:
                 continue
             effective = dict(env)
             mapping = {
-                key: value
-                for key, value in service.env.items()
-                if isinstance(key, str) and isinstance(value, str)
+                key: value for key, value in service.env.items() if isinstance(key, str) and isinstance(value, str)
             }
             resolved, _ = resolve_service_env(mapping, effective)
             effective.update(resolved)

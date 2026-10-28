@@ -217,7 +217,7 @@ def test_build_env_file_path_set_even_when_skip_env_file_true() -> None:
 
 
 def test_build_skips_global_env_file_read_for_dispatched_contexts() -> None:
-    toml = '''\
+    toml = """\
 session_prefix = "mp"
 env_file = ".winter.env"
 
@@ -228,7 +228,7 @@ cmd = "cmd"
 
 [service.env]
 PORT = "${BASE_PORT}"
-'''
+"""
     config_path = _CONFIG_DIR / _MANIFEST_COMMITTED_PATH
     env_path = _WORKSPACE / "alpha" / ".winter.env"
     fake_fs = FakeFilesystemReader({config_path: toml, env_path: "BASE_PORT=4100\n"})
