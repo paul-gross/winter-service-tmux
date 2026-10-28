@@ -283,7 +283,7 @@ def test_service_env_malformed_reference_is_violation() -> None:
 def test_service_env_unresolvable_reference_is_runtime_error_not_doctor_violation() -> None:
     manifest = _make_manifest(
         env_file=".winter.env",
-        services=(Service(name="backend", target=Target(0, 0), cmd="cmd", env={"PORT": "${BASE_PORT}"}),)
+        services=(Service(name="backend", target=Target(0, 0), cmd="cmd", env={"PORT": "${BASE_PORT}"}),),
     )
 
     assert _validator.validate(manifest, env={}) == []
